@@ -1,0 +1,28 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Guía de Estructura del Proyecto API Manngo
+
+Esta API está construida con Flask y Flask-RESTful.
+
+-   **Punto de Entrada Principal:** [app.py](mdc:app.py) inicializa la aplicación Flask, configura las extensiones (SQLAlchemy, JWT, CORS), define manejadores de errores, registra los recursos de la API y sirve archivos subidos (aunque se recomienda cambiar a S3 para producción). Carga la configuración desde variables de entorno.
+-   **Dependencias:** Listadas en [requirements.txt](mdc:requirements.txt). Incluye Flask, Flask-RESTful, SQLAlchemy, JWT, Marshmallow, psycopg2, gunicorn, etc.
+-   **Contenerización:** Definida en [Dockerfile](mdc:Dockerfile) y [`.dockerignore`](mdc:.dockerignore) para construir la imagen Docker.
+-   **Modelos de Base de Datos:** Definidos usando SQLAlchemy en [models.py](mdc:models.py).
+-   **Esquemas de Serialización/Validación:** Definidos usando Marshmallow en [schemas.py](mdc:schemas.py).
+-   **Lógica de API (Recursos):** Los endpoints de la API están implementados como clases `Resource` de Flask-RESTful dentro del directorio `resources/`. Por ejemplo, [resources/auth_resource.py](mdc:resources/auth_resource.py), [resources/producto_resource.py](mdc:resources/producto_resource.py), etc.
+-   **Extensiones Flask:** Instancias compartidas de extensiones (como `db` y `jwt`) se inicializan en [extensions.py](mdc:extensions.py) y se importan en [app.py](mdc:app.py).
+-   **Utilidades:** El directorio `utils/` probablemente contiene funciones auxiliares.
+-   **Utilidades Comunes:** El archivo [common.py](mdc:common.py) contiene decoradores y funciones reutilizables clave, incluyendo:
+    -   Manejo de errores (`handle_db_errors`).
+    -   Validación de roles (`rol_requerido`).
+    -   Validación de acceso a almacenes (`mismo_almacen_o_admin`).
+    -   Sanitización de entradas (`sanitize_input`).
+    -   Helpers de paginación.
+-   **Archivos Subidos:** Actualmente manejados localmente en el directorio `uploads/` (configurable).
+-   **Configuración:** Principalmente gestionada a través de variables de entorno (ver uso de `os.environ.get` en [app.py](mdc:app.py)). Se usa `.env` para desarrollo con `python-dotenv`.
+
+
+

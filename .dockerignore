@@ -1,0 +1,45 @@
+# VCS
+.git
+.gitignore
+
+# Entornos y configuración local
+.env
+.env.*
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.coverage
+.pytest_cache/
+
+# Archivos IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Archivos temporales y de registro
+*.log
+logs/
+tmp/
+
+# Archivos subidos (serán manejados por Cloud Storage)
+uploads/*
+!uploads/.gitkeep
+
+# Documentación
+README.md
+CHANGELOG.md
+docs/
+*.md
+
+# Configuración de Docker y CI/CD
+docker-compose.yml
+Dockerfile.*
