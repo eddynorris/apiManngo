@@ -41,7 +41,7 @@ RUN chown -R appuser:appgroup /app
 
 # Configurar variables de entorno por defecto (pueden ser sobrescritas)
 ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
+ENV FLASK_ENV=development
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 ENV GUNICORN_WORKERS=3
