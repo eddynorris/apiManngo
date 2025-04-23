@@ -5,8 +5,8 @@ import logging
 from werkzeug.utils import secure_filename
 from flask import current_app
 import boto3
-from botocore.exceptions import ClientError
-from urllib.parse import urljoin, urlparse
+from botocore.exceptions import ClientError, NoCredentialsError
+from urllib.parse import urlparse # Necesario para delete_file
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 def allowed_file(filename):
     """Verifica si la extensión del archivo es permitida"""
     allowed_extensions = current_app.config.get('ALLOWED_EXTENSIONS', set())
+    # Asegurarse que filename no sea None o vacío
+    if not filename:
+        return False
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in allowed_extensions
 
@@ -23,21 +26,27 @@ def safe_filename(filename):
         return None
     safe_name = secure_filename(filename)
     if not safe_name:
-        safe_name = 'file'
+        safe_name = 'file' # Fallback si secure_filename devuelve vacío
     try:
         base, extension = safe_name.rsplit('.', 1)
         extension = extension.lower()
     except ValueError:
+        # Si no hay punto (extensión), usa un nombre base y una extensión por defecto
         base = safe_name
-        extension = 'bin' # Fallback si no hay extensión
-    # Asegurar que la base no esté vacía
+        extension = 'bin' # O elige una extensión por defecto apropiada
+    # Asegurar que la base no esté vacía después de secure_filename
     if not base:
         base = 'file'
     unique_name = f"{base}_{uuid.uuid4().hex}.{extension}"
     return unique_name
 
 def get_s3_client():
-    """Crea y devuelve un cliente S3 de Boto3."""
+    """
+    Crea y devuelve un cliente S3 de Boto3.
+    Prioriza el Rol IAM asociado a la instancia EC2.
+    Usa credenciales explícitas (S3_KEY, S3_SECRET) solo como fallback,
+    lo cual NO se recomienda en EC2.
+    """
     region = current_app.config.get('S3_REGION')
     aws_access_key_id = current_app.config.get('S3_KEY')
     aws_secret_access_key = current_app.config.get('S3_SECRET')
@@ -46,220 +55,170 @@ def get_s3_client():
         logger.error("AWS_REGION (S3_REGION) no está configurado.")
         return None
 
-    # Usar credenciales explícitas si se proporcionan, sino confiar en el entorno/roles IAM
-    if aws_access_key_id and aws_secret_access_key:
-        s3_client = boto3.client(
-            's3',
-            region_name=region,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key
-        )
-        logger.debug("Cliente S3 creado usando credenciales explícitas.")
-    else:
+    try:
+        # Intenta crear cliente sin credenciales explícitas primero (usará Rol IAM/variables de entorno)
         s3_client = boto3.client('s3', region_name=region)
+        # Verifica si las credenciales se cargaron (opcional, pero útil para debug)
+        s3_client.list_buckets() # Una llamada simple para forzar la carga de credenciales
         logger.debug("Cliente S3 creado usando credenciales del entorno/rol IAM.")
+        return s3_client
+    except (NoCredentialsError, ClientError) as e:
+        logger.warning(f"No se pudieron obtener credenciales del entorno/rol IAM: {e}. Intentando con credenciales explícitas (NO RECOMENDADO EN EC2)...")
+        # Fallback a credenciales explícitas (si se proporcionan)
+        if aws_access_key_id and aws_secret_access_key:
+            try:
+                s3_client = boto3.client(
+                    's3',
+                    region_name=region,
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key
+                )
+                s3_client.list_buckets() # Verificar credenciales explícitas
+                logger.warning("Cliente S3 creado usando credenciales explícitas. ¡Considere usar Roles IAM en EC2!")
+                return s3_client
+            except (NoCredentialsError, ClientError) as explicit_e:
+                logger.error(f"Error al crear cliente S3 con credenciales explícitas: {explicit_e}")
+                return None
+        else:
+            logger.error("No se encontraron credenciales S3 (ni rol IAM ni explícitas).")
+            return None
+    except Exception as e:
+         logger.error(f"Error inesperado al crear cliente S3: {e}")
+         return None
 
-    return s3_client
 
 def save_file(file, subfolder):
     """
-    Guarda un archivo en S3 de forma segura. (O localmente si S3 no está configurado)
+    Guarda un archivo en S3 de forma segura (privado por defecto).
 
     Args:
         file: Objeto FileStorage de Flask request.files
-        subfolder: Prefijo de "carpeta" dentro del bucket S3 o ruta local
+        subfolder: Prefijo de "carpeta" dentro del bucket S3
 
     Returns:
-        str: URL completa del archivo en S3 o ruta relativa local, o None si hay error
+        str: Clave del objeto S3 (ej: 'pagos/nombre_unico.jpg') si fue exitoso, o None si hay error.
     """
-    if not file:
-        logger.warning("Intento de guardar archivo vacío")
+    if not file or not file.filename: # Añadido chequeo de file.filename
+        logger.warning("Intento de guardar archivo vacío o sin nombre")
         return None
 
     if not allowed_file(file.filename):
         logger.warning(f"Intento de subir archivo con tipo no permitido: {file.filename}")
         return None
-    
-    # ---- Lógica de decisión S3 vs Local ----
-    use_s3 = all([
-        current_app.config.get('S3_BUCKET'),
-        current_app.config.get('S3_REGION'),
-        current_app.config.get('S3_LOCATION')
-    ])
+
+    # ---- Solo lógica S3 (asumiendo que es el objetivo principal en AWS) ----
+    s3_client = get_s3_client()
+    bucket_name = current_app.config.get('S3_BUCKET')
+
+    if not s3_client or not bucket_name:
+        logger.error("Configuración S3 incompleta (cliente o bucket). No se puede guardar archivo.")
+        # Podrías añadir un fallback a lógica local aquí si es necesario
+        return None
 
     unique_filename = safe_filename(file.filename)
     if not unique_filename:
         logger.error("No se pudo generar un nombre de archivo seguro.")
         return None
 
-    # Limpiar subfolder para evitar problemas de ruta
-    clean_subfolder = subfolder.strip('/')
-
-    if use_s3:
-        # --- Lógica S3 ---
-        s3_client = get_s3_client()
-        bucket_name = current_app.config.get('S3_BUCKET')
-        base_location = current_app.config.get('S3_LOCATION')
-
-        if not s3_client:
-            logger.error("Configuración S3 incompleta (cliente).")
-            return None
-
-        s3_object_key = f"{clean_subfolder}/{unique_filename}" if clean_subfolder else unique_filename
-        # Usar urljoin para evitar doble slash y manejar base_location con/sin slash final
-        file_url = urljoin(base_location + ('/' if not base_location.endswith('/') else ''), s3_object_key)
-
-
-        try:
-            s3_client.upload_fileobj(
-                file,
-                bucket_name,
-                s3_object_key,
-                ExtraArgs={'ContentType': file.content_type}
-            )
-            logger.info(f"Archivo subido exitosamente a S3: {file_url}")
-            return file_url
-        except ClientError as e:
-            logger.error(f"Error subiendo archivo a S3: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Error inesperado guardando archivo S3: {str(e)}")
-            return None
-
-    else:
-        # --- Lógica Local ---
-        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads') # Usar config o default
-        # Asegurar que la carpeta base exista (usando la ruta absoluta de app.config)
-        if not os.path.exists(upload_folder):
-             os.makedirs(upload_folder, exist_ok=True)
-             logger.info(f"Carpeta de subida local creada: {upload_folder}")
-
-        # Crear subcarpeta si no existe
-        target_folder = os.path.join(upload_folder, clean_subfolder) if clean_subfolder else upload_folder
-        os.makedirs(target_folder, exist_ok=True)
-
-        local_file_path = os.path.join(target_folder, unique_filename)
-        # Construir URL relativa correctamente asegurando un solo '/' al inicio
-        relative_url_path = os.path.join(clean_subfolder, unique_filename).replace('\\', '/') 
-        
-        try:
-            file.save(local_file_path)
-            logger.info(f"Archivo guardado localmente en: {local_file_path}")
-            # Devolver la URL relativa para ser usada por el endpoint de servir archivos
-            # Asumimos que la URL base es /uploads/
-            final_relative_url = f"/uploads/{relative_url_path}"
-            logger.debug(f"Devolviendo URL relativa local: {final_relative_url}")
-            return final_relative_url
-        except Exception as e:
-            logger.error(f"Error guardando archivo localmente: {str(e)}")
-            return None
-
-
-def delete_file(file_identifier):
-    """
-    Elimina un archivo de S3 o localmente.
-
-    Args:
-        file_identifier (str): URL completa de S3 o ruta relativa local (ej: /uploads/...)
-    """
-    if not file_identifier:
-        logger.warning("Intento de eliminar archivo con identificador vacío.")
-        return False
-
-    # ---- Lógica de decisión S3 vs Local ----
-    use_s3 = all([
-        current_app.config.get('S3_BUCKET'),
-        current_app.config.get('S3_REGION'),
-        current_app.config.get('S3_LOCATION')
-    ])
-    
-    is_s3_url = use_s3 and file_identifier.startswith(current_app.config.get('S3_LOCATION', 'https://impossible-prefix/'))
-    is_local_path = file_identifier.startswith('/uploads/')
-
-    if use_s3 and is_s3_url:
-        # --- Lógica de eliminación S3 ---
-        s3_client = get_s3_client()
-        bucket_name = current_app.config.get('S3_BUCKET')
-        base_location = current_app.config.get('S3_LOCATION')
-
-        if not s3_client: # No necesitamos comprobar bucket/location aquí de nuevo
-            logger.error("Configuración S3 incompleta (cliente) para eliminar archivo.")
-            return False
-
-        try:
-            # Extraer la clave del objeto de la URL S3
-            # Usamos urlparse para ser más robustos
-            parsed_url = urlparse(file_identifier)
-            object_key = parsed_url.path.lstrip('/')
-            
-            if not object_key:
-                logger.error(f"No se pudo extraer la clave del objeto de la URL S3: {file_identifier}")
-                return False
-
-            s3_client.delete_object(Bucket=bucket_name, Key=object_key)
-            logger.info(f"Solicitud de eliminación enviada a S3 para: {object_key}")
-            return True
-        except ClientError as e:
-            # Distinguir 'NoSuchKey' (no encontrado) de otros errores
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                 logger.warning(f"Objeto S3 no encontrado para eliminar (NoSuchKey): {object_key}")
-                 return True # Considerar éxito si no existe
-            else:
-                logger.error(f"Error eliminando archivo de S3: {e}")
-                return False
-        except Exception as e:
-            logger.error(f"Error inesperado eliminando archivo S3: {str(e)}")
-            return False
-            
-    elif is_local_path:
-         # --- Lógica de eliminación Local ---
-        return delete_local_file(file_identifier)
-        
-    else:
-        # El identificador no coincide ni con S3 esperado ni con ruta local
-        logger.warning(f"Formato de identificador de archivo no reconocido para eliminación: {file_identifier}. Use_s3={use_s3}")
-        # Intentar eliminar localmente como último recurso si no se esperaba S3
-        if not use_s3 and file_identifier: 
-            return delete_local_file('/uploads/' + file_identifier.lstrip('/')) # Asumir que falta /uploads/
-        return False
-
-
-def delete_local_file(relative_url_path):
-    """Función auxiliar para eliminar archivos locales."""
-    # Validar que la ruta empieza con /uploads/
-    if not relative_url_path or not relative_url_path.startswith('/uploads/'):
-        logger.warning(f"Intento de eliminar archivo local con ruta inválida: {relative_url_path}")
-        return False
-
-    upload_folder = current_app.config.get('UPLOAD_FOLDER') # Obtener ruta absoluta
-    if not upload_folder:
-        logger.error("UPLOAD_FOLDER no está configurado en la app para eliminación local.")
-        return False
-        
-    # Construir la ruta completa del archivo local
-    # Quitar el /uploads/ inicial para unir correctamente con la carpeta base
-    relative_file_part = relative_url_path[len('/uploads/'):].lstrip('/')
-    file_system_path = os.path.join(upload_folder, relative_file_part)
-    # Normalizar la ruta por seguridad y consistencia
-    file_system_path = os.path.normpath(file_system_path)
-
-    # Doble chequeo de seguridad: asegurar que la ruta final sigue dentro de UPLOAD_FOLDER
-    if not file_system_path.startswith(os.path.normpath(upload_folder)):
-         logger.error(f"Intento de eliminación fuera de UPLOAD_FOLDER detectado: {file_system_path}")
-         return False
+    # Limpiar subfolder
+    clean_subfolder = subfolder.strip('/') if subfolder else ''
+    # Construir la clave del objeto S3
+    s3_object_key = f"{clean_subfolder}/{unique_filename}" if clean_subfolder else unique_filename
 
     try:
-        if os.path.exists(file_system_path) and os.path.isfile(file_system_path):
-            os.remove(file_system_path)
-            logger.info(f"Archivo local eliminado: {file_system_path}")
-            return True
-        else:
-            logger.warning(f"Archivo local no encontrado o no es un archivo para eliminar: {file_system_path}")
-            return True # Considerar éxito si no existe o no es un archivo
+        # Subir el archivo a S3. Por defecto es privado.
+        s3_client.upload_fileobj(
+            file,
+            bucket_name,
+            s3_object_key,
+            ExtraArgs={'ContentType': file.content_type} # Ayuda al navegador al descargar/mostrar
+        )
+        logger.info(f"Archivo subido exitosamente a S3 (privado). Clave: {s3_object_key}")
+        # --- Devolver la CLAVE del objeto, NO la URL ---
+        return s3_object_key
+    except ClientError as e:
+        logger.error(f"Error subiendo archivo a S3 (ClientError): {e}")
+        return None
     except Exception as e:
-        logger.error(f"Error eliminando archivo local {file_system_path}: {str(e)}")
+        logger.error(f"Error inesperado guardando archivo S3: {str(e)}")
+        return None
+
+def get_presigned_url(s3_object_key, expiration=3600):
+    """
+    Genera una URL pre-firmada para acceder a un objeto S3 privado.
+
+    Args:
+        s3_object_key (str): La clave del objeto en S3 (devuelta por save_file).
+        expiration (int): Tiempo en segundos durante el cual la URL será válida. Default: 1 hora.
+
+    Returns:
+        str: La URL pre-firmada, o None si hay error.
+    """
+    if not s3_object_key:
+        logger.warning("Intento de generar URL pre-firmada para clave vacía.")
+        return None
+
+    s3_client = get_s3_client()
+    bucket_name = current_app.config.get('S3_BUCKET')
+
+    if not s3_client or not bucket_name:
+        logger.error("Configuración S3 incompleta (cliente o bucket) para generar URL pre-firmada.")
+        return None
+
+    try:
+        response = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket_name, 'Key': s3_object_key},
+            ExpiresIn=expiration
+        )
+        logger.info(f"URL pre-firmada generada para: {s3_object_key}")
+        return response
+    except ClientError as e:
+        # Verificar si el error es porque la clave no existe
+        if e.response['Error']['Code'] == 'NoSuchKey':
+             logger.error(f"No se encontró la clave S3 '{s3_object_key}' al generar URL pre-firmada.")
+        else:
+             logger.error(f"Error generando URL pre-firmada para {s3_object_key}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Error inesperado generando URL pre-firmada: {str(e)}")
+        return None
+
+
+def delete_file(s3_object_key):
+    """
+    Elimina un archivo de S3 usando su clave de objeto.
+
+    Args:
+        s3_object_key (str): Clave del objeto S3 a eliminar.
+    """
+    if not s3_object_key:
+        logger.warning("Intento de eliminar archivo con clave S3 vacía.")
         return False
 
-# get_file_url ya no es necesaria o simplemente devuelve la entrada
-# def get_file_url(file_path):
-#    ...
+    s3_client = get_s3_client()
+    bucket_name = current_app.config.get('S3_BUCKET')
+
+    if not s3_client or not bucket_name:
+        logger.error("Configuración S3 incompleta (cliente o bucket) para eliminar archivo.")
+        return False
+
+    try:
+        s3_client.delete_object(Bucket=bucket_name, Key=s3_object_key)
+        logger.info(f"Solicitud de eliminación enviada a S3 para: {s3_object_key}")
+        return True
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            logger.warning(f"Objeto S3 no encontrado para eliminar (NoSuchKey): {s3_object_key}")
+            return True # Considerar éxito si ya no existe
+        else:
+            logger.error(f"Error eliminando archivo de S3: {e}")
+            return False
+    except Exception as e:
+        logger.error(f"Error inesperado eliminando archivo S3: {str(e)}")
+        return False
+
+# --- La lógica local se puede mantener como fallback o eliminar si S3 es mandatorio ---
+# def delete_local_file(relative_url_path): ...
+# (El código de delete_local_file y la lógica local en save_file/delete_file
+#  se pueden eliminar si decides usar solo S3 en producción)

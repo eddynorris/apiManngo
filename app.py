@@ -84,8 +84,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Configuración para S3 (Reemplaza UPLOAD_FOLDER)
 app.config['S3_BUCKET'] = os.environ.get('S3_BUCKET')
 app.config['S3_REGION'] = os.environ.get('AWS_REGION') # Reutilizar si es la misma región
-app.config['S3_KEY'] = os.environ.get('AWS_ACCESS_KEY_ID') # Alternativa a roles IAM
-app.config['S3_SECRET'] = os.environ.get('AWS_SECRET_ACCESS_KEY') # Alternativa a roles IAM
 app.config['S3_LOCATION'] = f"https://{app.config['S3_BUCKET']}.s3.{app.config['S3_REGION']}.amazonaws.com/"
 
 if not app.config['S3_BUCKET'] or not app.config['S3_REGION']:

@@ -1,13 +1,13 @@
 # ARCHIVO: pago_resource.py
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
-from flask import request
+from flask import request, jsonify
 from models import Pago, Venta
 from schemas import pago_schema, pagos_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE
 from decimal import Decimal
-from utils.file_handlers import save_file, delete_file
+from utils.file_handlers import save_file, delete_file, get_presigned_url
 from werkzeug.datastructures import FileStorage
 from flask import request, current_app
 
@@ -21,7 +21,13 @@ class PagoResource(Resource):
         - Sin ID: Lista paginada con filtros (venta_id, método_pago)
         """
         if pago_id:
-            return pago_schema.dump(Pago.query.get_or_404(pago_id)), 200
+            pago = Pago.query.get_or_404(pago_id)
+            # Serializar datos básicos
+            result = pago_schema.dump(pago)
+            # Generar URL pre-firmada si hay clave S3
+            if pago.url_comprobante: # Ahora url_comprobante contiene la clave S3
+                result['comprobante_url'] = get_presigned_url(pago.url_comprobante)
+            return jsonify(result), 200 # Devolver JSON
         
         # Construir query con filtros
         query = Pago.query
@@ -36,15 +42,23 @@ class PagoResource(Resource):
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         pagos = query.paginate(page=page, per_page=per_page, error_out=False)
         
-        return {
-            "data": pagos_schema.dump(pagos.items),
+        # Preparar datos para respuesta, incluyendo URLs pre-firmadas para la lista
+        items_data = []
+        for item in pagos.items:
+            dumped_item = pagos_schema.dump(item) # Usar schema plural para un item
+            if item.url_comprobante:
+                dumped_item['comprobante_url'] = get_presigned_url(item.url_comprobante)
+            items_data.append(dumped_item)
+
+        return jsonify({ # Devolver JSON
+            "data": items_data,
             "pagination": {
                 "total": pagos.total,
                 "page": pagos.page,
                 "per_page": pagos.per_page,
                 "pages": pagos.pages
             }
-        }, 200
+        }), 200
 
     @jwt_required()
     @handle_db_errors
@@ -95,10 +109,12 @@ class PagoResource(Resource):
                 return {"error": "Monto excede el saldo pendiente"}, 400
             
             # Procesar comprobante si existe
-            url_comprobante = None
+            s3_key_comprobante = None # Cambiado de url_comprobante
             if 'comprobante' in request.files:
                 file = request.files['comprobante']
-                url_comprobante = save_file(file, 'comprobantes')
+                s3_key_comprobante = save_file(file, 'comprobantes') # save_file devuelve la clave
+                if not s3_key_comprobante:
+                    return {"error": "Error al subir el comprobante"}, 500
             
             # Crear pago
             nuevo_pago = Pago(
@@ -108,7 +124,7 @@ class PagoResource(Resource):
                 referencia=referencia,
                 fecha= fecha,
                 usuario_id=get_jwt().get('sub'),
-                url_comprobante=url_comprobante
+                url_comprobante=s3_key_comprobante # Guardar la clave S3 en el campo url_comprobante
             )
             
             db.session.add(nuevo_pago)
@@ -184,18 +200,22 @@ class PagoResource(Resource):
             if 'referencia' in request.form:
                 pago.referencia = request.form.get('referencia')
             
-            # Procesar comprobante si existe
+            # Procesar comprobante si existe (al actualizar)
             if 'comprobante' in request.files:
                 file = request.files['comprobante']
-                # Eliminar comprobante anterior si existe
+                # Eliminar comprobante anterior si existe (usando la clave S3)
                 if pago.url_comprobante:
                     delete_file(pago.url_comprobante)
-                # Guardar nuevo comprobante
-                pago.url_comprobante = save_file(file, 'comprobantes')
-            
-            # Si se especifica eliminar el comprobante
-            if request.form.get('eliminar_comprobante') == 'true' and pago.url_comprobante:
-                delete_file(pago.url_comprobante)
+                # Guardar nuevo comprobante y obtener su clave S3
+                s3_key_nuevo = save_file(file, 'comprobantes')
+                if s3_key_nuevo:
+                     pago.url_comprobante = s3_key_nuevo # Actualizar clave en el modelo
+                else:
+                     return {"error": "Error al subir el nuevo comprobante"}, 500
+
+            # Si se especifica eliminar el comprobante (y no se subió uno nuevo)
+            elif request.form.get('eliminar_comprobante') == 'true' and pago.url_comprobante:
+                delete_file(pago.url_comprobante) # Eliminar usando la clave S3
                 pago.url_comprobante = None
             
             venta.actualizar_estado(ajuste_pago)
@@ -213,7 +233,7 @@ class PagoResource(Resource):
         venta = pago.venta
         monto_eliminado = -pago.monto
 
-        # Eliminar comprobante si existe
+        # Eliminar comprobante de S3 si existe (usando la clave)
         if pago.url_comprobante:
             delete_file(pago.url_comprobante)
         

@@ -1,8 +1,8 @@
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
-from flask import request, current_app
+from flask import request, current_app, jsonify
 from werkzeug.datastructures import FileStorage
-from utils.file_handlers import save_file, delete_file
+from utils.file_handlers import save_file, delete_file, get_presigned_url
 from models import PresentacionProducto, Inventario, VentaDetalle
 from schemas import presentacion_schema, presentaciones_schema
 from extensions import db
@@ -20,7 +20,12 @@ class PresentacionResource(Resource):
         """
         if presentacion_id:
             presentacion = PresentacionProducto.query.get_or_404(presentacion_id)
-            return presentacion_schema.dump(presentacion), 200
+            # Serializar datos básicos
+            result = presentacion_schema.dump(presentacion)
+            # Generar URL pre-firmada si hay clave S3
+            if presentacion.url_foto: # Ahora url_foto contiene la clave S3
+                result['foto_url'] = get_presigned_url(presentacion.url_foto)
+            return jsonify(result), 200 # Devolver JSON
 
         # Construir query con filtros
         query = PresentacionProducto.query
@@ -36,15 +41,23 @@ class PresentacionResource(Resource):
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         resultado = query.paginate(page=page, per_page=per_page, error_out=False)
 
-        return {
-            "data": presentaciones_schema.dump(resultado.items),
+        # Preparar datos para respuesta, incluyendo URLs pre-firmadas para la lista
+        items_data = []
+        for item in resultado.items:
+            dumped_item = presentaciones_schema.dump(item) # Usa el schema (plural para item)
+            if item.url_foto:
+                dumped_item['foto_url'] = get_presigned_url(item.url_foto)
+            items_data.append(dumped_item)
+
+        return jsonify({ # Devolver JSON
+            "data": items_data,
             "pagination": {
                 "total": resultado.total,
                 "page": resultado.page,
                 "per_page": resultado.per_page,
                 "pages": resultado.pages
             }
-        }, 200
+        }), 200
 
     @jwt_required()
     @rol_requerido('admin', 'gerente')
@@ -98,11 +111,13 @@ class PresentacionResource(Resource):
                 }, 409
             
             # Procesar imagen si existe
-            url_foto = None
+            s3_key_foto = None # Cambiado de url_foto
             if 'foto' in request.files:
                 file = request.files['foto']
-                url_foto = save_file(file, 'presentaciones')
-            
+                s3_key_foto = save_file(file, 'presentaciones') # save_file devuelve la clave
+                if not s3_key_foto:
+                     return {"error": "Error al subir la foto"}, 500
+
             # Crear presentación
             nueva_presentacion = PresentacionProducto(
                 producto_id=producto_id,
@@ -111,7 +126,7 @@ class PresentacionResource(Resource):
                 tipo=tipo,
                 precio_venta=precio_venta,
                 activo=activo,
-                url_foto=url_foto
+                url_foto=s3_key_foto # Guardar la clave S3 en el campo url_foto
             )
             
             db.session.add(nueva_presentacion)
@@ -175,15 +190,19 @@ class PresentacionResource(Resource):
             # Procesar imagen si existe
             if 'foto' in request.files:
                 file = request.files['foto']
-                # Eliminar foto anterior si existe
+                # Eliminar foto anterior si existe (usando la clave S3)
                 if presentacion.url_foto:
                     delete_file(presentacion.url_foto)
-                # Guardar nueva foto
-                presentacion.url_foto = save_file(file, 'presentaciones')
+                # Guardar nueva foto y obtener su clave S3
+                s3_key_nueva = save_file(file, 'presentaciones')
+                if s3_key_nueva:
+                    presentacion.url_foto = s3_key_nueva # Actualizar la clave S3 en el modelo
+                else:
+                     return {"error": "Error al subir la nueva foto"}, 500
             
-            # Si se especifica eliminar la foto
-            if request.form.get('eliminar_foto') == 'true' and presentacion.url_foto:
-                delete_file(presentacion.url_foto)
+            # Si se especifica eliminar la foto (y no se subió una nueva)
+            elif request.form.get('eliminar_foto') == 'true' and presentacion.url_foto:
+                delete_file(presentacion.url_foto) # Eliminar usando la clave S3
                 presentacion.url_foto = None
             
             db.session.commit()
@@ -204,7 +223,7 @@ class PresentacionResource(Resource):
         if VentaDetalle.query.filter_by(presentacion_id=presentacion_id).first():
             return {"error": "Existen ventas asociadas"}, 400
 
-        # Eliminar foto si existe
+        # Eliminar foto de S3 si existe (usando la clave)
         if presentacion.url_foto:
             delete_file(presentacion.url_foto)
 
