@@ -1,15 +1,15 @@
-# ARCHIVO: pago_resource.py
+# ARCHIVO: resources/pago_resource.py
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
-from flask import request, jsonify
+from flask import request # Eliminado jsonify
 from models import Pago, Venta
-from schemas import pago_schema, pagos_schema
+from schemas import pago_schema, pagos_schema # Asegúrate que pagos_schema exista y sea correcto
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE
 from decimal import Decimal
 from utils.file_handlers import save_file, delete_file, get_presigned_url
-from werkzeug.datastructures import FileStorage
-from flask import request, current_app
+# from werkzeug.datastructures import FileStorage # No usado directamente aquí
+# from flask import current_app # No usado directamente aquí
 
 class PagoResource(Resource):
     @jwt_required()
@@ -25,10 +25,14 @@ class PagoResource(Resource):
             # Serializar datos básicos
             result = pago_schema.dump(pago)
             # Generar URL pre-firmada si hay clave S3
-            if pago.url_comprobante: # Ahora url_comprobante contiene la clave S3
+            # Asume que el campo en el modelo Pago se llama 'url_comprobante' y guarda la clave S3
+            if pago.url_comprobante:
                 result['comprobante_url'] = get_presigned_url(pago.url_comprobante)
-            return jsonify(result), 200 # Devolver JSON
-        
+            else:
+                 result['comprobante_url'] = None # Asegurar que el campo exista incluso si no hay imagen
+            # --- CORRECCIÓN: Devolver diccionario directamente ---
+            return result, 200
+
         # Construir query con filtros
         query = Pago.query
         if venta_id := request.args.get('venta_id'):
@@ -37,20 +41,30 @@ class PagoResource(Resource):
             query = query.filter_by(metodo_pago=metodo)
         if usuario_id := request.args.get('usuario_id'):
             query = query.filter_by(usuario_id=usuario_id)
+
+        # Ordenar (opcional, pero bueno para consistencia)
+        query = query.order_by(Pago.fecha.desc())
+
         # Paginación
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         pagos = query.paginate(page=page, per_page=per_page, error_out=False)
-        
+
         # Preparar datos para respuesta, incluyendo URLs pre-firmadas para la lista
         items_data = []
         for item in pagos.items:
-            dumped_item = pagos_schema.dump(item) # Usar schema plural para un item
+            # --- CORRECCIÓN: Usar schema singular si pagos_schema es para listas ---
+            # Si 'pagos_schema' es un schema Many=True, usarlo así está bien.
+            # Si 'pagos_schema' es igual a 'pago_schema', usar pago_schema.dump(item)
+            dumped_item = pago_schema.dump(item) # Asumiendo que quieres el detalle de cada pago
             if item.url_comprobante:
                 dumped_item['comprobante_url'] = get_presigned_url(item.url_comprobante)
+            else:
+                dumped_item['comprobante_url'] = None # Asegurar que el campo exista
             items_data.append(dumped_item)
 
-        return jsonify({ # Devolver JSON
+        # --- CORRECCIÓN: Devolver diccionario directamente ---
+        return {
             "data": items_data,
             "pagination": {
                 "total": pagos.total,
@@ -58,7 +72,7 @@ class PagoResource(Resource):
                 "per_page": pagos.per_page,
                 "pages": pagos.pages
             }
-        }), 200
+        }, 200
 
     @jwt_required()
     @handle_db_errors
@@ -66,73 +80,100 @@ class PagoResource(Resource):
         """Registra nuevo pago con posibilidad de adjuntar comprobante"""
         # Procesar datos JSON
         if 'application/json' in request.content_type:
-            data = pago_schema.load(request.get_json())
+            data = request.get_json() # Obtener el diccionario directamente
+            # Validar con Marshmallow
+            errors = pago_schema.validate(data)
+            if errors:
+                 return {"errors": errors}, 400
 
-            venta = Venta.query.get_or_404(data.venta_id)
+            # Cargar datos validados (sin crear instancia aún si necesitamos lógica compleja)
+            venta_id = data.get('venta_id')
+            monto_str = data.get('monto')
+            metodo_pago = data.get('metodo_pago')
+            referencia = data.get('referencia')
+            fecha = data.get('fecha') # Asegúrate que el schema maneje la conversión de fecha
+
+            if not all([venta_id, monto_str, metodo_pago]):
+                 return {"error": "Faltan campos requeridos (venta_id, monto, metodo_pago)"}, 400
+
+            venta = Venta.query.get_or_404(venta_id)
+            monto = Decimal(monto_str) # Convertir a Decimal
+
+            # Calcular saldo pendiente ANTES de añadir el nuevo pago
             saldo_pendiente_venta = venta.total - sum(pago.monto for pago in venta.pagos)
-            if Decimal(data.monto) > saldo_pendiente_venta:
-                return {"error": "Monto excede el saldo pendiente"}, 400
-            
+
+            if monto > saldo_pendiente_venta:
+                return {"error": f"Monto {monto} excede el saldo pendiente {saldo_pendiente_venta}"}, 400
+
             nuevo_pago = Pago(
                 venta_id=venta.id,
-                monto=data.monto,
-                metodo_pago=data.metodo_pago,
-                referencia=data.referencia,
-                fecha = data.fecha,
+                monto=monto,
+                metodo_pago=metodo_pago,
+                referencia=referencia,
+                fecha=fecha, # Asumiendo que el schema ya lo convirtió a objeto date/datetime
                 usuario_id=get_jwt().get('sub')
+                # url_comprobante se maneja en multipart
             )
 
             db.session.add(nuevo_pago)
-            venta.actualizar_estado(nuevo_pago)
+            venta.actualizar_estado(nuevo_pago) # Pasar el objeto pago nuevo
             db.session.commit()
-            
+
             return pago_schema.dump(nuevo_pago), 201
-        
+
         # Procesar formulario multipart con archivos
         elif 'multipart/form-data' in request.content_type:
             # Obtener datos del formulario
             venta_id = request.form.get('venta_id')
-            monto = request.form.get('monto')
+            monto_str = request.form.get('monto')
             metodo_pago = request.form.get('metodo_pago')
             referencia = request.form.get('referencia')
-            fecha = request.form.get('fecha')
-            
-            
+            fecha = request.form.get('fecha') # Considerar parsear fecha si viene como string
+
             # Validaciones básicas
-            if not all([venta_id, monto, metodo_pago]):
-                return {"error": "Faltan campos requeridos"}, 400
-            
+            if not all([venta_id, monto_str, metodo_pago]):
+                return {"error": "Faltan campos requeridos (venta_id, monto, metodo_pago)"}, 400
+
+            try:
+                 monto = Decimal(monto_str)
+            except Exception:
+                 return {"error": "Monto inválido"}, 400
+
             venta = Venta.query.get_or_404(venta_id)
+            # Calcular saldo pendiente ANTES de añadir el nuevo pago
             saldo_pendiente_venta = venta.total - sum(pago.monto for pago in venta.pagos)
-            print(saldo_pendiente_venta)
-            if Decimal(monto) > saldo_pendiente_venta:
-                return {"error": "Monto excede el saldo pendiente"}, 400
-            
+
+            if monto > saldo_pendiente_venta:
+                 return {"error": f"Monto {monto} excede el saldo pendiente {saldo_pendiente_venta}"}, 400
+
             # Procesar comprobante si existe
-            s3_key_comprobante = None # Cambiado de url_comprobante
+            s3_key_comprobante = None
             if 'comprobante' in request.files:
                 file = request.files['comprobante']
-                s3_key_comprobante = save_file(file, 'comprobantes') # save_file devuelve la clave
-                if not s3_key_comprobante:
-                    return {"error": "Error al subir el comprobante"}, 500
-            
+                if file.filename == '': # Chequeo si se envió el campo pero sin archivo
+                     pass # No hacer nada si no hay archivo real
+                else:
+                     s3_key_comprobante = save_file(file, 'comprobantes') # save_file devuelve la clave
+                     if not s3_key_comprobante:
+                         return {"error": "Error al subir el comprobante"}, 500
+
             # Crear pago
             nuevo_pago = Pago(
                 venta_id=venta_id,
-                monto=Decimal(monto),
+                monto=monto,
                 metodo_pago=metodo_pago,
                 referencia=referencia,
-                fecha= fecha,
+                fecha=fecha, # Parsear si es necesario: datetime.strptime(fecha, '%Y-%m-%d').date()
                 usuario_id=get_jwt().get('sub'),
-                url_comprobante=s3_key_comprobante # Guardar la clave S3 en el campo url_comprobante
+                url_comprobante=s3_key_comprobante # Guardar la clave S3
             )
-            
+
             db.session.add(nuevo_pago)
-            venta.actualizar_estado(nuevo_pago)
+            venta.actualizar_estado(nuevo_pago) # Pasar el objeto pago nuevo
             db.session.commit()
-            
+
             return pago_schema.dump(nuevo_pago), 201
-        
+
         return {"error": "Tipo de contenido no soportado"}, 415
 
     @jwt_required()
@@ -141,88 +182,95 @@ class PagoResource(Resource):
         """Actualiza pago con posibilidad de cambiar comprobante"""
         pago = Pago.query.get_or_404(pago_id)
         venta = pago.venta
-        monto_original = pago.monto 
+        monto_original = pago.monto
 
         # Actualización JSON
         if 'application/json' in request.content_type:
-            data = pago_schema.load(request.get_json(), partial=True)
-            
-            if data.monto:
-                nuevo_monto = Decimal(data.monto)
-                saldo_actual = venta.total - sum(p.monto for p in venta.pagos if p.id != pago_id)
-                
-                if nuevo_monto > saldo_actual:
-                    return {"error": "Nuevo monto excede saldo pendiente"}, 400
-            
-            updated_pago = pago_schema.load(
-                request.get_json(),
-                instance=pago,
-                partial=True
-            )
-            
-            ajuste_pago = None
-            if hasattr(data, 'monto') and data.monto is not None:
-                # Crear un objeto temporal para representar el cambio en el monto
-                class AjustePago:
-                    def __init__(self, monto):
-                        self.monto = monto
-                # El ajuste es la diferencia entre el nuevo monto y el original
-                ajuste_pago = AjustePago(Decimal(data.monto) - monto_original)
-            
-            venta.actualizar_estado(ajuste_pago)
+            data = request.get_json()
+            # Validar con Marshmallow (partial=True)
+            errors = pago_schema.validate(data, partial=True)
+            if errors:
+                 return {"errors": errors}, 400
+
+            # Calcular ajuste si el monto cambia
+            ajuste_monto = Decimal(0)
+            if 'monto' in data:
+                nuevo_monto = Decimal(data['monto'])
+                # Calcular saldo disponible EXCLUYENDO el pago actual
+                saldo_actual_sin_pago = venta.total - sum(p.monto for p in venta.pagos if p.id != pago_id)
+
+                if nuevo_monto > saldo_actual_sin_pago:
+                    return {"error": f"Nuevo monto {nuevo_monto} excede saldo pendiente {saldo_actual_sin_pago}"}, 400
+                ajuste_monto = nuevo_monto - monto_original
+
+            # Usar Marshmallow para cargar los datos en la instancia existente
+            # Esto actualiza los campos de 'pago' con los valores de 'data'
+            pago = pago_schema.load(data, instance=pago, partial=True, session=db.session)
+
+            # Crear objeto temporal para actualizar estado de venta si hubo ajuste
+            if ajuste_monto != Decimal(0):
+                 class AjustePago:
+                     def __init__(self, monto): self.monto = monto
+                 venta.actualizar_estado(AjustePago(ajuste_monto))
+
             db.session.commit()
-            
-            return pago_schema.dump(updated_pago), 200
-        
+            return pago_schema.dump(pago), 200
+
         # Actualización con formulario multipart
         elif 'multipart/form-data' in request.content_type:
-            ajuste_pago = None
+            ajuste_monto = Decimal(0)
             # Actualizar monto si se proporciona
             if 'monto' in request.form:
-                nuevo_monto = Decimal(request.form.get('monto'))
-                saldo_actual = venta.total - sum(p.monto for p in venta.pagos if p.id != pago_id)
-                
-                if nuevo_monto > saldo_actual:
-                    return {"error": "Nuevo monto excede saldo pendiente"}, 400
-                
-                            # Crear ajuste temporal
-                class AjustePago:
-                    def __init__(self, monto):
-                        self.monto = monto
-                
-                # El ajuste es la diferencia entre el nuevo monto y el original
-                ajuste_pago = AjustePago(nuevo_monto - monto_original)
+                try:
+                    nuevo_monto = Decimal(request.form.get('monto'))
+                except Exception:
+                    return {"error": "Monto inválido"}, 400
+
+                saldo_actual_sin_pago = venta.total - sum(p.monto for p in venta.pagos if p.id != pago_id)
+                if nuevo_monto > saldo_actual_sin_pago:
+                    return {"error": f"Nuevo monto {nuevo_monto} excede saldo pendiente {saldo_actual_sin_pago}"}, 400
+
+                ajuste_monto = nuevo_monto - monto_original
                 pago.monto = nuevo_monto
-            
+
             # Actualizar otros campos
             if 'metodo_pago' in request.form:
                 pago.metodo_pago = request.form.get('metodo_pago')
             if 'referencia' in request.form:
                 pago.referencia = request.form.get('referencia')
-            
+            if 'fecha' in request.form:
+                 # Parsear si es necesario
+                 pago.fecha = request.form.get('fecha')
+
             # Procesar comprobante si existe (al actualizar)
             if 'comprobante' in request.files:
                 file = request.files['comprobante']
-                # Eliminar comprobante anterior si existe (usando la clave S3)
-                if pago.url_comprobante:
-                    delete_file(pago.url_comprobante)
-                # Guardar nuevo comprobante y obtener su clave S3
-                s3_key_nuevo = save_file(file, 'comprobantes')
-                if s3_key_nuevo:
-                     pago.url_comprobante = s3_key_nuevo # Actualizar clave en el modelo
-                else:
-                     return {"error": "Error al subir el nuevo comprobante"}, 500
+                if file.filename != '': # Solo procesar si se subió un archivo nuevo
+                    # Eliminar comprobante anterior si existe (usando la clave S3)
+                    if pago.url_comprobante:
+                        delete_file(pago.url_comprobante)
+                    # Guardar nuevo comprobante y obtener su clave S3
+                    s3_key_nuevo = save_file(file, 'comprobantes')
+                    if s3_key_nuevo:
+                        pago.url_comprobante = s3_key_nuevo # Actualizar clave en el modelo
+                    else:
+                        return {"error": "Error al subir el nuevo comprobante"}, 500
+                # Si 'comprobante' está en files pero filename es '', no hacer nada (no se subió archivo)
 
             # Si se especifica eliminar el comprobante (y no se subió uno nuevo)
             elif request.form.get('eliminar_comprobante') == 'true' and pago.url_comprobante:
                 delete_file(pago.url_comprobante) # Eliminar usando la clave S3
                 pago.url_comprobante = None
-            
-            venta.actualizar_estado(ajuste_pago)
+
+            # Actualizar estado de la venta si hubo ajuste
+            if ajuste_monto != Decimal(0):
+                 class AjustePago:
+                     def __init__(self, monto): self.monto = monto
+                 venta.actualizar_estado(AjustePago(ajuste_monto))
+
             db.session.commit()
-            
             return pago_schema.dump(pago), 200
-        
+
         return {"error": "Tipo de contenido no soportado"}, 415
 
     @jwt_required()
@@ -231,22 +279,20 @@ class PagoResource(Resource):
         """Elimina pago y su comprobante asociado"""
         pago = Pago.query.get_or_404(pago_id)
         venta = pago.venta
-        monto_eliminado = -pago.monto
+        # El ajuste es el monto del pago que se elimina (negativo para la venta)
+        ajuste_monto = -pago.monto
 
         # Eliminar comprobante de S3 si existe (usando la clave)
         if pago.url_comprobante:
             delete_file(pago.url_comprobante)
-        
-        # Crear un objeto temporal para representar el pago que se eliminará
-        class PagoEliminado:
-            def __init__(self, monto):
-                self.monto = monto
-        
-        # El monto es negativo porque estamos eliminando un pago
-        pago_eliminado = PagoEliminado(monto_eliminado)
+
+        # Crear un objeto temporal para actualizar estado de venta
+        class AjustePago:
+            def __init__(self, monto): self.monto = monto
+        venta.actualizar_estado(AjustePago(ajuste_monto))
 
         db.session.delete(pago)
-        venta.actualizar_estado(pago_eliminado)
         db.session.commit()
-        
-        return "Pago eliminado", 200
+
+        # --- CORRECCIÓN: Devolver un mensaje JSON ---
+        return {'message': "Pago eliminado exitosamente"}, 200

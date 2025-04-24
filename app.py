@@ -84,7 +84,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Configuración para S3 (Reemplaza UPLOAD_FOLDER)
 app.config['S3_BUCKET'] = os.environ.get('S3_BUCKET')
 app.config['S3_REGION'] = os.environ.get('AWS_REGION') # Reutilizar si es la misma región
-app.config['S3_LOCATION'] = f"https://{app.config['S3_BUCKET']}.s3.{app.config['S3_REGION']}.amazonaws.com/"
 
 if not app.config['S3_BUCKET'] or not app.config['S3_REGION']:
     logger.warning("Configuración de S3 incompleta (S3_BUCKET o AWS_REGION). El manejo de archivos podría fallar.")
@@ -97,7 +96,7 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'pdf'} # Mantener para
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(os.environ.get('JWT_EXPIRES_SECONDS', 43200)) # Default 12 horas
 app.config['JWT_ALGORITHM'] = 'HS256'
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
-app.config['JWT_BLACKLIST_ENABLED'] = True # Considera si realmente necesitas blacklist o usa tokens de corta duración + refresh tokens
+app.config['JWT_BLACKLIST_ENABLED'] = False # Considera si realmente necesitas blacklist o usa tokens de corta duración + refresh tokens
 
 # Configuración para Flask-Limiter
 app.config['RATELIMIT_STORAGE_URL'] = os.environ.get('LIMITER_STORAGE_URI', 'memory://') # Usar Redis en prod: redis://...
