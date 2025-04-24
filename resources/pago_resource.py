@@ -24,13 +24,14 @@ class PagoResource(Resource):
             pago = Pago.query.get_or_404(pago_id)
             # Serializar datos básicos
             result = pago_schema.dump(pago)
-            # Generar URL pre-firmada si hay clave S3
-            # Asume que el campo en el modelo Pago se llama 'url_comprobante' y guarda la clave S3
+            # Generar URL pre-firmada si hay clave S3 y SOBRESCRIBIR el campo original
             if pago.url_comprobante:
-                result['comprobante_url'] = get_presigned_url(pago.url_comprobante)
+                # --- CORRECCIÓN: Sobrescribir 'url_comprobante' ---
+                presigned_url = get_presigned_url(pago.url_comprobante)
+                result['url_comprobante'] = presigned_url
             else:
-                 result['comprobante_url'] = None # Asegurar que el campo exista incluso si no hay imagen
-            # --- CORRECCIÓN: Devolver diccionario directamente ---
+                 # Asegurar que el campo exista como None si no hay clave
+                 result['url_comprobante'] = None
             return result, 200
 
         # Construir query con filtros
@@ -53,17 +54,14 @@ class PagoResource(Resource):
         # Preparar datos para respuesta, incluyendo URLs pre-firmadas para la lista
         items_data = []
         for item in pagos.items:
-            # --- CORRECCIÓN: Usar schema singular si pagos_schema es para listas ---
-            # Si 'pagos_schema' es un schema Many=True, usarlo así está bien.
-            # Si 'pagos_schema' es igual a 'pago_schema', usar pago_schema.dump(item)
             dumped_item = pago_schema.dump(item) # Asumiendo que quieres el detalle de cada pago
             if item.url_comprobante:
-                dumped_item['comprobante_url'] = get_presigned_url(item.url_comprobante)
+                # --- CORRECCIÓN: Sobrescribir 'url_comprobante' ---
+                dumped_item['url_comprobante'] = get_presigned_url(item.url_comprobante)
             else:
-                dumped_item['comprobante_url'] = None # Asegurar que el campo exista
+                dumped_item['url_comprobante'] = None # Asegurar que el campo exista
             items_data.append(dumped_item)
 
-        # --- CORRECCIÓN: Devolver diccionario directamente ---
         return {
             "data": items_data,
             "pagination": {

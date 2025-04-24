@@ -28,7 +28,8 @@ class PresentacionResource(Resource):
             # Generar URL pre-firmada si hay clave S3
             # Asume que el campo se llama 'url_foto' y guarda la clave S3
             if presentacion.url_foto:
-                result['foto_url'] = get_presigned_url(presentacion.url_foto)
+                presigned_url = get_presigned_url(presentacion.url_foto)
+                result['url_foto'] = presigned_url
             else:
                 result['foto_url'] = None # Asegurar que el campo exista
             # --- CORRECCIÓN: Devolver diccionario directamente ---
@@ -60,9 +61,9 @@ class PresentacionResource(Resource):
              # Si es igual a 'presentacion_schema', usar presentacion_schema.dump(item)
             dumped_item = presentacion_schema.dump(item) # Asumiendo detalle individual
             if item.url_foto:
-                dumped_item['foto_url'] = get_presigned_url(item.url_foto)
+                dumped_item['url_foto'] = get_presigned_url(item.url_foto)
             else:
-                dumped_item['foto_url'] = None # Asegurar que el campo exista
+                dumped_item['url_foto'] = None # Asegurar que el campo exista
             items_data.append(dumped_item)
 
         # --- CORRECCIÓN: Devolver diccionario directamente ---
