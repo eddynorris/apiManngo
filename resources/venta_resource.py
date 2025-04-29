@@ -5,6 +5,7 @@ from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProduct
 from schemas import venta_schema, ventas_schema, venta_detalle_schema, clientes_schema, almacenes_schema, presentacion_schema, inventario_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
+from utils.file_handlers import get_presigned_url
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -19,10 +20,26 @@ class VentaResource(Resource):
 
         if venta_id:
             venta = Venta.query.get_or_404(venta_id)
-                # Si no es admin, verificar que solo pueda ver sus propias ventas
+            # Si no es admin, verificar que solo pueda ver sus propias ventas
             if not is_admin and str(venta.vendedor_id) != current_user_id:
                 return {"error": "No tienes permiso para ver esta venta"}, 403
-            return venta_schema.dump(venta), 200
+            
+            # Serializar la venta
+            result = venta_schema.dump(venta)
+            
+            # --- GENERAR URLs PRE-FIRMADAS PARA DETALLES ---
+            if 'detalles' in result and result['detalles']:
+                for detalle in result['detalles']:
+                    # Verificar estructura anidada
+                    if 'presentacion' in detalle and detalle['presentacion'] and 'url_foto' in detalle['presentacion']:
+                        s3_key = detalle['presentacion']['url_foto']
+                        if s3_key:
+                            # Reemplazar clave S3 con URL pre-firmada
+                            detalle['presentacion']['url_foto'] = get_presigned_url(s3_key)
+                        # else: url_foto ya es None o vacío, no hacer nada
+            # ---------------------------------------------
+            
+            return result, 200
         
         # Filtros: cliente_id, almacen_id, vendedor_id, fecha_inicio, fecha_fin
         filters = {
@@ -279,7 +296,7 @@ class VentaFormDataResource(Resource):
                 Inventario, PresentacionProducto.id == Inventario.presentacion_id
             ).filter(
                 Inventario.almacen_id == almacen_id,
-                Inventario.cantidad > 0, # Solo incluir si hay stock
+                Inventario.cantidad >= 0, # Solo incluir si hay stock
                 PresentacionProducto.activo == True # Solo presentaciones activas
             ).order_by(PresentacionProducto.nombre).all()
             
@@ -290,7 +307,6 @@ class VentaFormDataResource(Resource):
                 dumped_presentacion['stock_disponible'] = cantidad_stock 
                 # Generar URL pre-firmada si hay foto
                 if presentacion.url_foto:
-                    from utils.file_handlers import get_presigned_url
                     dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
                 else:
                     dumped_presentacion['url_foto'] = None

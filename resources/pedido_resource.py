@@ -7,6 +7,7 @@ from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
 from datetime import datetime, timezone
 from decimal import Decimal
+from utils.file_handlers import get_presigned_url
 
 class PedidoResource(Resource):
     @jwt_required()
@@ -14,12 +15,28 @@ class PedidoResource(Resource):
     def get(self, pedido_id=None):
         """
         Obtiene pedido(s)
-        - Con ID: Detalle completo del pedido
+        - Con ID: Detalle completo del pedido (con URLs pre-firmadas para detalles)
         - Sin ID: Lista paginada con filtros (cliente_id, almacen_id, fecha_inicio, fecha_fin, estado)
         """
         if pedido_id:
             pedido = Pedido.query.get_or_404(pedido_id)
-            return pedido_schema.dump(pedido), 200
+            
+            # Serializar el pedido
+            result = pedido_schema.dump(pedido)
+            
+            # --- GENERAR URLs PRE-FIRMADAS PARA DETALLES ---
+            if 'detalles' in result and result['detalles']:
+                for detalle in result['detalles']:
+                    # Verificar estructura anidada
+                    if 'presentacion' in detalle and detalle['presentacion'] and 'url_foto' in detalle['presentacion']:
+                        s3_key = detalle['presentacion']['url_foto']
+                        if s3_key:
+                            # Reemplazar clave S3 con URL pre-firmada
+                            detalle['presentacion']['url_foto'] = get_presigned_url(s3_key)
+                        # else: url_foto ya es None o vacío, no hacer nada
+            # ---------------------------------------------
+            
+            return result, 200
         
         # Construir query con filtros
         query = Pedido.query
@@ -269,10 +286,9 @@ class PedidoFormDataResource(Resource):
             presentaciones = PresentacionProducto.query.filter_by(activo=True).order_by(PresentacionProducto.nombre).all()
             presentaciones_data = []
             for p in presentaciones:
-                 dumped_p = presentaciones_schema.dump(p)
+                 dumped_p = presentacion_schema.dump(p)
                  if p.url_foto:
                      # Asegúrate que get_presigned_url está importado o accesible
-                     from utils.file_handlers import get_presigned_url
                      dumped_p['url_foto'] = get_presigned_url(p.url_foto)
                  else:
                      dumped_p['url_foto'] = None
