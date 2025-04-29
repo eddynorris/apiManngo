@@ -8,6 +8,9 @@ from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
 from utils.file_handlers import get_presigned_url
 from datetime import datetime, timezone
 from decimal import Decimal
+import logging # Añadir import para logging
+
+logger = logging.getLogger(__name__) # Configurar logger
 
 class VentaResource(Resource):
     @jwt_required()
@@ -254,72 +257,131 @@ class VentaResource(Resource):
             db.session.rollback()
             return {"error": str(e)}, 500
 
-# --- NUEVO RECURSO PARA FORMULARIO DE VENTA ---
+# --- RECURSO PARA FORMULARIO DE VENTA (MODIFICADO) ---
 class VentaFormDataResource(Resource):
     @jwt_required()
     @handle_db_errors
     def get(self):
         """
         Obtiene los datos necesarios para los formularios de creación/edición de ventas.
-        Requiere 'almacen_id' como query param.
-        Incluye listas de clientes, almacenes y presentaciones con stock disponible.
+
+        - Si el usuario es Admin:
+            - 'almacen_id' es opcional.
+            - Si no se provee 'almacen_id', devuelve todas las presentaciones activas con el stock detallado por almacén.
+            - Si se provee 'almacen_id', filtra presentaciones con stock >= 0 en ese almacén (comportamiento como no-admin).
+        - Si el usuario no es Admin:
+            - 'almacen_id' es requerido y debe coincidir con el del usuario.
+            - Devuelve presentaciones activas con stock >= 0 solo en su almacén.
         """
-        # Obtener y validar almacen_id
-        almacen_id_str = request.args.get('almacen_id')
-        if not almacen_id_str:
-            return {"error": "El parámetro 'almacen_id' es requerido"}, 400
-        try:
-            almacen_id = int(almacen_id_str)
-        except ValueError:
-            return {"error": "El parámetro 'almacen_id' debe ser un número entero"}, 400
-
-        # Verificar permisos sobre el almacén
         claims = get_jwt()
-        if claims.get('rol') != 'admin' and claims.get('almacen_id') != almacen_id:
-            return {"error": "No tiene permisos para acceder a los datos de este almacén"}, 403
+        is_admin = claims.get('rol') == 'admin'
+        user_almacen_id = claims.get('almacen_id')
+        almacen_id_str = request.args.get('almacen_id')
+        almacen_id_param = None
+
+        # --- Lógica de Validación de almacen_id --- 
+        if almacen_id_str:
+            try:
+                almacen_id_param = int(almacen_id_str)
+            except ValueError:
+                return {"error": "El parámetro 'almacen_id' debe ser un número entero"}, 400
+        
+        # Si no es admin, almacen_id es obligatorio y debe coincidir
+        if not is_admin:
+            if not user_almacen_id:
+                 return {"error": "Usuario no tiene almacén asignado."}, 403
+            if not almacen_id_param:
+                return {"error": "El parámetro 'almacen_id' es requerido para este usuario"}, 400
+            if almacen_id_param != user_almacen_id:
+                return {"error": "No tiene permisos para acceder a los datos de este almacén"}, 403
+            # Para no-admin, siempre usamos su almacen_id
+            target_almacen_id = user_almacen_id 
+        else: # Si es admin
+            # Usa el parámetro si se proporciona, sino es None
+            target_almacen_id = almacen_id_param 
+        # ----------------------------------------
 
         try:
-            # Obtener Clientes
+            # Obtener Clientes y Almacenes (igual para todos)
             clientes = Cliente.query.order_by(Cliente.nombre).all()
-            clientes_data = clientes_schema.dump(clientes, many=True) # Asume many=True
+            clientes_data = clientes_schema.dump(clientes, many=True)
             
-            # Obtener Almacenes
-            almacenes = Almacen.query.order_by(Almacen.nombre).all()
-            almacenes_data = almacenes_schema.dump(almacenes, many=True) # Asume many=True
+            todos_almacenes = Almacen.query.order_by(Almacen.nombre).all()
+            almacenes_data = almacenes_schema.dump(todos_almacenes, many=True)
 
-            # Obtener Presentaciones con Inventario disponible en el almacén especificado
-            # Seleccionamos campos de PresentacionProducto y la cantidad de Inventario
-            inventario_con_presentaciones = db.session.query(
-                PresentacionProducto, 
-                Inventario.cantidad
-            ).join(
-                Inventario, PresentacionProducto.id == Inventario.presentacion_id
-            ).filter(
-                Inventario.almacen_id == almacen_id,
-                Inventario.cantidad >= 0, # Solo incluir si hay stock
-                PresentacionProducto.activo == True # Solo presentaciones activas
-            ).order_by(PresentacionProducto.nombre).all()
+            # --- Lógica Diferenciada para Presentaciones --- 
+            presentaciones_data = []
+
+            # CASO 1: Admin SIN almacen_id específico (mostrar stock de todos)
+            if is_admin and target_almacen_id is None:
+                logger.info("Admin sin almacen_id: Obteniendo stock global.")
+                presentaciones_activas = PresentacionProducto.query.filter_by(activo=True).order_by(PresentacionProducto.nombre).all()
+                # Optimización: Cargar todo el inventario relevante de una vez
+                inventario_global = Inventario.query.filter(Inventario.presentacion_id.in_([p.id for p in presentaciones_activas])).all()
+                # Crear un mapa para búsqueda rápida: (presentacion_id, almacen_id) -> cantidad
+                stock_map = {(inv.presentacion_id, inv.almacen_id): inv.cantidad for inv in inventario_global}
+                # Mapa de almacenes para nombres: almacen_id -> nombre
+                almacen_map = {alm.id: alm.nombre for alm in todos_almacenes}
+
+                for p in presentaciones_activas:
+                    dumped_p = presentacion_schema.dump(p)
+                    stock_por_almacen = []
+                    for alm in todos_almacenes:
+                        cantidad = stock_map.get((p.id, alm.id), 0) # Default 0 si no hay registro
+                        stock_por_almacen.append({
+                            "almacen_id": alm.id,
+                            "nombre": almacen_map.get(alm.id, "Desconocido"),
+                            "cantidad": cantidad
+                        })
+                    dumped_p['stock_por_almacen'] = stock_por_almacen
+                    # URL pre-firmada
+                    if p.url_foto:
+                        dumped_p['url_foto'] = get_presigned_url(p.url_foto)
+                    else:
+                        dumped_p['url_foto'] = None
+                    presentaciones_data.append(dumped_p)
             
-            presentaciones_con_stock_data = []
-            for presentacion, cantidad_stock in inventario_con_presentaciones:
-                dumped_presentacion = presentacion_schema.dump(presentacion)
-                # Añadir la cantidad disponible a la información de la presentación
-                dumped_presentacion['stock_disponible'] = cantidad_stock 
-                # Generar URL pre-firmada si hay foto
-                if presentacion.url_foto:
-                    dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
-                else:
-                    dumped_presentacion['url_foto'] = None
-                presentaciones_con_stock_data.append(dumped_presentacion)
+            # CASO 2: No Admin O Admin CON almacen_id específico (mostrar stock de ese almacén)
+            else:
+                logger.info(f"Usuario (Admin: {is_admin}) con target_almacen_id={target_almacen_id}: Obteniendo stock específico.")
+                inventario_filtrado = db.session.query(
+                    PresentacionProducto,
+                    Inventario.cantidad
+                ).join(
+                    Inventario, PresentacionProducto.id == Inventario.presentacion_id
+                ).filter(
+                    Inventario.almacen_id == target_almacen_id,
+                    Inventario.cantidad >= 0, # Incluir stock 0 si se pide almacen específico
+                    PresentacionProducto.activo == True
+                ).order_by(PresentacionProducto.nombre).all()
+                
+                # Crear un conjunto de IDs de presentaciones ya añadidas para evitar duplicados si hay múltiples lotes (aunque la query actual no debería duplicar)
+                presentaciones_incluidas = set()
+                
+                for presentacion, cantidad_stock in inventario_filtrado:
+                    if presentacion.id not in presentaciones_incluidas:
+                        dumped_presentacion = presentacion_schema.dump(presentacion)
+                        dumped_presentacion['stock_disponible'] = cantidad_stock
+                        if presentacion.url_foto:
+                            dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
+                        else:
+                            dumped_presentacion['url_foto'] = None
+                        presentaciones_data.append(dumped_presentacion)
+                        presentaciones_incluidas.add(presentacion.id)
+
+            # -------------------------------------------------
+
+            # Determinar qué clave usar para las presentaciones en la respuesta
+            presentaciones_key = 'presentaciones_con_stock_global' if (is_admin and target_almacen_id is None) else 'presentaciones_con_stock_local'
 
             return {
                 "clientes": clientes_data,
                 "almacenes": almacenes_data,
-                "presentaciones_con_stock": presentaciones_con_stock_data
+                presentaciones_key: presentaciones_data
             }, 200
 
         except Exception as e:
-            # Considerar usar logger.exception(e) para más detalles en logs
+            logger.exception(f"Error en VentaFormDataResource: {e}") # Usar logger.exception para incluir traceback
             return {"error": "Error al obtener datos para el formulario de venta", "details": str(e)}, 500
-# --- FIN NUEVO RECURSO ---
+# --- FIN RECURSO MODIFICADO ---
     
