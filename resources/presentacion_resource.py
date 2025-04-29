@@ -1,9 +1,9 @@
-
 # ARCHIVO: resources/presentacion_resource.py
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required # get_jwt no usado aquí
 from flask import request, jsonify # Eliminado jsonify de nuevo
 from models import PresentacionProducto, Inventario, VentaDetalle
+from models import Almacen
 from schemas import presentacion_schema, presentaciones_schema # Asegúrate que existan y sean correctos
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido
@@ -31,7 +31,7 @@ class PresentacionResource(Resource):
                 presigned_url = get_presigned_url(presentacion.url_foto)
                 result['url_foto'] = presigned_url
             else:
-                result['foto_url'] = None # Asegurar que el campo exista
+                result['url_foto'] = None # Asegurar que el campo exista
             # --- CORRECCIÓN: Devolver diccionario directamente ---
             return result, 200
 
@@ -81,7 +81,7 @@ class PresentacionResource(Resource):
     @rol_requerido('admin', 'gerente')
     @handle_db_errors
     def post(self):
-        """Crea nueva presentación con posibilidad de subir foto"""
+        """Crea nueva presentación con posibilidad de subir foto y crea inventario inicial"""
         # Procesar datos JSON
         if 'application/json' in request.content_type:
             data = request.get_json()
@@ -105,6 +105,18 @@ class PresentacionResource(Resource):
                 }, 409
 
             db.session.add(nueva_presentacion)
+            # --- CREACIÓN DE INVENTARIO ---
+            db.session.flush() # Obtener el ID de la nueva presentación
+            almacenes = Almacen.query.all()
+            for almacen in almacenes:
+                inv = Inventario(
+                    presentacion_id=nueva_presentacion.id,
+                    almacen_id=almacen.id,
+                    cantidad=0 # Stock inicial 0
+                    # stock_minimo usará el default del modelo
+                )
+                db.session.add(inv)
+            # -----------------------------
             db.session.commit()
             return presentacion_schema.dump(nueva_presentacion), 201
 
@@ -154,6 +166,18 @@ class PresentacionResource(Resource):
             )
 
             db.session.add(nueva_presentacion)
+            # --- CREACIÓN DE INVENTARIO ---
+            db.session.flush() # Obtener el ID de la nueva presentación
+            almacenes = Almacen.query.all()
+            for almacen in almacenes:
+                inv = Inventario(
+                    presentacion_id=nueva_presentacion.id,
+                    almacen_id=almacen.id,
+                    cantidad=0 # Stock inicial 0
+                    # stock_minimo usará el default del modelo
+                )
+                db.session.add(inv)
+            # -----------------------------
             db.session.commit()
 
             return presentacion_schema.dump(nueva_presentacion), 201

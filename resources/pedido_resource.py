@@ -2,7 +2,7 @@ from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request
 from models import Pedido, PedidoDetalle, Cliente, PresentacionProducto, Almacen, Inventario, Movimiento, VentaDetalle, Venta
-from schemas import pedido_schema, pedidos_schema, venta_schema
+from schemas import pedido_schema, pedidos_schema, venta_schema, clientes_schema, almacenes_schema, presentaciones_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
 from datetime import datetime, timezone
@@ -245,5 +245,48 @@ class PedidoConversionResource(Resource):
             "message": "Pedido convertido a venta exitosamente",
             "venta": venta_schema.dump(venta)
         }, 201
+    
+# --- NUEVO RECURSO ---
+class PedidoFormDataResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """
+        Obtiene los datos necesarios para llenar los formularios de creación/edición de pedidos.
+        Incluye listas de clientes, almacenes y presentaciones activas.
+        """
+        try:
+            # Obtener Clientes (simplificado: ID y nombre)
+            clientes = Cliente.query.order_by(Cliente.nombre).all()
+            clientes_data = clientes_schema.dump(clientes, many=True) # Asume que clientes_schema existe y es many=True
+            
+            # Obtener Almacenes (simplificado: ID y nombre)
+            almacenes = Almacen.query.order_by(Almacen.nombre).all()
+            almacenes_data = almacenes_schema.dump(almacenes, many=True) # Asume que almacenes_schema existe y es many=True
+
+            # Obtener Presentaciones Activas (más detalle)
+            # Considera añadir paginación si la lista es muy grande, aunque para un formulario puede ser mejor tenerlas todas.
+            presentaciones = PresentacionProducto.query.filter_by(activo=True).order_by(PresentacionProducto.nombre).all()
+            presentaciones_data = []
+            for p in presentaciones:
+                 dumped_p = presentaciones_schema.dump(p)
+                 if p.url_foto:
+                     # Asegúrate que get_presigned_url está importado o accesible
+                     from utils.file_handlers import get_presigned_url
+                     dumped_p['url_foto'] = get_presigned_url(p.url_foto)
+                 else:
+                     dumped_p['url_foto'] = None
+                 presentaciones_data.append(dumped_p)
+            
+            return {
+                "clientes": clientes_data,
+                "almacenes": almacenes_data,
+                "presentaciones": presentaciones_data
+            }, 200
+
+        except Exception as e:
+            # Loggear el error sería bueno aquí
+            return {"error": "Error al obtener datos para el formulario", "details": str(e)}, 500
+# --- FIN NUEVO RECURSO ---
     
     

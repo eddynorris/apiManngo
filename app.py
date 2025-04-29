@@ -22,6 +22,9 @@ from resources.lote_resource import LoteResource
 from resources.merma_resource import MermaResource
 from resources.presentacion_resource import PresentacionResource
 from resources.pedido_resource import PedidoResource, PedidoConversionResource
+from resources.pedido_resource import PedidoFormDataResource
+from resources.venta_resource import VentaFormDataResource
+from resources.ventadetalle_resource import VentaDetalleResource
 
 from extensions import db, jwt
 import os
@@ -209,12 +212,15 @@ api.add_resource(ClienteResource, '/clientes', '/clientes/<int:cliente_id>')
 api.add_resource(GastoResource, '/gastos', '/gastos/<int:gasto_id>')
 api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimiento_id>')
 api.add_resource(VentaResource, '/ventas', '/ventas/<int:venta_id>')
+api.add_resource(VentaFormDataResource, '/ventas/form-data')
 api.add_resource(InventarioResource, '/inventarios', '/inventarios/<int:inventario_id>')
 api.add_resource(PresentacionResource, '/presentaciones', '/presentaciones/<int:presentacion_id>')
 api.add_resource(MermaResource, '/mermas', '/mermas/<int:merma_id>')
 api.add_resource(LoteResource, '/lotes', '/lotes/<int:lote_id>')
 api.add_resource(PedidoResource, '/pedidos', '/pedidos/<int:pedido_id>')
 api.add_resource(PedidoConversionResource, '/pedidos/<int:pedido_id>/convertir')
+api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
+api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

@@ -2,7 +2,7 @@ from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request
 from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento
-from schemas import venta_schema, ventas_schema, venta_detalle_schema
+from schemas import venta_schema, ventas_schema, venta_detalle_schema, clientes_schema, almacenes_schema, presentacion_schema, inventario_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
 from datetime import datetime, timezone
@@ -236,4 +236,74 @@ class VentaResource(Resource):
         except Exception as e:
             db.session.rollback()
             return {"error": str(e)}, 500
+
+# --- NUEVO RECURSO PARA FORMULARIO DE VENTA ---
+class VentaFormDataResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """
+        Obtiene los datos necesarios para los formularios de creación/edición de ventas.
+        Requiere 'almacen_id' como query param.
+        Incluye listas de clientes, almacenes y presentaciones con stock disponible.
+        """
+        # Obtener y validar almacen_id
+        almacen_id_str = request.args.get('almacen_id')
+        if not almacen_id_str:
+            return {"error": "El parámetro 'almacen_id' es requerido"}, 400
+        try:
+            almacen_id = int(almacen_id_str)
+        except ValueError:
+            return {"error": "El parámetro 'almacen_id' debe ser un número entero"}, 400
+
+        # Verificar permisos sobre el almacén
+        claims = get_jwt()
+        if claims.get('rol') != 'admin' and claims.get('almacen_id') != almacen_id:
+            return {"error": "No tiene permisos para acceder a los datos de este almacén"}, 403
+
+        try:
+            # Obtener Clientes
+            clientes = Cliente.query.order_by(Cliente.nombre).all()
+            clientes_data = clientes_schema.dump(clientes, many=True) # Asume many=True
+            
+            # Obtener Almacenes
+            almacenes = Almacen.query.order_by(Almacen.nombre).all()
+            almacenes_data = almacenes_schema.dump(almacenes, many=True) # Asume many=True
+
+            # Obtener Presentaciones con Inventario disponible en el almacén especificado
+            # Seleccionamos campos de PresentacionProducto y la cantidad de Inventario
+            inventario_con_presentaciones = db.session.query(
+                PresentacionProducto, 
+                Inventario.cantidad
+            ).join(
+                Inventario, PresentacionProducto.id == Inventario.presentacion_id
+            ).filter(
+                Inventario.almacen_id == almacen_id,
+                Inventario.cantidad > 0, # Solo incluir si hay stock
+                PresentacionProducto.activo == True # Solo presentaciones activas
+            ).order_by(PresentacionProducto.nombre).all()
+            
+            presentaciones_con_stock_data = []
+            for presentacion, cantidad_stock in inventario_con_presentaciones:
+                dumped_presentacion = presentacion_schema.dump(presentacion)
+                # Añadir la cantidad disponible a la información de la presentación
+                dumped_presentacion['stock_disponible'] = cantidad_stock 
+                # Generar URL pre-firmada si hay foto
+                if presentacion.url_foto:
+                    from utils.file_handlers import get_presigned_url
+                    dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
+                else:
+                    dumped_presentacion['url_foto'] = None
+                presentaciones_con_stock_data.append(dumped_presentacion)
+
+            return {
+                "clientes": clientes_data,
+                "almacenes": almacenes_data,
+                "presentaciones_con_stock": presentaciones_con_stock_data
+            }, 200
+
+        except Exception as e:
+            # Considerar usar logger.exception(e) para más detalles en logs
+            return {"error": "Error al obtener datos para el formulario de venta", "details": str(e)}, 500
+# --- FIN NUEVO RECURSO ---
     
