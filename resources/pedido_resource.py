@@ -286,7 +286,7 @@ class PedidoFormDataResource(Resource):
             presentaciones = PresentacionProducto.query.filter_by(activo=True).order_by(PresentacionProducto.nombre).all()
             presentaciones_data = []
             for p in presentaciones:
-                 dumped_p = presentacion_schema.dump(p)
+                 dumped_p = presentaciones_schema.dump(p)
                  if p.url_foto:
                      # Asegúrate que get_presigned_url está importado o accesible
                      dumped_p['url_foto'] = get_presigned_url(p.url_foto)
