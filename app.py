@@ -25,6 +25,7 @@ from resources.pedido_resource import PedidoResource, PedidoConversionResource
 from resources.pedido_resource import PedidoFormDataResource
 from resources.venta_resource import VentaFormDataResource
 from resources.ventadetalle_resource import VentaDetalleResource
+from resources.pago_resource import PagosPorVentaResource
 
 from extensions import db, jwt
 import os
@@ -206,6 +207,7 @@ api.add_resource(RegisterResource, '/registrar')
 api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
 api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
 api.add_resource(PagoResource, '/pagos', '/pagos/<int:pago_id>')
+api.add_resource(PagosPorVentaResource, '/pagos/venta/<int:venta_id>')
 api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
 api.add_resource(AlmacenResource, '/almacenes', '/almacenes/<int:almacen_id>')
 api.add_resource(ClienteResource, '/clientes', '/clientes/<int:cliente_id>')

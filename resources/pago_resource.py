@@ -294,3 +294,34 @@ class PagoResource(Resource):
 
         # --- CORRECCIÓN: Devolver un mensaje JSON ---
         return {'message': "Pago eliminado exitosamente"}, 200
+
+
+# --- NUEVO RECURSO PARA OBTENER PAGOS POR VENTA --- 
+class PagosPorVentaResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self, venta_id):
+        """
+        Obtiene todos los pagos asociados a una venta específica, sin paginación.
+        Incluye URLs pre-firmadas para los comprobantes.
+        """
+        # Validar que la venta exista (opcional pero recomendado)
+        Venta.query.get_or_404(venta_id)
+        
+        pagos = Pago.query.filter_by(venta_id=venta_id).order_by(Pago.fecha.asc()).all()
+        
+        # Preparar datos con URLs pre-firmadas
+        pagos_data = []
+        for pago in pagos:
+            dumped_pago = pago_schema.dump(pago)
+            if pago.url_comprobante:
+                # Reemplazar clave S3 con URL pre-firmada
+                dumped_pago['url_comprobante'] = get_presigned_url(pago.url_comprobante)
+            else:
+                 # Asegurar que el campo exista como None si no hay clave
+                 dumped_pago['url_comprobante'] = None
+            pagos_data.append(dumped_pago)
+            
+        # Devolver la lista directamente
+        return pagos_data, 200
+# --- FIN NUEVO RECURSO ---
