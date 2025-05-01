@@ -266,92 +266,50 @@ class PedidoConversionResource(Resource):
             "venta": venta_schema.dump(venta)
         }, 201
     
-# --- RECURSO PARA FORMULARIO DE PEDIDO (MODIFICADO) ---
+# --- RECURSO PARA FORMULARIO DE PEDIDO (SIMPLIFICADO) ---
 class PedidoFormDataResource(Resource):
     @jwt_required()
     @handle_db_errors
     def get(self):
         """
         Obtiene los datos necesarios para los formularios de creación/edición de pedidos.
-        Adapta la respuesta según el rol del usuario.
-
-        - Si el usuario es Admin:
-            - Devuelve todos los clientes, almacenes y presentaciones activas.
-            - Cada presentación incluirá el campo 'stock_por_almacen' con el detalle de stock en cada almacén.
-        - Si el usuario no es Admin:
-            - Devuelve todos los clientes.
-            - Devuelve solo las presentaciones activas (sin detalle de stock ni lista de almacenes).
+        Devuelve listas completas de clientes, almacenes y presentaciones activas.
         """
-        claims = get_jwt()
-        is_admin = claims.get('rol') == 'admin'
+        # No es necesario verificar el rol aquí para esta versión simplificada
+        # claims = get_jwt()
+        # is_admin = claims.get('rol') == 'admin'
 
         try:
-            # Obtener Clientes (igual para todos)
+            # Obtener Clientes
             clientes = Cliente.query.order_by(Cliente.nombre).all()
             clientes_data = clientes_schema.dump(clientes, many=True)
             
-            # Inicializar el diccionario de respuesta solo con clientes
-            response_data = {
-                "clientes": clientes_data
-            }
+            # Obtener Almacenes
+            almacenes = Almacen.query.order_by(Almacen.nombre).all()
+            almacenes_data = almacenes_schema.dump(almacenes, many=True)
 
-            # --- Lógica Diferenciada para Presentaciones y Almacenes --- 
-            presentaciones_data = []
+            # Obtener Presentaciones Activas
             presentaciones_activas = PresentacionProducto.query.filter_by(activo=True).order_by(PresentacionProducto.nombre).all()
-
-            # Si es Admin, obtener y añadir el stock global Y los almacenes
-            if is_admin:
-                logger.info("Admin en PedidoFormData: Obteniendo stock global y almacenes.")
-                # Obtener Almacenes SOLO si es admin
-                todos_almacenes = Almacen.query.order_by(Almacen.nombre).all()
-                almacenes_data = almacenes_schema.dump(todos_almacenes, many=True)
-                response_data["almacenes"] = almacenes_data # Añadir almacenes a la respuesta
-
-                # Optimización: Cargar todo el inventario relevante de una vez
-                inventario_global = Inventario.query.filter(Inventario.presentacion_id.in_([p.id for p in presentaciones_activas])).all()
-                stock_map = {(inv.presentacion_id, inv.almacen_id): inv.cantidad for inv in inventario_global}
-                almacen_map = {alm.id: alm.nombre for alm in todos_almacenes}
-
-                for p in presentaciones_activas:
-                    dumped_p = presentacion_schema.dump(p)
-                    stock_por_almacen = []
-                    for alm in todos_almacenes:
-                        cantidad = stock_map.get((p.id, alm.id), 0)
-                        stock_por_almacen.append({
-                            "almacen_id": alm.id,
-                            "nombre": almacen_map.get(alm.id, "Desconocido"),
-                            "cantidad": cantidad
-                        })
-                    dumped_p['stock_por_almacen'] = stock_por_almacen
-                    if p.url_foto:
-                        dumped_p['url_foto'] = get_presigned_url(p.url_foto)
-                    else:
-                        dumped_p['url_foto'] = None
-                    presentaciones_data.append(dumped_p)
+            presentaciones_data = []
+            for p in presentaciones_activas:
+                dumped_p = presentacion_schema.dump(p)
+                # URL pre-firmada
+                if p.url_foto:
+                    dumped_p['url_foto'] = get_presigned_url(p.url_foto)
+                else:
+                    dumped_p['url_foto'] = None
+                presentaciones_data.append(dumped_p)
             
-                # Añadir la clave correcta para presentaciones
-                response_data['presentaciones_con_stock_global'] = presentaciones_data
-
-            # Si no es Admin, solo devolver las presentaciones activas (sin almacenes)
-            else:
-                logger.info("No Admin en PedidoFormData: Obteniendo solo presentaciones activas.")
-                for p in presentaciones_activas:
-                    dumped_p = presentacion_schema.dump(p)
-                    if p.url_foto:
-                        dumped_p['url_foto'] = get_presigned_url(p.url_foto)
-                    else:
-                        dumped_p['url_foto'] = None
-                    presentaciones_data.append(dumped_p)
-                
-                # Añadir la clave correcta para presentaciones
-                response_data['presentaciones_activas'] = presentaciones_data
-            # -------------------------------------------------
-
-            return response_data, 200
+            # Devolver siempre las tres listas
+            return {
+                "clientes": clientes_data,
+                "almacenes": almacenes_data,
+                "presentaciones_activas": presentaciones_data # Clave consistente
+            }, 200
 
         except Exception as e:
             logger.exception(f"Error en PedidoFormDataResource: {e}")
             return {"error": "Error al obtener datos para el formulario de pedido", "details": str(e)}, 500
-# --- FIN RECURSO MODIFICADO ---
+# --- FIN RECURSO SIMPLIFICADO ---
     
     
