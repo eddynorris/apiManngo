@@ -1,5 +1,5 @@
 from .almacen_resource import AlmacenResource
-from .auth_resource import AuthResource, LoginResource, LogoutResource, RefreshResource, ChangePasswordResource
+from .auth_resource import AuthResource
 from .cliente_resource import ClienteResource, ClienteFormDataResource
 from .gasto_resource import GastoResource
 from .inventario_resource import InventarioResource
@@ -22,9 +22,11 @@ __all__ = [
     'ProductoResource',
     'AlmacenResource',
     'ClienteResource',
+    'ClienteFormDataResource',
     'GastoResource',
     'MovimientoResource',
     'VentaResource',
+    'VentaFormDataResource',
     'InventarioResource',
     'LoteResource',
     'MermaResource',
@@ -39,11 +41,8 @@ __all__ = [
 
 def init_resources(api):
     # Autenticación y Usuarios
-    api.add_resource(LoginResource, '/login')
-    api.add_resource(LogoutResource, '/logout')
-    api.add_resource(RefreshResource, '/refresh')
+    api.add_resource(AuthResource, '/auth')
     api.add_resource(UserResource, '/users', '/users/<int:user_id>')
-    api.add_resource(ChangePasswordResource, '/change-password')
 
     # Recursos Principales
     api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
