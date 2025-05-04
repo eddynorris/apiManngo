@@ -10,6 +10,8 @@ class Users(db.Model):
     password = db.Column(db.String(256), nullable=False)
     rol = db.Column(db.String(20), nullable=False, default='usuario')
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='SET NULL'))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     
     movimientos = db.relationship('Movimiento', back_populates='usuario')
     almacen = db.relationship('Almacen', backref=db.backref('usuarios', lazy=True))
@@ -25,6 +27,7 @@ class Producto(db.Model):
     precio_compra = db.Column(db.Numeric(12, 2), nullable=False)  # Precio por tonelada al proveedor
     activo = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     def __repr__(self):
         return f'<Producto {self.nombre}>'
@@ -39,6 +42,8 @@ class PresentacionProducto(db.Model):
     precio_venta = db.Column(db.Numeric(12, 2), nullable=False)  # Precio al público
     activo = db.Column(db.Boolean, default=True)
     url_foto = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     # Relaciones
     producto = db.relationship('Producto', backref=db.backref('presentaciones', lazy=True))
@@ -57,7 +62,9 @@ class Lote(db.Model):
     peso_humedo_kg = db.Column(db.Numeric(10, 2), nullable=False)  # Peso inicial (mojado)
     peso_seco_kg = db.Column(db.Numeric(10, 2))  # Peso real después de secado
     cantidad_disponible_kg = db.Column(db.Numeric(10, 2))
-    fecha_ingreso = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fecha_ingreso = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     # Relaciones
     producto = db.relationship('Producto', backref=db.backref('lotes', lazy=True))
@@ -69,6 +76,8 @@ class Almacen(db.Model):
     nombre = db.Column(db.String(255), nullable=False)
     direccion = db.Column(db.Text)
     ciudad = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     
     # Relaciones existentes (se mantienen)
     inventario = db.relationship('Inventario', backref='almacen', lazy=True)
@@ -86,7 +95,8 @@ class Inventario(db.Model):
 
     cantidad = db.Column(db.Integer, nullable=False, default=0)
     stock_minimo = db.Column(db.Integer, nullable=False, default=10)
-    ultima_actualizacion = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    ultima_actualizacion = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Relaciones
     presentacion = db.relationship('PresentacionProducto')
@@ -106,11 +116,13 @@ class Venta(db.Model):
     cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='CASCADE'), nullable=False)
     vendedor_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    fecha = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fecha = db.Column(db.DateTime(timezone=True))
     total = db.Column(db.Numeric(12, 2), nullable=False)
     tipo_pago = db.Column(db.String(10), nullable=False)
     estado_pago = db.Column(db.String(15), default='pendiente')
     consumo_diario_kg = db.Column(db.Numeric(10, 2))  # Estimación global para proyecciones
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     # Relaciones
     vendedor = db.relationship('Users')
@@ -147,6 +159,8 @@ class VentaDetalle(db.Model):
     presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=False)
     cantidad = db.Column(db.Integer, nullable=False)
     precio_unitario = db.Column(db.Numeric(12, 2), nullable=False)  # Precio en el momento de la venta
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     # Relación
     presentacion = db.relationship('PresentacionProducto')
@@ -161,8 +175,10 @@ class Merma(db.Model):
     lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='CASCADE'), nullable=False)
     cantidad_kg = db.Column(db.Numeric(10, 2), nullable=False)
     convertido_a_briquetas = db.Column(db.Boolean, default=False)
-    fecha_registro = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fecha_registro = db.Column(db.DateTime(timezone=True))
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Auditoría de quién registró
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     lote = db.relationship('Lote', backref='mermas')
 
@@ -173,6 +189,7 @@ class Proveedor(db.Model):
     telefono = db.Column(db.String(20))
     direccion = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
 class Cliente(db.Model):
     __tablename__ = 'clientes'
@@ -183,6 +200,7 @@ class Cliente(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     frecuencia_compra_dias = db.Column(db.Integer)  
     ultima_fecha_compra = db.Column(db.DateTime(timezone=True))   
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     ventas = db.relationship('Venta', backref='cliente', lazy=True)
 
@@ -204,11 +222,12 @@ class Pago(db.Model):
     venta_id = db.Column(db.Integer, db.ForeignKey("ventas.id", ondelete="CASCADE"), nullable=False)
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Quién registró el pago
     monto = db.Column(db.Numeric(12, 2), nullable=False) 
-    fecha = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fecha = db.Column(db.DateTime(timezone=True))
     metodo_pago = db.Column(db.String(20), nullable=False)  # "efectivo", "transferencia", "tarjeta"
     referencia = db.Column(db.String(50))  # Número de transacción o comprobante
-
     url_comprobante = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     usuario = db.relationship('Users')
 
@@ -234,8 +253,10 @@ class Movimiento(db.Model):
     usuario = db.relationship('Users', back_populates='movimientos')  # Nombre del modelo en singular
     
     cantidad = db.Column(db.Numeric(12, 2), nullable=False)
-    fecha = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fecha = db.Column(db.DateTime(timezone=True))
     motivo = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     __table_args__ = (
         CheckConstraint("tipo IN ('entrada', 'salida')"),
@@ -247,10 +268,12 @@ class Gasto(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     descripcion = db.Column(db.Text, nullable=False)
     monto = db.Column(db.Numeric(12, 2), nullable=False)
-    fecha = db.Column(db.Date, default=lambda: datetime.now(timezone.utc))
+    fecha = db.Column(db.Date)
     categoria = db.Column(db.String(50), nullable=False)  # "logistica", "personal", "otros"
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'))  # Relación con almacén
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Quién registró el gasto
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     usuario = db.relationship('Users')
     almacen = db.relationship('Almacen')
@@ -269,6 +292,7 @@ class Pedido(db.Model):
     fecha_entrega = db.Column(db.DateTime(timezone=True), nullable=False)
     estado = db.Column(db.String(20), default='programado')  # programado, confirmado, entregado, cancelado
     notas = db.Column(db.Text)
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     
     # Relaciones
     cliente = db.relationship('Cliente', backref=db.backref('pedidos', lazy=True))
@@ -291,6 +315,29 @@ class PedidoDetalle(db.Model):
     presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=False)
     cantidad = db.Column(db.Integer, nullable=False)
     precio_estimado = db.Column(db.Numeric(12, 2), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     
     # Relación
     presentacion = db.relationship('PresentacionProducto')
+
+class DepositoBancario(db.Model):
+    __tablename__ = 'depositos_bancarios'
+    id = db.Column(db.Integer, primary_key=True)
+    fecha_deposito = db.Column(db.DateTime(timezone=True), nullable=False)
+    monto_depositado = db.Column(db.Numeric(12, 2), nullable=False)
+    almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='SET NULL'))
+    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    referencia_bancaria = db.Column(db.String(100))
+    url_comprobante_deposito = db.Column(db.String(255))
+    notas = db.Column(db.Text)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    
+    # Relaciones
+    almacen = db.relationship('Almacen')
+    usuario = db.relationship('Users')
+    
+    __table_args__ = (
+        CheckConstraint("monto_depositado > 0"),
+    )

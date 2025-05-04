@@ -7,7 +7,7 @@ from flask_limiter.util import get_remote_address
 from flask_talisman import Talisman
 import watchtower
 import boto3
-from resources.auth_resource import AuthResource, RegisterResource
+from resources.auth_resource import AuthResource
 from resources.producto_resource import ProductoResource
 from resources.proveedor_resource import ProveedorResource
 from resources.almacen_resource import AlmacenResource
@@ -203,7 +203,6 @@ def health_check():
 # Ejemplo de límite específico para login:
 # limiter.limit("5 per minute")(AuthResource)
 api.add_resource(AuthResource, '/auth')
-api.add_resource(RegisterResource, '/registrar')
 api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
 api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
 api.add_resource(PagoResource, '/pagos', '/pagos/<int:pago_id>')
