@@ -26,6 +26,7 @@ from resources.pedido_resource import PedidoFormDataResource
 from resources.venta_resource import VentaFormDataResource
 from resources.ventadetalle_resource import VentaDetalleResource
 from resources.pago_resource import PagosPorVentaResource
+from resources.deposito_bancario_resource import DepositoBancarioResource
 
 from extensions import db, jwt
 import os
@@ -205,6 +206,7 @@ def health_check():
 api.add_resource(AuthResource, '/auth')
 api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
 api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
+api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
 api.add_resource(PagoResource, '/pagos', '/pagos/<int:pago_id>')
 api.add_resource(PagosPorVentaResource, '/pagos/venta/<int:venta_id>')
 api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')

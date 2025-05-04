@@ -85,7 +85,6 @@ class DepositoBancarioResource(Resource):
         }, 200
 
     @jwt_required()
-    @rol_requerido('admin', 'gerente') # Solo admin/gerente pueden crear depósitos
     @handle_db_errors
     def post(self):
         """Crea un nuevo registro de depósito bancario."""
@@ -154,7 +153,6 @@ class DepositoBancarioResource(Resource):
         return result, 201
 
     @jwt_required()
-    @rol_requerido('admin', 'gerente') # Solo admin/gerente pueden modificar
     @handle_db_errors
     def put(self, deposito_id):
         """Actualiza un depósito bancario existente."""

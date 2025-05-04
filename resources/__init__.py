@@ -1,6 +1,6 @@
 from .almacen_resource import AlmacenResource
 from .auth_resource import AuthResource
-from .cliente_resource import ClienteResource, ClienteFormDataResource
+from .cliente_resource import ClienteResource
 from .gasto_resource import GastoResource
 from .inventario_resource import InventarioResource
 from .lote_resource import LoteResource
@@ -22,7 +22,6 @@ __all__ = [
     'ProductoResource',
     'AlmacenResource',
     'ClienteResource',
-    'ClienteFormDataResource',
     'GastoResource',
     'MovimientoResource',
     'VentaResource',
@@ -49,7 +48,6 @@ def init_resources(api):
     api.add_resource(PresentacionResource, '/presentaciones', '/presentaciones/<int:presentacion_id>')
     api.add_resource(AlmacenResource, '/almacenes', '/almacenes/<int:almacen_id>')
     api.add_resource(ClienteResource, '/clientes', '/clientes/<int:cliente_id>')
-    api.add_resource(ClienteFormDataResource, '/clientes/form-data')
     api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
     api.add_resource(LoteResource, '/lotes', '/lotes/<int:lote_id>')
     api.add_resource(InventarioResource, '/inventario', '/inventario/<int:inventario_id>')
