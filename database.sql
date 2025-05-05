@@ -125,7 +125,7 @@ CREATE TABLE ventas (
     id SERIAL PRIMARY KEY,
     cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
     almacen_id INTEGER NOT NULL REFERENCES almacenes(id) ON DELETE CASCADE,
-    vendedor_id INTEGER REFERENCES users(id),
+    vendedor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     fecha TIMESTAMP WITH TIME ZONE,
     total NUMERIC(12,2) NOT NULL CHECK (total > 0),
     tipo_pago VARCHAR(10) NOT NULL CHECK (tipo_pago IN ('contado', 'credito')),
@@ -151,7 +151,7 @@ CREATE TABLE mermas (
     cantidad_kg NUMERIC(10,2) NOT NULL CHECK (cantidad_kg > 0),
     convertido_a_briquetas BOOLEAN DEFAULT false,
     fecha_registro TIMESTAMP WITH TIME ZONE,
-    usuario_id INTEGER REFERENCES users(id),
+    usuario_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -163,7 +163,7 @@ CREATE TABLE pagos (
     fecha TIMESTAMP WITH TIME ZONE,
     metodo_pago VARCHAR(20) NOT NULL CHECK (metodo_pago IN ('efectivo', 'transferencia', 'tarjeta')),
     referencia VARCHAR(50),
-    usuario_id INTEGER REFERENCES users(id),
+    usuario_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     url_comprobante VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -174,7 +174,7 @@ CREATE TABLE movimientos (
     tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('entrada', 'salida')),
     presentacion_id INTEGER NOT NULL REFERENCES presentaciones_producto(id) ON DELETE CASCADE,
     lote_id INTEGER REFERENCES lotes(id) ON DELETE SET NULL,
-    usuario_id INTEGER REFERENCES users(id),
+    usuario_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     cantidad NUMERIC(12,2) NOT NULL CHECK (cantidad > 0),
     fecha TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     motivo VARCHAR(255),
@@ -188,7 +188,7 @@ CREATE TABLE gastos (
     fecha DATE,
     categoria VARCHAR(50) NOT NULL CHECK (categoria IN ('logistica', 'personal', 'otros')),
     almacen_id INTEGER REFERENCES almacenes(id),
-    usuario_id INTEGER REFERENCES users(id),
+    usuario_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -197,7 +197,7 @@ CREATE TABLE pedidos (
     id SERIAL PRIMARY KEY,
     cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
     almacen_id INTEGER NOT NULL REFERENCES almacenes(id) ON DELETE CASCADE,
-    vendedor_id INTEGER REFERENCES users(id),
+    vendedor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     fecha_entrega TIMESTAMP WITH TIME ZONE NOT NULL,
     estado VARCHAR(20) DEFAULT 'programado' CHECK (estado IN ('programado', 'confirmado', 'entregado', 'cancelado')),
@@ -337,6 +337,33 @@ INSERT INTO lotes (producto_id, proveedor_id, descripcion, peso_humedo_kg, peso_
     NOW(),
     NOW()
 );
+
+-- Almacen 1 ('Planta')
+INSERT INTO inventario (presentacion_id, almacen_id, cantidad, stock_minimo) VALUES
+(43, 13, 0, 10), -- Saco de 30kg en Planta
+(44, 13, 0, 10), -- Saco de 20kg en Planta
+(45, 13, 0, 10), -- Bolsa de 10kg en Planta
+(46, 13, 0, 10), -- Saco de 5kg en Planta
+(47, 13, 0, 10), -- Bolsa Fogo 3k en Planta
+(48, 13, 0, 10); -- Bolsa briquetas 4kg en Planta
+
+-- Almacen 2 ('Almacen Abancay')
+INSERT INTO inventario (presentacion_id, almacen_id, cantidad, stock_minimo) VALUES
+(43, 14, 0, 10), -- Saco de 30kg en Abancay
+(44, 14, 0, 10), -- Saco de 20kg en Abancay
+(45, 14, 0, 10), -- Bolsa de 10kg en Abancay
+(46, 14, 0, 10), -- Saco de 5kg en Abancay
+(47, 14, 0, 10), -- Bolsa Fogo 3k en Abancay
+(48, 14, 0, 10); -- Bolsa briquetas 4kg en Abancay
+
+-- Almacen 3 ('Almacen Andahuaylas')
+INSERT INTO inventario (presentacion_id, almacen_id, cantidad, stock_minimo) VALUES
+(43, 15, 0, 10), -- Saco de 30kg en Andahuaylas
+(44, 15, 0, 10), -- Saco de 20kg en Andahuaylas
+(45, 15, 0, 10), -- Bolsa de 10kg en Andahuaylas
+(46, 15, 0, 10), -- Saco de 5kg en Andahuaylas
+(47, 15, 0, 10), -- Bolsa Fogo 3k en Andahuaylas
+(48, 15, 0, 10); -- Bolsa briquetas 4kg en Andahuaylas
 
 -- 8. Insertar Gastos (Desde PDF, usuario_id = 1)
 INSERT INTO gastos (descripcion, monto, fecha, categoria, almacen_id, usuario_id, created_at, updated_at) VALUES

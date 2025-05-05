@@ -115,7 +115,7 @@ class Venta(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='CASCADE'), nullable=False)
-    vendedor_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    vendedor_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     fecha = db.Column(db.DateTime(timezone=True))
     total = db.Column(db.Numeric(12, 2), nullable=False)
     tipo_pago = db.Column(db.String(10), nullable=False)
@@ -176,7 +176,7 @@ class Merma(db.Model):
     cantidad_kg = db.Column(db.Numeric(10, 2), nullable=False)
     convertido_a_briquetas = db.Column(db.Boolean, default=False)
     fecha_registro = db.Column(db.DateTime(timezone=True))
-    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Auditoría de quién registró
+    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
@@ -220,7 +220,7 @@ class Pago(db.Model):
     __tablename__ = "pagos"
     id = db.Column(db.Integer, primary_key=True)
     venta_id = db.Column(db.Integer, db.ForeignKey("ventas.id", ondelete="CASCADE"), nullable=False)
-    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Quién registró el pago
+    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     monto = db.Column(db.Numeric(12, 2), nullable=False) 
     fecha = db.Column(db.DateTime(timezone=True))
     metodo_pago = db.Column(db.String(20), nullable=False)  # "efectivo", "transferencia", "tarjeta"
@@ -249,7 +249,7 @@ class Movimiento(db.Model):
     lote = db.relationship('Lote')
     
     # Relación con Usuario (3)
-    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     usuario = db.relationship('Users', back_populates='movimientos')  # Nombre del modelo en singular
     
     cantidad = db.Column(db.Numeric(12, 2), nullable=False)
@@ -271,7 +271,7 @@ class Gasto(db.Model):
     fecha = db.Column(db.Date)
     categoria = db.Column(db.String(50), nullable=False)  # "logistica", "personal", "otros"
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'))  # Relación con almacén
-    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Quién registró el gasto
+    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
@@ -287,7 +287,7 @@ class Pedido(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='CASCADE'), nullable=False)
-    vendedor_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    vendedor_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     fecha_creacion = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     fecha_entrega = db.Column(db.DateTime(timezone=True), nullable=False)
     estado = db.Column(db.String(20), default='programado')  # programado, confirmado, entregado, cancelado

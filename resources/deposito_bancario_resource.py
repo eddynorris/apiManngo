@@ -5,7 +5,7 @@ from flask import request
 from models import DepositoBancario, Almacen, Users
 from schemas import deposito_bancario_schema, depositos_bancarios_schema
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido, mismo_almacen_o_admin
+from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido, validate_pagination_params, create_pagination_response
 from utils.file_handlers import save_file, delete_file, get_presigned_url
 from datetime import datetime
 from decimal import Decimal
@@ -109,14 +109,8 @@ class DepositoBancarioResource(Resource):
                 item['comprobante_url'] = get_presigned_url(item['url_comprobante_deposito'])
             else:
                  item['comprobante_url'] = None
-
-
-        return {
-            "depositos": dumped_data,
-            "total": paginated_depositos.total,
-            "pages": paginated_depositos.pages,
-            "current_page": page
-        }, 200
+        # Respuesta estandarizada
+        return create_pagination_response(dumped_data, paginated_depositos), 200
 
     @jwt_required()
     @handle_db_errors
