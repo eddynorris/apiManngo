@@ -2,12 +2,13 @@
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request # Eliminado jsonify
-from models import Pago, Venta
+from models import Pago, Venta, Users
 from schemas import pago_schema, pagos_schema # Asegúrate que pagos_schema exista y sea correcto
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE
 from decimal import Decimal
 from utils.file_handlers import save_file, delete_file, get_presigned_url
+from sqlalchemy import asc, desc # Importar asc y desc
 # from werkzeug.datastructures import FileStorage # No usado directamente aquí
 # from flask import current_app # No usado directamente aquí
 
@@ -34,8 +35,32 @@ class PagoResource(Resource):
                  result['url_comprobante'] = None
             return result, 200
 
-        # Construir query con filtros
+        # --- Lógica de Ordenación Dinámica ---
+        sort_by = request.args.get('sort_by', 'fecha') # Default a fecha
+        sort_order = request.args.get('sort_order', 'desc').lower() # Default a desc
+
+        sortable_columns = {
+            'fecha': Pago.fecha,
+            'monto': Pago.monto,
+            'metodo_pago': Pago.metodo_pago,
+            'referencia': Pago.referencia,
+            'venta_id': Pago.venta_id, # Ordenar por ID de venta
+            'usuario_username': Users.username # Relacionado
+        }
+
+        column_to_sort = sortable_columns.get(sort_by, Pago.fecha)
+        order_func = desc if sort_order == 'desc' else asc
+        # --- Fin Lógica de Ordenación ---
+
         query = Pago.query
+
+        # --- Aplicar Joins si es necesario para ordenar ---
+        if sort_by == 'usuario_username':
+             # Outerjoin porque usuario_id puede ser NULL
+            query = query.outerjoin(Users, Pago.usuario_id == Users.id)
+        # ------------------------------------------------
+
+        # Construir query con filtros
         if venta_id := request.args.get('venta_id'):
             query = query.filter_by(venta_id=venta_id)
         if metodo := request.args.get('metodo_pago'):
@@ -43,8 +68,10 @@ class PagoResource(Resource):
         if usuario_id := request.args.get('usuario_id'):
             query = query.filter_by(usuario_id=usuario_id)
 
-        # Ordenar (opcional, pero bueno para consistencia)
-        query = query.order_by(Pago.fecha.desc())
+        # --- APLICAR ORDENACIÓN ---
+        # Quitar la ordenación fija anterior y aplicar la nueva
+        query = query.order_by(order_func(column_to_sort))
+        # -------------------------
 
         # Paginación
         page = request.args.get('page', 1, type=int)

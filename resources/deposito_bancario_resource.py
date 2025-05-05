@@ -10,6 +10,7 @@ from utils.file_handlers import save_file, delete_file, get_presigned_url
 from datetime import datetime
 from decimal import Decimal
 import logging
+from sqlalchemy import asc, desc
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,37 @@ class DepositoBancarioResource(Resource):
                 result['comprobante_url'] = None # Asegurar que el campo exista
             return result, 200
 
+        # --- Lógica de Ordenación Dinámica ---
+        sort_by = request.args.get('sort_by', 'fecha_deposito') # Default a fecha_deposito
+        sort_order = request.args.get('sort_order', 'desc').lower() # Default a desc
+
+        # Mapeo de nombres de frontend a columnas SQLAlchemy (incluyendo relaciones)
+        sortable_columns = {
+            'fecha_deposito': DepositoBancario.fecha_deposito,
+            'monto_depositado': DepositoBancario.monto_depositado,
+            'referencia_bancaria': DepositoBancario.referencia_bancaria,
+            'almacen_nombre': Almacen.nombre,
+            'usuario_username': Users.username,
+            'created_at': DepositoBancario.created_at
+        }
+
+        # Validar sort_by y obtener columna, usar default si es inválido
+        column_to_sort = sortable_columns.get(sort_by, DepositoBancario.fecha_deposito)
+
+        # Validar sort_order, usar desc si es inválido
+        order_func = desc if sort_order == 'desc' else asc
+
+        # --- Fin Lógica de Ordenación ---
+
         # Lista paginada y filtrada
         query = DepositoBancario.query
+
+        # --- Aplicar Joins si es necesario para ordenar ---
+        if sort_by == 'almacen_nombre':
+            query = query.join(Almacen, DepositoBancario.almacen_id == Almacen.id)
+        elif sort_by == 'usuario_username':
+            query = query.join(Users, DepositoBancario.usuario_id == Users.id)
+        # ------------------------------------------------
 
         # Filtrar por almacén si no es admin/gerente
         if not is_admin_or_gerente:
@@ -62,8 +92,12 @@ class DepositoBancarioResource(Resource):
             except ValueError:
                 return {"error": "Formato de fecha_hasta inválido (YYYY-MM-DD)"}, 400
 
-        # Ordenar y paginar
-        query = query.order_by(DepositoBancario.fecha_deposito.desc())
+        # --- APLICAR ORDENACIÓN ---
+        # Aplicar la ordenación determinada antes de paginar
+        query = query.order_by(order_func(column_to_sort))
+        # -------------------------
+
+        # Paginación
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', MAX_ITEMS_PER_PAGE, type=int)
         paginated_depositos = query.paginate(page=page, per_page=per_page, error_out=False)

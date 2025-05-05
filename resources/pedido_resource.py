@@ -1,7 +1,7 @@
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request
-from models import Pedido, PedidoDetalle, Cliente, PresentacionProducto, Almacen, Inventario, Movimiento, VentaDetalle, Venta
+from models import Pedido, PedidoDetalle, Cliente, PresentacionProducto, Almacen, Inventario, Movimiento, VentaDetalle, Venta, Users
 from schemas import pedido_schema, pedidos_schema, venta_schema, clientes_schema, almacenes_schema, presentacion_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from utils.file_handlers import get_presigned_url
 import logging
+from sqlalchemy import asc, desc
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,35 @@ class PedidoResource(Resource):
             
             return result, 200
         
-        # Construir query con filtros
+        # --- Lógica de Ordenación Dinámica ---
+        sort_by = request.args.get('sort_by', 'fecha_creacion') # Default
+        sort_order = request.args.get('sort_order', 'desc').lower() # Default
+
+        sortable_columns = {
+            'fecha_creacion': Pedido.fecha_creacion,
+            'fecha_entrega': Pedido.fecha_entrega,
+            'estado': Pedido.estado,
+            'cliente_nombre': Cliente.nombre,
+            'almacen_nombre': Almacen.nombre,
+            'vendedor_username': Users.username
+        }
+
+        column_to_sort = sortable_columns.get(sort_by, Pedido.fecha_creacion)
+        order_func = desc if sort_order == 'desc' else asc
+        # --- Fin Lógica de Ordenación ---
+
         query = Pedido.query
-        
+
+        # --- Aplicar Joins si es necesario para ordenar ---
+        if sort_by == 'cliente_nombre':
+            query = query.join(Cliente, Pedido.cliente_id == Cliente.id)
+        elif sort_by == 'almacen_nombre':
+            query = query.join(Almacen, Pedido.almacen_id == Almacen.id)
+        elif sort_by == 'vendedor_username':
+             # Outerjoin porque vendedor_id puede ser NULL
+            query = query.outerjoin(Users, Pedido.vendedor_id == Users.id)
+        # ------------------------------------------------
+
         # Aplicar filtros
         if cliente_id := request.args.get('cliente_id'):
             query = query.filter_by(cliente_id=cliente_id)
@@ -56,7 +83,7 @@ class PedidoResource(Resource):
             
         if estado := request.args.get('estado'):
             query = query.filter_by(estado=estado)
-            
+        
         if fecha_inicio := request.args.get('fecha_inicio'):
             if fecha_fin := request.args.get('fecha_fin'):
                 try:
@@ -68,13 +95,15 @@ class PedidoResource(Resource):
                 except ValueError:
                     return {"error": "Formato de fecha inválido. Usa ISO 8601 (ej: '2025-03-05T00:00:00')"}, 400
         
-        # --- AÑADIR ORDENACIÓN ---
-        query = query.order_by(Pedido.fecha_creacion.desc())
+        # --- APLICAR ORDENACIÓN ---
+        # Quitar la ordenación fija anterior y aplicar la nueva
+        query = query.order_by(order_func(column_to_sort))
+        # -------------------------
 
         # Paginación
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
-        pedidos = query.paginate(page=page, per_page=per_page)
+        pedidos = query.paginate(page=page, per_page=per_page, error_out=False)
         
         return {
             "data": pedidos_schema.dump(pedidos.items),

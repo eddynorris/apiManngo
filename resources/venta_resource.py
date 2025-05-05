@@ -1,7 +1,7 @@
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request
-from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento
+from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Users
 from schemas import venta_schema, ventas_schema, venta_detalle_schema, clientes_schema, almacenes_schema, presentacion_schema, inventario_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
@@ -9,6 +9,7 @@ from utils.file_handlers import get_presigned_url
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging # Añadir import para logging
+from sqlalchemy import asc, desc # Importar asc y desc
 
 logger = logging.getLogger(__name__) # Configurar logger
 
@@ -84,11 +85,42 @@ class VentaResource(Resource):
                 # Manejar error de formato inválido
                 return {"error": "Formato de fecha inválido. Usa ISO 8601 (ej: '2025-03-05T00:00:00')"}, 400
         
-        # --- AÑADIR ORDENACIÓN ---
-        query = query.order_by(Venta.fecha.desc())
+        # --- Lógica de Ordenación Dinámica ---
+        sort_by = request.args.get('sort_by', 'fecha') # Default a fecha
+        sort_order = request.args.get('sort_order', 'desc').lower() # Default a desc
+
+        sortable_columns = {
+            'fecha': Venta.fecha,
+            'total': Venta.total,
+            'tipo_pago': Venta.tipo_pago,
+            'estado_pago': Venta.estado_pago,
+            'cliente_nombre': Cliente.nombre,
+            'almacen_nombre': Almacen.nombre,
+            'vendedor_username': Users.username
+        }
+
+        column_to_sort = sortable_columns.get(sort_by, Venta.fecha)
+        order_func = desc if sort_order == 'desc' else asc
+        # --- Fin Lógica de Ordenación ---
+
+        # --- Aplicar Joins si es necesario para ordenar ---
+        if sort_by == 'cliente_nombre':
+            query = query.join(Cliente, Venta.cliente_id == Cliente.id)
+        elif sort_by == 'almacen_nombre':
+            query = query.join(Almacen, Venta.almacen_id == Almacen.id)
+        elif sort_by == 'vendedor_username':
+             # Outerjoin porque vendedor_id puede ser NULL
+            query = query.outerjoin(Users, Venta.vendedor_id == Users.id)
+        # ------------------------------------------------
+
+        # --- APLICAR ORDENACIÓN ---
+        # Quitar la ordenación fija anterior y aplicar la nueva
+        query = query.order_by(order_func(column_to_sort))
+        # -------------------------
 
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
+        # La ordenación ya se aplicó, solo paginar
         ventas = query.paginate(page=page, per_page=per_page)
         
         return {
