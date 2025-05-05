@@ -24,6 +24,9 @@ class GastoResource(Resource):
         if usuario_id := request.args.get('usuario_id'):
             query = query.filter_by(usuario_id=usuario_id)
 
+        # --- AÑADIR ORDENACIÓN ---
+        query = query.order_by(Gasto.fecha.desc())
+
         # Paginación
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)

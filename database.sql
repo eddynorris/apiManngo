@@ -264,9 +264,6 @@ INSERT INTO almacenes (nombre, direccion, ciudad) VALUES
 ('Almacen Abancay', 'Av. Tamburco', 'Abancay'), 
 ('Almacen Andahuaylas', 'Av. Peru', 'Andahuaylas');
 
--- Insertar usuario admin (contraseña: admin123)
-INSERT INTO users (username, password, rol) VALUES
-('admin', 'pbkdf2:sha256:150000$CZvVg5zN$b8bca4d3c58992e1cf7d5ce66ece1b22714d0e0eb8b11be7875d7919bc90d85e', 'admin');
 
 -- Insertar productos
 INSERT INTO productos (nombre, descripcion, precio_compra, activo) VALUES

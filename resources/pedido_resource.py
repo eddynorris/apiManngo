@@ -68,6 +68,9 @@ class PedidoResource(Resource):
                 except ValueError:
                     return {"error": "Formato de fecha inválido. Usa ISO 8601 (ej: '2025-03-05T00:00:00')"}, 400
         
+        # --- AÑADIR ORDENACIÓN ---
+        query = query.order_by(Pedido.fecha_creacion.desc())
+
         # Paginación
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)

@@ -85,7 +85,7 @@ class UserResource(Resource):
                 return {"error": "La contraseña debe tener al menos 8 caracteres"}, 400
             
             # Validar complejidad de contraseña
-            password = data.get('password', '')
+            password = data.get('password', '').strip()
             if not (re.search(r'[A-Z]', password) and re.search(r'[0-9]', password)):
                 return {"error": "La contraseña debe contener al menos una mayúscula y un número"}, 400
             
@@ -161,7 +161,7 @@ class UserResource(Resource):
             
             # Si se cambia la contraseña, verificar complejidad
             if 'password' in data:
-                password = data['password']
+                password = data['password'].strip()
                 if len(password) < 8:
                     return {"error": "La contraseña debe tener al menos 8 caracteres"}, 400
                     

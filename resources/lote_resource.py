@@ -16,7 +16,7 @@ class LoteResource(Resource):
         
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
-        lotes = Lote.query.paginate(page=page, per_page=per_page, error_out=False)
+        lotes = Lote.query.order_by(Lote.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
         
         return {
             "data": lotes_schema.dump(lotes.items),
