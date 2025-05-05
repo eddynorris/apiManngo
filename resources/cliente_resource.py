@@ -41,6 +41,12 @@ class ClienteResource(Resource):
                 if not re.match(r'^[\d\+\-\s()]+$', telefono):
                     return {"error": "Formato de teléfono inválido"}, 400
                 query = query.filter(Cliente.telefono == telefono)
+
+            # Nuevo filtro por ciudad
+            if ciudad := request.args.get('ciudad'):
+                # Sanitizar input
+                ciudad = re.sub(r'[^\w\s\-áéíóúÁÉÍÓÚñÑ]', '', ciudad)
+                query = query.filter(Cliente.ciudad.ilike(f'%{ciudad}%'))
     
             # Paginación con validación
             page, per_page = validate_pagination_params()

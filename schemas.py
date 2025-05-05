@@ -107,6 +107,7 @@ class ClienteSchema(SQLAlchemyAutoSchema):
         unknown = EXCLUDE
         sqla_session = db.session 
 
+
 class MovimientoSchema(SQLAlchemyAutoSchema):
     presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre"))
     lote = fields.Nested(LoteSchema, only=("id", "cantidad_disponible_kg", "descripcion"))

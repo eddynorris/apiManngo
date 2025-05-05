@@ -197,9 +197,10 @@ class Cliente(db.Model):
     nombre = db.Column(db.String(255), nullable=False)
     telefono = db.Column(db.String(20))
     direccion = db.Column(db.Text)
-    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    frecuencia_compra_dias = db.Column(db.Integer)  
-    ultima_fecha_compra = db.Column(db.DateTime(timezone=True))   
+    ciudad = db.Column(db.String(100))
+    frecuencia_compra_dias = db.Column(db.Integer)
+    ultima_fecha_compra = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     ventas = db.relationship('Venta', backref='cliente', lazy=True)
