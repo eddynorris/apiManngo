@@ -3,7 +3,7 @@ from flask_jwt_extended import jwt_required, get_jwt
 from flask import request
 from models import Venta, Pedido, Inventario, Cliente, PresentacionProducto, Almacen, Lote
 from extensions import db
-from common import handle_db_errors
+from common import handle_db_errors, rol_requerido
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import func, case
 from decimal import Decimal
