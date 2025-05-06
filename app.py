@@ -27,6 +27,7 @@ from resources.venta_resource import VentaFormDataResource
 from resources.ventadetalle_resource import VentaDetalleResource
 from resources.pago_resource import PagosPorVentaResource
 from resources.deposito_bancario_resource import DepositoBancarioResource
+from resources.dashboard_resource import DashboardResource
 
 from extensions import db, jwt
 import os
@@ -203,6 +204,7 @@ def health_check():
 # Registrar recursos (aplicar rate limiting si es necesario)
 # Ejemplo de límite específico para login:
 # limiter.limit("5 per minute")(AuthResource)
+api.add_resource(DashboardResource, '/dashboard')
 api.add_resource(AuthResource, '/auth')
 api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
 api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
@@ -224,6 +226,7 @@ api.add_resource(PedidoResource, '/pedidos', '/pedidos/<int:pedido_id>')
 api.add_resource(PedidoConversionResource, '/pedidos/<int:pedido_id>/convertir')
 api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
 api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

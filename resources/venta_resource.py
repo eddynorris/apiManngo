@@ -54,7 +54,9 @@ class VentaResource(Resource):
             "fecha_inicio": request.args.get('fecha_inicio'),
             "fecha_fin": request.args.get('fecha_fin')
         }
-        
+
+        # --- NUEVA LÓGICA PARA all=true ---
+        get_all = request.args.get('all', 'false').lower() == 'true'
         query = Venta.query
 
         # Si no es admin y se está filtrando por estado_pago, mostrar solo sus ventas
@@ -76,6 +78,7 @@ class VentaResource(Resource):
                 query = query.filter(Venta.estado_pago.in_(statuses))
 
         if filters["fecha_inicio"] and filters["fecha_fin"]:
+
             try:
                 # Asegurando formato ISO y manejar zonas horarias
                 fecha_inicio = datetime.fromisoformat(filters["fecha_inicio"]).replace(tzinfo=timezone.utc)
@@ -117,7 +120,15 @@ class VentaResource(Resource):
         # Quitar la ordenación fija anterior y aplicar la nueva
         query = query.order_by(order_func(column_to_sort))
         # -------------------------
+        if get_all:
+            # Si all=true, obtener todos los resultados filtrados y ordenados
+            ventas_items = query.all()
+            return {
+                "data": ventas_schema.dump(ventas_items), # Devolver solo la data, sin paginación
+                # "pagination": None # Opcional: explícitamente indicar que no hay paginación
+            }, 200
 
+        # --- Aplicar Paginación ---
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         # La ordenación ya se aplicó, solo paginar
