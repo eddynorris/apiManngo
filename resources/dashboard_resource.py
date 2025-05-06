@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 class DashboardResource(Resource):
     @jwt_required()
+    @rol_requerido('admin')  # Solo admin puede listar dashboard
     @handle_db_errors
     def get(self):
         """
@@ -97,7 +98,8 @@ class DashboardResource(Resource):
             ]
 
             # Clientes con saldo pendiente (siempre se calculan, filtrados por almacén si aplica)
-            clientes_con_saldo_potencial = clientes_query.order_by(Cliente.nombre).all()
+            # CORRECCIÓN: Ajustar el ORDER BY para que coincida con DISTINCT ON
+            clientes_con_saldo_potencial = clientes_query.order_by(Cliente.id, Cliente.nombre).all()
             # Podrías calcular el saldo aquí si es crucial, pero aumenta la complejidad.
             # Ejemplo simplificado: solo IDs y nombres.
             clientes_saldo_data = [
