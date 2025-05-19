@@ -208,6 +208,7 @@ class VentaResource(Resource):
             vendedor_id=data.vendedor_id,
             total=total,
             tipo_pago=data.tipo_pago,
+            fecha=data.fecha,
             consumo_diario_kg=data.consumo_diario_kg,
             detalles=data.detalles
         )
