@@ -34,8 +34,8 @@ class AuthResource(Resource):
             # Find user by username (case insensitive)
             usuario = Users.query.filter(Users.username.ilike(username)).first()
             
-            # Verificación real de credenciales (insensible a mayúsculas/minúsculas)
-            if not usuario or not check_password_hash(usuario.password, password.lower()):
+            # Verificación real de credenciales
+            if not usuario or not check_password_hash(usuario.password, password):
                 # Log de intento fallido (sin exponer qué campo falló)
                 logger.warning(f"Intento de login fallido para el usuario: {username}")
                 return {'message': 'Credenciales inválidas'}, 401
