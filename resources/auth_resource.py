@@ -28,14 +28,14 @@ class AuthResource(Resource):
             if not username or len(username) < 3:
                 return {'message': 'El nombre de usuario debe tener al menos 3 caracteres'}, 400
                 
-            if not password or len(password) < 6:
-                return {'message': 'La contraseña debe tener al menos 6 caracteres'}, 400
+            if not password or len(password) < 8:
+                return {'message': 'La contraseña debe tener al menos 8 caracteres'}, 400
             
-            # Find user by username
-            usuario = Users.query.filter_by(username=username).first()
+            # Find user by username (case insensitive)
+            usuario = Users.query.filter(Users.username.ilike(username)).first()
             
-            # Verificación real de credenciales
-            if not usuario or not check_password_hash(usuario.password, password):
+            # Verificación real de credenciales (insensible a mayúsculas/minúsculas)
+            if not usuario or not check_password_hash(usuario.password, password.lower()):
                 # Log de intento fallido (sin exponer qué campo falló)
                 logger.warning(f"Intento de login fallido para el usuario: {username}")
                 return {'message': 'Credenciales inválidas'}, 401

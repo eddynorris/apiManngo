@@ -86,12 +86,14 @@ class UserResource(Resource):
             
             # Validar complejidad de contraseña
             password = data.get('password', '').strip()
-            if not (re.search(r'[A-Z]', password) and re.search(r'[0-9]', password)):
-                return {"error": "La contraseña debe contener al menos una mayúscula y un número"}, 400
+            # Convertir a minúsculas para la validación
+            lower_password = password.lower()
+            if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
+                return {"error": "La contraseña debe contener al menos una letra y un número"}, 400
             
-            # Verificar que el username no exista
-            username = data.get('username').strip()
-            if Users.query.filter_by(username=username).first():
+            # Verificar que el username no exista (case insensitive)
+            username = data.get('username').strip().lower()  # Convertir a minúsculas
+            if Users.query.filter(Users.username.ilike(username)).first():
                 return {"error": "El nombre de usuario ya existe"}, 400
             
             # Validar rol
@@ -150,13 +152,13 @@ class UserResource(Resource):
             if not data:
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
             
-            # Si se cambia el username, verificar que no exista
+            # Si se cambia el username, verificar que no exista (case insensitive)
             if 'username' in data and data['username'] != usuario.username:
-                username = data['username'].strip()
+                username = data['username'].strip().lower()  # Convertir a minúsculas
                 if len(username) < 3:
                     return {"error": "El nombre de usuario debe tener al menos 3 caracteres"}, 400
                     
-                if Users.query.filter_by(username=username).first():
+                if Users.query.filter(Users.username.ilike(username)).first():
                     return {"error": "El nombre de usuario ya existe"}, 400
             
             # Si se cambia la contraseña, verificar complejidad
@@ -165,8 +167,10 @@ class UserResource(Resource):
                 if len(password) < 8:
                     return {"error": "La contraseña debe tener al menos 8 caracteres"}, 400
                     
-                if not (re.search(r'[A-Z]', password) and re.search(r'[0-9]', password)):
-                    return {"error": "La contraseña debe contener al menos una mayúscula y un número"}, 400
+                # Convertir a minúsculas para la validación
+                lower_password = password.lower()
+                if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
+                    return {"error": "La contraseña debe contener al menos una letra y un número"}, 400
                     
                 # Hashear la contraseña
                 data['password'] = generate_password_hash(password, method='pbkdf2:sha256:150000')
