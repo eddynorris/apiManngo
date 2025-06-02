@@ -10,6 +10,8 @@ from decimal import Decimal
 from utils.file_handlers import save_file, delete_file, get_presigned_url
 from sqlalchemy import asc, desc # Importar asc y desc
 import json
+import logging # <--- AÑADE ESTA LÍNEA
+logger = logging.getLogger(__name__) # <--- Y ESTA LÍNEA
 # from werkzeug.datastructures import FileStorage # No usado directamente aquí
 # from flask import current_app # No usado directamente aquí
 
