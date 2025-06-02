@@ -352,3 +352,127 @@ class PagosPorVentaResource(Resource):
         # Devolver la lista directamente
         return pagos_data, 200
 # --- FIN NUEVO RECURSO ---
+class PagoBatchResource(Resource):
+    @jwt_required()
+    @handle_db_errors # Decorator to handle DB session commit/rollback and errors
+    def post(self):
+        """
+        Registra múltiples pagos para múltiples ventas asociados a un solo comprobante (depósito).
+        Espera datos en formato multipart/form-data:
+        - 'pagos_json_data': Un string JSON con una lista de objetos, cada uno con "venta_id" y "monto".
+                           Ej: '[{"venta_id": 1, "monto": "50.75"}, {"venta_id": 2, "monto": "100.20"}]'
+        - 'fecha': Fecha del depósito/pago (ISO format, e.g., "YYYY-MM-DDTHH:MM:SS").
+        - 'metodo_pago': Método de pago (e.g., "transferencia", "deposito").
+        - 'referencia': Referencia bancaria o del depósito (opcional).
+        - 'comprobante': El archivo del voucher/comprobante.
+        """
+        if 'multipart/form-data' not in request.content_type:
+            return {"error": "Se requiere contenido multipart/form-data"}, 415
+
+        try:
+            pagos_json_data_str = request.form.get('pagos_json_data')
+            fecha_str = request.form.get('fecha')
+            metodo_pago = request.form.get('metodo_pago')
+            referencia = request.form.get('referencia') # Puede ser None
+
+            if not all([pagos_json_data_str, fecha_str, metodo_pago]):
+                return {"error": "Faltan campos requeridos (pagos_json_data, fecha, metodo_pago)"}, 400
+
+            pagos_data_list = json.loads(pagos_json_data_str)
+            if not isinstance(pagos_data_list, list) or not pagos_data_list:
+                return {"error": "pagos_json_data debe ser una lista no vacía de información de pagos"}, 400
+
+            fecha_pago = datetime.fromisoformat(fecha_str)
+
+        except json.JSONDecodeError:
+            logger.error("Error decodificando pagos_json_data")
+            return {"error": "Formato JSON inválido en pagos_json_data"}, 400
+        except ValueError:
+            logger.error(f"Formato de fecha inválido: {fecha_str}")
+            return {"error": "Formato de fecha inválido. Usar ISO 8601 (ej: YYYY-MM-DDTHH:MM:SS)"}, 400
+        except Exception as e:
+            logger.error(f"Error procesando datos del formulario (batch pagos): {e}")
+            return {"error": "Datos de formulario inválidos"}, 400
+
+        s3_key_comprobante = None
+        if 'comprobante' not in request.files or not request.files['comprobante'].filename:
+            return {"error": "Se requiere un archivo de comprobante"}, 400
+        
+        file = request.files['comprobante']
+        s3_key_comprobante = save_file(file, 'comprobantes') # Using 'comprobantes' subfolder
+        if not s3_key_comprobante:
+            # save_file logs its own errors, so we just return
+            return {"error": "Error al subir el comprobante"}, 500
+
+        claims = get_jwt()
+        usuario_id = claims.get('sub')
+        created_pagos_response = []
+        
+        pagos_a_crear = [] # Para añadir a la sesión al final si todo va bien
+
+        for pago_info in pagos_data_list:
+            venta_id = pago_info.get('venta_id')
+            monto_str = pago_info.get('monto')
+
+            if venta_id is None or monto_str is None: # Check for None explicitly
+                # No need to rollback here as nothing is added to session yet in loop
+                return {"error": f"Cada pago en la lista debe tener venta_id y monto. Falló en: {pago_info}"}, 400
+
+            try:
+                monto = Decimal(str(monto_str))
+                if monto <= Decimal('0'): # Pagos deben ser positivos
+                    return {"error": f"El monto del pago para venta_id {venta_id} debe ser positivo."}, 400
+            except InvalidOperation:
+                return {"error": f"Monto inválido '{monto_str}' para venta_id {venta_id}."}, 400
+
+            venta = Venta.query.get(venta_id)
+            if not venta:
+                return {"error": f"Venta con ID {venta_id} no encontrada."}, 404
+            
+            # Verificar que el almacén de la venta sea accesible si aplica la restricción
+            # (mismo_almacen_o_admin ya protege el endpoint en general, pero una verificación
+            #  a nivel de venta individual puede ser útil si un admin puede operar en varios almacenes
+            #  y se le pasa una venta de un almacén no intencionado en el JSON)
+            if claims.get('rol') != 'admin' and venta.almacen_id != claims.get('almacen_id'):
+                return {"error": f"No tiene permisos para registrar un pago para la venta {venta_id} en el almacén {venta.almacen_id}"}, 403
+
+
+            # Es importante usar la propiedad saldo_pendiente que calcula correctamente
+            saldo_pendiente_venta = venta.saldo_pendiente #
+            if monto > saldo_pendiente_venta:
+                return {
+                    "error": f"Monto {monto} para venta_id {venta_id} excede el saldo pendiente de {saldo_pendiente_venta}"
+                }, 400
+
+            nuevo_pago_obj = Pago(
+                venta_id=venta.id,
+                usuario_id=usuario_id,
+                monto=monto,
+                fecha=fecha_pago,
+                metodo_pago=metodo_pago,
+                referencia=referencia,
+                url_comprobante=s3_key_comprobante # Clave S3 del comprobante único
+            )
+            pagos_a_crear.append({'pago_obj': nuevo_pago_obj, 'venta_obj': venta})
+
+        # Si todas las validaciones individuales pasan, añadir a la sesión y actualizar estado
+        for item in pagos_a_crear:
+            pago_obj = item['pago_obj']
+            venta_obj = item['venta_obj']
+            db.session.add(pago_obj)
+            venta_obj.actualizar_estado(pago_obj) # Actualizar estado de la venta
+            # Se genera URL pre-firmada al serializar si la clave S3 existe
+            dumped_pago = pago_schema.dump(pago_obj)
+            if pago_obj.url_comprobante and 'url_comprobante' in dumped_pago: # El schema debe generar la url pre-firmada
+                 dumped_pago['comprobante_url'] = get_presigned_url(pago_obj.url_comprobante) #
+            else:
+                 dumped_pago['comprobante_url'] = None
+            created_pagos_response.append(dumped_pago)
+            
+        # El decorador @handle_db_errors se encargará de db.session.commit()
+        # o db.session.rollback() en caso de excepción durante el commit.
+        logger.info(f"Batch de {len(created_pagos_response)} pagos procesados por usuario {usuario_id} con comprobante {s3_key_comprobante}")
+        return {
+            "message": "Pagos registrados en batch exitosamente.",
+            "pagos_creados": created_pagos_response
+        }, 201

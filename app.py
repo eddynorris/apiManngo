@@ -12,7 +12,7 @@ from resources.producto_resource import ProductoResource
 from resources.proveedor_resource import ProveedorResource
 from resources.almacen_resource import AlmacenResource
 from resources.cliente_resource import ClienteResource
-from resources.pago_resource import PagoResource
+from resources.pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource
 from resources.gasto_resource import GastoResource
 from resources.movimiento_resource import MovimientoResource
 from resources.venta_resource import VentaResource
@@ -25,7 +25,6 @@ from resources.pedido_resource import PedidoResource, PedidoConversionResource
 from resources.pedido_resource import PedidoFormDataResource
 from resources.venta_resource import VentaFormDataResource
 from resources.ventadetalle_resource import VentaDetalleResource
-from resources.pago_resource import PagosPorVentaResource
 from resources.deposito_bancario_resource import DepositoBancarioResource
 from resources.dashboard_resource import DashboardResource
 
@@ -208,9 +207,10 @@ api.add_resource(DashboardResource, '/dashboard')
 api.add_resource(AuthResource, '/auth')
 api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
 api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
-api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
+#api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
 api.add_resource(PagoResource, '/pagos', '/pagos/<int:pago_id>')
 api.add_resource(PagosPorVentaResource, '/pagos/venta/<int:venta_id>')
+api.add_resource(PagoBatchResource, '/pagos/batch')
 api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
 api.add_resource(AlmacenResource, '/almacenes', '/almacenes/<int:almacen_id>')
 api.add_resource(ClienteResource, '/clientes', '/clientes/<int:cliente_id>')
