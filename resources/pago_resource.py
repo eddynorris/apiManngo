@@ -389,13 +389,10 @@ class PagoBatchResource(Resource):
             fecha_pago = datetime.fromisoformat(fecha_str)
 
         except json.JSONDecodeError:
-            logger.error("Error decodificando pagos_json_data")
             return {"error": "Formato JSON inválido en pagos_json_data"}, 400
         except ValueError:
-            logger.error(f"Formato de fecha inválido: {fecha_str}")
             return {"error": "Formato de fecha inválido. Usar ISO 8601 (ej: YYYY-MM-DDTHH:MM:SS)"}, 400
         except Exception as e:
-            logger.error(f"Error procesando datos del formulario (batch pagos): {e}")
             return {"error": "Datos de formulario inválidos"}, 400
 
         s3_key_comprobante = None
@@ -487,7 +484,6 @@ class PagoBatchResource(Resource):
             
             db.session.commit() # Confirmar la transacción
             
-            logger.info(f"Batch de {len(created_pagos_response)} pagos procesados por usuario {usuario_id} con comprobante {s3_key_comprobante}")
             return {
                 "message": "Pagos registrados en batch exitosamente.",
                 "pagos_creados": created_pagos_response
@@ -495,7 +491,6 @@ class PagoBatchResource(Resource):
             
         except Exception as e:
             db.session.rollback() # Revertir cambios en caso de error
-            logger.error(f"Error durante el commit del batch de pagos: {e}", exc_info=True)
             # Eliminar el comprobante subido si la transacción de la BD falla
             if s3_key_comprobante:
                 delete_file(s3_key_comprobante)

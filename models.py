@@ -233,7 +233,7 @@ class Pago(db.Model):
     usuario = db.relationship('Users')
 
     __table_args__ = (
-        CheckConstraint("metodo_pago IN ('efectivo', 'transferencia', 'tarjeta', 'yape/plin', 'otro')"),
+        CheckConstraint("metodo_pago IN ('efectivo', 'deposito', 'transferencia', 'tarjeta', 'yape/plin', 'otro')"),
     )
 
 class Movimiento(db.Model):
