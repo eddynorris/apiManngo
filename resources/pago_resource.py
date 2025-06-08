@@ -6,7 +6,7 @@ from models import Pago, Venta, Users
 from schemas import pago_schema, pagos_schema # Asegúrate que pagos_schema exista y sea correcto
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from utils.file_handlers import save_file, delete_file, get_presigned_url
 from sqlalchemy import asc, desc # Importar asc y desc
 from datetime import datetime
@@ -410,67 +410,78 @@ class PagoBatchResource(Resource):
 
         claims = get_jwt()
         usuario_id = claims.get('sub')
-        created_pagos_response = []
-        
-        pagos_a_crear = [] # Para añadir a la sesión al final si todo va bien
+        pagos_a_crear = []
+        ventas_procesadas = {} # Para rastrear saldos de ventas dentro de este lote
 
+        # Transacción Atómica: validar todos los pagos antes de crear cualquiera
         for pago_info in pagos_data_list:
             venta_id = pago_info.get('venta_id')
             monto_str = pago_info.get('monto')
 
-            if venta_id is None or monto_str is None: # Check for None explicitly
-                # No need to rollback here as nothing is added to session yet in loop
+            if venta_id is None or monto_str is None:
                 return {"error": f"Cada pago en la lista debe tener venta_id y monto. Falló en: {pago_info}"}, 400
 
             try:
                 monto = Decimal(str(monto_str))
-                if monto <= Decimal('0'): # Pagos deben ser positivos
+                if monto <= Decimal('0'):
                     return {"error": f"El monto del pago para venta_id {venta_id} debe ser positivo."}, 400
             except InvalidOperation:
                 return {"error": f"Monto inválido '{monto_str}' para venta_id {venta_id}."}, 400
 
-            venta = Venta.query.get(venta_id)
-            if not venta:
-                return {"error": f"Venta con ID {venta_id} no encontrada."}, 404
+            # Cargar la venta y su saldo pendiente si es la primera vez que la vemos en el lote
+            if venta_id not in ventas_procesadas:
+                venta = Venta.query.get(venta_id)
+                if not venta:
+                    return {"error": f"Venta con ID {venta_id} no encontrada."}, 404
+                
+                # Chequeo de permisos
+                if claims.get('rol') != 'admin' and venta.almacen_id != claims.get('almacen_id'):
+                    return {"error": f"No tiene permisos para la venta {venta_id} en el almacén {venta.almacen_id}"}, 403
+
+                ventas_procesadas[venta_id] = {
+                    "venta_obj": venta,
+                    "saldo_pendiente": venta.saldo_pendiente
+                }
             
-            # Verificar que el almacén de la venta sea accesible si aplica la restricción
-            # (mismo_almacen_o_admin ya protege el endpoint en general, pero una verificación
-            #  a nivel de venta individual puede ser útil si un admin puede operar en varios almacenes
-            #  y se le pasa una venta de un almacén no intencionado en el JSON)
-            if claims.get('rol') != 'admin' and venta.almacen_id != claims.get('almacen_id'):
-                return {"error": f"No tiene permisos para registrar un pago para la venta {venta_id} en el almacén {venta.almacen_id}"}, 403
-
-
-            # Es importante usar la propiedad saldo_pendiente que calcula correctamente
-            saldo_pendiente_venta = venta.saldo_pendiente #
-            if monto > saldo_pendiente_venta:
+            # Validar contra el saldo pendiente actualizado DENTRO del lote
+            saldo_actual_en_lote = ventas_procesadas[venta_id]["saldo_pendiente"]
+            if monto > saldo_actual_en_lote:
                 return {
-                    "error": f"Monto {monto} para venta_id {venta_id} excede el saldo pendiente de {saldo_pendiente_venta}"
+                    "error": f"Monto {monto} para venta_id {venta_id} excede el saldo pendiente de {saldo_actual_en_lote} (considerando otros pagos en este lote)"
                 }, 400
 
+            # Actualizar el saldo pendiente para la siguiente iteración de este lote
+            ventas_procesadas[venta_id]["saldo_pendiente"] -= monto
+
+            # Preparar el objeto Pago para ser creado
             nuevo_pago_obj = Pago(
-                venta_id=venta.id,
+                venta_id=venta_id,
                 usuario_id=usuario_id,
                 monto=monto,
                 fecha=fecha_pago,
                 metodo_pago=metodo_pago,
                 referencia=referencia,
-                url_comprobante=s3_key_comprobante # Clave S3 del comprobante único
+                url_comprobante=s3_key_comprobante
             )
-            pagos_a_crear.append({'pago_obj': nuevo_pago_obj, 'venta_obj': venta})
+            pagos_a_crear.append({
+                'pago_obj': nuevo_pago_obj,
+                'venta_obj': ventas_procesadas[venta_id]['venta_obj']
+            })
 
-        # Si todas las validaciones individuales pasan, añadir a la sesión y actualizar estado
+        # Si todas las validaciones pasaron, ahora sí persistimos en la base de datos
+        created_pagos_response = []
         for item in pagos_a_crear:
             pago_obj = item['pago_obj']
             venta_obj = item['venta_obj']
             db.session.add(pago_obj)
             venta_obj.actualizar_estado(pago_obj) # Actualizar estado de la venta
-            # Se genera URL pre-firmada al serializar si la clave S3 existe
+
+            # Serializar y generar URL pre-firmada para la respuesta
             dumped_pago = pago_schema.dump(pago_obj)
-            if pago_obj.url_comprobante and 'url_comprobante' in dumped_pago: # El schema debe generar la url pre-firmada
-                 dumped_pago['comprobante_url'] = get_presigned_url(pago_obj.url_comprobante) #
+            if pago_obj.url_comprobante:
+                 dumped_pago['url_comprobante'] = get_presigned_url(pago_obj.url_comprobante)
             else:
-                 dumped_pago['comprobante_url'] = None
+                 dumped_pago['url_comprobante'] = None
             created_pagos_response.append(dumped_pago)
             
         # El decorador @handle_db_errors se encargará de db.session.commit()
