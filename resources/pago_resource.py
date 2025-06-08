@@ -467,27 +467,36 @@ class PagoBatchResource(Resource):
                 'pago_obj': nuevo_pago_obj,
                 'venta_obj': ventas_procesadas[venta_id]['venta_obj']
             })
+        
+        try:
+            # Si todas las validaciones pasaron, ahora sí persistimos en la base de datos
+            created_pagos_response = []
+            for item in pagos_a_crear:
+                pago_obj = item['pago_obj']
+                venta_obj = item['venta_obj']
+                db.session.add(pago_obj)
+                venta_obj.actualizar_estado(pago_obj) # Actualizar estado de la venta
 
-        # Si todas las validaciones pasaron, ahora sí persistimos en la base de datos
-        created_pagos_response = []
-        for item in pagos_a_crear:
-            pago_obj = item['pago_obj']
-            venta_obj = item['venta_obj']
-            db.session.add(pago_obj)
-            venta_obj.actualizar_estado(pago_obj) # Actualizar estado de la venta
-
-            # Serializar y generar URL pre-firmada para la respuesta
-            dumped_pago = pago_schema.dump(pago_obj)
-            if pago_obj.url_comprobante:
-                 dumped_pago['url_comprobante'] = get_presigned_url(pago_obj.url_comprobante)
-            else:
-                 dumped_pago['url_comprobante'] = None
-            created_pagos_response.append(dumped_pago)
+                # Serializar y generar URL pre-firmada para la respuesta
+                dumped_pago = pago_schema.dump(pago_obj)
+                if pago_obj.url_comprobante:
+                    dumped_pago['url_comprobante'] = get_presigned_url(pago_obj.url_comprobante)
+                else:
+                    dumped_pago['url_comprobante'] = None
+                created_pagos_response.append(dumped_pago)
             
-        # El decorador @handle_db_errors se encargará de db.session.commit()
-        # o db.session.rollback() en caso de excepción durante el commit.
-        logger.info(f"Batch de {len(created_pagos_response)} pagos procesados por usuario {usuario_id} con comprobante {s3_key_comprobante}")
-        return {
-            "message": "Pagos registrados en batch exitosamente.",
-            "pagos_creados": created_pagos_response
-        }, 201
+            db.session.commit() # Confirmar la transacción
+            
+            logger.info(f"Batch de {len(created_pagos_response)} pagos procesados por usuario {usuario_id} con comprobante {s3_key_comprobante}")
+            return {
+                "message": "Pagos registrados en batch exitosamente.",
+                "pagos_creados": created_pagos_response
+            }, 201
+            
+        except Exception as e:
+            db.session.rollback() # Revertir cambios en caso de error
+            logger.error(f"Error durante el commit del batch de pagos: {e}", exc_info=True)
+            # Eliminar el comprobante subido si la transacción de la BD falla
+            if s3_key_comprobante:
+                delete_file(s3_key_comprobante)
+            return {"error": "Ocurrió un error al guardar los pagos, la operación ha sido revertida."}, 500
