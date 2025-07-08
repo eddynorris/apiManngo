@@ -7,6 +7,7 @@ from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, validate_pagination_params, create_pagination_response
 from decimal import Decimal, InvalidOperation
 import logging
+from datetime import datetime, timezone
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -149,7 +150,8 @@ class InventarioResource(Resource):
                     lote_id=data.lote_id,
                     cantidad=data.cantidad,
                     usuario_id=claims.get('sub'),
-                    motivo="Inicialización de inventario"
+                    motivo="Inicialización de inventario",
+                    fecha=datetime.now(timezone.utc)
                 )
                 db.session.add(movimiento)
                 

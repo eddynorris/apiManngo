@@ -54,6 +54,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Directorio de pruebas unitarias
+tests/
+
 # Translations
 *.mo
 

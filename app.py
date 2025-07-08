@@ -98,7 +98,8 @@ app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 16 *
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'pdf'} # Mantener para validación
 
 # JWT config con valores seguros
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(os.environ.get('JWT_EXPIRES_SECONDS', 43200)) # Default 12 horas
+jwt_expires_str = os.environ.get('JWT_EXPIRES_SECONDS', '43200')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(jwt_expires_str.split('#')[0].strip())
 app.config['JWT_ALGORITHM'] = 'HS256'
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
 app.config['JWT_BLACKLIST_ENABLED'] = False # Considera si realmente necesitas blacklist o usa tokens de corta duración + refresh tokens
@@ -203,11 +204,12 @@ def health_check():
 # Registrar recursos (aplicar rate limiting si es necesario)
 # Ejemplo de límite específico para login:
 # limiter.limit("5 per minute")(AuthResource)
+#api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
+
 api.add_resource(DashboardResource, '/dashboard')
 api.add_resource(AuthResource, '/auth')
 api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
 api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
-#api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
 api.add_resource(PagoResource, '/pagos', '/pagos/<int:pago_id>')
 api.add_resource(PagosPorVentaResource, '/pagos/venta/<int:venta_id>')
 api.add_resource(PagoBatchResource, '/pagos/batch')
