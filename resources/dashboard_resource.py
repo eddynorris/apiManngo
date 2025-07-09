@@ -6,6 +6,7 @@ from extensions import db
 from common import handle_db_errors, rol_requerido
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import func, case
+from sqlalchemy.orm import subqueryload, joinedload
 from decimal import Decimal
 import logging
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class DashboardResource(Resource):
     @jwt_required()
-    @rol_requerido('admin')  # Permitir acceso a todos los roles
+    @rol_requerido('admin') # Permitir acceso a todos los roles
     @handle_db_errors
     def get(self):
         """
@@ -51,19 +52,16 @@ class DashboardResource(Resource):
             # y selecciona Producto.nombre
         ).filter(Lote.cantidad_disponible_kg < UMBRAL_LOTE_BAJO_KG) # Alerta de lote bajo
 
-        # --- Query para Clientes con Saldo Pendiente ---
-        # Subquery para sumar el total de ventas con estado pendiente o parcial por cliente
-        total_ventas_sq_base = db.session.query(
-            Venta.cliente_id,
-            func.sum(Venta.total).label('total_adeudado')
-        ).filter(Venta.estado_pago.in_(['pendiente', 'parcial']))
+        # --- NUEVA QUERY ÚNICA PARA CLIENTES CON SALDO PENDIENTE ---
+        # 1. Obtener todas las ventas pendientes o parciales, cargando eficientemente
+        #    el cliente y los pagos asociados para evitar el problema N+1.
+        ventas_pendientes_query = Venta.query\
+            .options(
+                joinedload(Venta.cliente),  # Usamos joinedload para cargar el cliente
+                subqueryload(Venta.pagos)  # y subqueryload para los pagos
+            )\
+            .filter(Venta.estado_pago.in_(['pendiente', 'parcial']))
 
-        # Subquery para sumar todos los pagos asociados a esas ventas
-        total_pagos_sq_base = db.session.query(
-            Venta.cliente_id,
-            func.sum(Pago.monto).label('total_pagado')
-        ).join(Venta, Pago.venta_id == Venta.id)\
-         .filter(Venta.estado_pago.in_(['pendiente', 'parcial']))
 
         # --- Aplicar Filtro de Almacén si no es Admin/Gerente ---
         if not is_admin_or_gerente:
@@ -71,25 +69,8 @@ class DashboardResource(Resource):
                 return {"error": "Usuario sin almacén asignado"}, 403
             # Aplicar filtro a las queries que tienen relación directa con almacén
             inventario_query = inventario_query.filter(Inventario.almacen_id == user_almacen_id)
-
-            # Aplicar filtro de almacén a las subqueries de saldo
-            total_ventas_sq_base = total_ventas_sq_base.filter(Venta.almacen_id == user_almacen_id)
-            total_pagos_sq_base = total_pagos_sq_base.filter(Venta.almacen_id == user_almacen_id)
+            ventas_pendientes_query = ventas_pendientes_query.filter(Venta.almacen_id == user_almacen_id)
         
-        # Agrupar y crear las subqueries finales
-        total_ventas_sq = total_ventas_sq_base.group_by(Venta.cliente_id).subquery()
-        total_pagos_sq = total_pagos_sq_base.group_by(Venta.cliente_id).subquery()
-        
-        # Query principal de clientes que une las subqueries
-        clientes_query = db.session.query(
-            Cliente.id.label('cliente_id'),
-            Cliente.nombre.label('cliente_nombre'),
-            (func.coalesce(total_ventas_sq.c.total_adeudado, 0) - func.coalesce(total_pagos_sq.c.total_pagado, 0)).label('saldo_pendiente')
-        ).select_from(Cliente)\
-         .join(total_ventas_sq, Cliente.id == total_ventas_sq.c.cliente_id)\
-         .outerjoin(total_pagos_sq, Cliente.id == total_pagos_sq.c.cliente_id)\
-         .filter((func.coalesce(total_ventas_sq.c.total_adeudado, 0) - func.coalesce(total_pagos_sq.c.total_pagado, 0)) > 0.009) # Filtrar por saldo > 0
-
         # La query de lotes (lotes_query) no se filtra por almacén aquí.
 
         # --- Ejecutar Queries y Formatear Resultados ---
@@ -119,15 +100,62 @@ class DashboardResource(Resource):
                 } for item in lotes_bajos_items
             ]
 
-            # Clientes con saldo pendiente (ahora con cálculo incluido)
-            clientes_con_saldo_items = clientes_query.order_by(Cliente.nombre).all()
-            clientes_saldo_data = [
-                {
-                    "cliente_id": c.cliente_id,
-                    "nombre": c.cliente_nombre,
-                    "saldo_pendiente_total": float(c.saldo_pendiente or 0)
-                } for c in clientes_con_saldo_items
-            ]
+            # --- Procesar y Agrupar los resultados de la nueva query de ventas ---
+            ventas_con_deuda = ventas_pendientes_query.order_by(Venta.fecha.asc()).all()
+            clientes_con_saldo_map = {} # Usamos un mapa para agrupar por cliente_id
+
+            for venta in ventas_con_deuda:
+                cliente = venta.cliente
+                if not cliente:
+                    continue # Omitir ventas sin cliente asignado (si es posible)
+
+                # Calcular saldo de esta venta específica
+                total_pagado_venta = sum(p.monto for p in venta.pagos)
+                saldo_pendiente_venta = venta.total - total_pagado_venta
+
+                # Si el saldo de esta venta es cero o negativo, no la incluimos
+                if saldo_pendiente_venta <= 0:
+                    continue
+
+                # Si es la primera vez que vemos a este cliente, lo inicializamos
+                if cliente.id not in clientes_con_saldo_map:
+                    clientes_con_saldo_map[cliente.id] = {
+                        "cliente_id": cliente.id,
+                        "nombre": cliente.nombre,
+                        "saldo_pendiente_total": Decimal('0'),
+                        "ventas_pendientes": []
+                    }
+                
+                # Formatear los pagos de esta venta
+                pagos_data = [
+                    {
+                        "pago_id": p.id,
+                        "fecha": p.fecha.isoformat() if p.fecha else None,
+                        "monto": float(p.monto or 0),
+                        "metodo_pago": p.metodo_pago,
+                        "referencia": p.referencia
+                    } for p in venta.pagos
+                ]
+
+                # Formatear la venta y añadirla a la lista del cliente
+                venta_data = {
+                    "venta_id": venta.id,
+                    "fecha": venta.fecha.isoformat() if venta.fecha else None,
+                    "total_venta": float(venta.total or 0),
+                    "estado_pago": venta.estado_pago,
+                    "saldo_pendiente_venta": float(saldo_pendiente_venta),
+                    "pagos": pagos_data
+                }
+                clientes_con_saldo_map[cliente.id]["ventas_pendientes"].append(venta_data)
+                
+                # Acumular el saldo total del cliente
+                clientes_con_saldo_map[cliente.id]["saldo_pendiente_total"] += saldo_pendiente_venta
+
+            # Convertir el mapa a una lista final y convertir el Decimal a float para JSON
+            clientes_saldo_data = list(clientes_con_saldo_map.values())
+            for cliente_data in clientes_saldo_data:
+                cliente_data["saldo_pendiente_total"] = float(cliente_data["saldo_pendiente_total"])
+
 
             # --- Ensamblar Respuesta Final ---
             dashboard_data = {
