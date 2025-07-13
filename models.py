@@ -259,6 +259,21 @@ class Movimiento(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
+    @property
+    def total_kg(self):
+        """Calcula el total de kilogramos para el movimiento."""
+        if self.presentacion and self.presentacion.capacidad_kg is not None:
+            try:
+                # Asegurarse de que ambos valores son Decimal antes de multiplicar
+                cantidad_decimal = Decimal(str(self.cantidad))
+                capacidad_kg_decimal = Decimal(str(self.presentacion.capacidad_kg))
+                return cantidad_decimal * capacidad_kg_decimal
+            except Exception as e:
+                # Considera loggear este error en un sistema de logging real
+                print(f"Error al calcular total_kg para movimiento {self.id}: {e}")
+                return Decimal('0.00') # O manejar el error de otra manera
+        return Decimal('0.00')
+
     __table_args__ = (
         CheckConstraint("tipo IN ('entrada', 'salida')"),
         CheckConstraint("cantidad > 0"),

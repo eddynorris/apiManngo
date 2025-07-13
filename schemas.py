@@ -116,27 +116,15 @@ class MovimientoSchema(SQLAlchemyAutoSchema):
     usuario = fields.Nested(UserSchema, only=("id", "username"))
     cantidad = fields.Decimal(as_string=True)
     
-    # Campo calculado para el total en kilogramos
-    total_kg = fields.Method("get_total_kg", dump_only=True)
-
-    def get_total_kg(self, obj):
-        if obj.presentacion and obj.presentacion.capacidad_kg is not None:
-            # Asegurarse de que obj.cantidad sea un Decimal para la operación
-            try:
-                cantidad_decimal = Decimal(str(obj.cantidad))
-                capacidad_kg_decimal = Decimal(str(obj.presentacion.capacidad_kg))
-                return str(cantidad_decimal * capacidad_kg_decimal)
-            except InvalidOperation:
-                logging.error(f"Error de operación decimal al calcular total_kg para movimiento {obj.id}")
-                return None
-        return None
+    # Campo calculado para el total en kilogramos, ahora una propiedad del modelo
+    total_kg = fields.Decimal(as_string=True, dump_only=True)
 
     class Meta:
         model = Movimiento
         load_instance = True
         unknown = EXCLUDE
         include_fk = True
-        sqla_session = db.session 
+        sqla_session = db.session
 
 class VentaDetalleSchema(SQLAlchemyAutoSchema):
     presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre", "precio_venta", "url_foto"))
