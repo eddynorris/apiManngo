@@ -6,6 +6,7 @@ from models import Movimiento, Inventario, PresentacionProducto, Lote, Almacen
 from schemas import movimiento_schema, movimientos_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE
+from datetime import datetime
 import logging # Importar el módulo estándar
 
 # Configurar logging para este módulo
@@ -18,7 +19,7 @@ class MovimientoResource(Resource):
         """
         Obtiene movimientos de inventario
         - Con ID: Detalle completo con relaciones
-        - Sin ID: Lista paginada con filtros (tipo, producto_id)
+        - Sin ID: Lista paginada con filtros (tipo, producto_id, fecha_inicio, fecha_fin, lote_id, presentacion_id)
         """
         if movimiento_id:
             return movimiento_schema.dump(Movimiento.query.get_or_404(movimiento_id)), 200
@@ -27,8 +28,34 @@ class MovimientoResource(Resource):
         query = Movimiento.query
         if tipo := request.args.get('tipo'):
             query = query.filter_by(tipo=tipo)
-        if producto_id := request.args.get('producto_id'):
-            query = query.filter_by(producto_id=producto_id)
+        if lote_id := request.args.get('lote_id'):
+            try:
+                query = query.filter_by(lote_id=int(lote_id))
+            except ValueError:
+                return {"error": "ID de lote inválido"}, 400
+        if presentacion_id := request.args.get('presentacion_id'):
+            try:
+                query = query.filter_by(presentacion_id=int(presentacion_id))
+            except ValueError:
+                return {"error": "ID de presentación inválido"}, 400
+        # Filtro por rango de fechas
+        fecha_inicio = request.args.get('fecha_inicio')
+        fecha_fin = request.args.get('fecha_fin')
+        if fecha_inicio:
+            try:
+                fecha_inicio_dt = datetime.strptime(fecha_inicio, "%Y-%m-%d")
+                query = query.filter(Movimiento.fecha >= fecha_inicio_dt)
+            except ValueError:
+                return {"error": "Formato de fecha_inicio inválido. Use YYYY-MM-DD."}, 400
+        if fecha_fin:
+            try:
+                fecha_fin_dt = datetime.strptime(fecha_fin, "%Y-%m-%d")
+                # Para incluir todo el día, sumamos un día y filtramos menor a esa fecha
+                from datetime import timedelta
+                fecha_fin_dt = fecha_fin_dt + timedelta(days=1)
+                query = query.filter(Movimiento.fecha < fecha_fin_dt)
+            except ValueError:
+                return {"error": "Formato de fecha_fin inválido. Use YYYY-MM-DD."}, 400
 
         # Paginación
         page = request.args.get('page', 1, type=int)
