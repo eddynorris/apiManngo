@@ -115,7 +115,7 @@ def mismo_almacen_o_admin(fn):
                 try:
                     almacen_id_request = int(almacen_id_request)
                 except (ValueError, TypeError):
-                    return jsonify({
+                    return ({
                         'message': 'ID de almacén inválido',
                         'error': 'parametro_invalido'
                     }), 400
@@ -123,14 +123,14 @@ def mismo_almacen_o_admin(fn):
                 # Verificar si el almacén coincide con el del usuario
                 usuario_almacen_id = claims.get('almacen_id')
                 if usuario_almacen_id is None:
-                    return jsonify({
+                    return ({
                         'message': 'Usuario sin almacén asignado',
                         'error': 'almacen_no_asignado'
                     }), 403
                     
                 if int(almacen_id_request) != int(usuario_almacen_id):
                     logger.warning(f"Intento de acceso a almacén no autorizado: Usuario {claims.get('username')} intentó acceder a almacén {almacen_id_request}")
-                    return jsonify({
+                    return ({
                         'message': 'No tiene permiso para acceder a este almacén',
                         'error': 'acceso_denegado'
                     }), 403
@@ -143,12 +143,12 @@ def mismo_almacen_o_admin(fn):
                         almacen_id_json = int(data['almacen_id'])
                         if almacen_id_json != int(claims.get('almacen_id', 0)):
                             logger.warning(f"Intento de modificación de almacén no autorizado: Usuario {claims.get('username')}")
-                            return jsonify({
+                            return ({
                                 'message': 'No tiene permiso para modificar este almacén',
                                 'error': 'acceso_denegado'
                             }), 403
                     except (ValueError, TypeError):
-                        return jsonify({
+                        return ({
                             'message': 'ID de almacén inválido en datos',
                             'error': 'parametro_invalido'
                         }), 400

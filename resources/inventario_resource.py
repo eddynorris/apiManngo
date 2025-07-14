@@ -8,6 +8,8 @@ from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, 
 from decimal import Decimal, InvalidOperation
 import logging
 from datetime import datetime, timezone
+import werkzeug.exceptions
+import sqlalchemy.orm.exc
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -87,60 +89,92 @@ class InventarioResource(Resource):
     @mismo_almacen_o_admin
     @handle_db_errors
     def post(self):
-        """Crea un nuevo registro de inventario con validación completa"""
+        """Crea uno o múltiples registros de inventario con validación completa"""
         try:
-            # Validar formato de entrada
             if not request.is_json:
                 return {"error": "Se esperaba contenido JSON"}, 400
                 
             raw_data = request.get_json()
             if not raw_data:
                 return {"error": "Datos JSON no válidos o vacíos"}, 400
+
+            # Permitir un solo objeto o una lista de objetos
+            if not isinstance(raw_data, list):
+                raw_data = [raw_data] # Convertir a lista para procesamiento uniforme
+
+            created_inventories = []
+            claims = get_jwt()
             
+            for item_data in raw_data:
+                inventario, error_response = self._create_single_inventario(item_data, claims)
+                if error_response:
+                    # Si hay un error en cualquier elemento, revertir toda la transacción
+                    db.session.rollback()
+                    return error_response[0], error_response[1]
+                created_inventories.append(inventario)
+
+            db.session.commit()
+            logger.info(f"Inventarios creados exitosamente. Cantidad: {len(created_inventories)}")
+            return inventarios_schema.dump(created_inventories), 201
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error en POST inventario: {str(e)}")
+            return {"error": "Error al crear inventario", "details": str(e)}, 500
+
+    def _create_single_inventario(self, item_data, claims):
+        """Lógica para crear un único registro de inventario, usada internamente."""
+        try:
             # Verificar campos requeridos
             required_fields = ["presentacion_id", "almacen_id", "cantidad"]
             for field in required_fields:
-                if field not in raw_data:
-                    return {"error": f"Campo requerido '{field}' faltante"}, 400
+                if field not in item_data:
+                    return None, ({"error": f"Campo requerido '{field}' faltante en un item", "item": item_data}, 400)
             
             # Validar valores numéricos
             try:
-                presentacion_id = int(raw_data.get('presentacion_id'))
-                almacen_id = int(raw_data.get('almacen_id'))
-                cantidad = int(raw_data.get('cantidad'))
+                presentacion_id = int(item_data.get('presentacion_id'))
+                almacen_id = int(item_data.get('almacen_id'))
+                cantidad = int(item_data.get('cantidad'))
                 
                 if cantidad < 0:
-                    return {"error": "La cantidad no puede ser negativa"}, 400
+                    return None, ({"error": "La cantidad no puede ser negativa en un item", "item": item_data}, 400)
                     
-                if 'stock_minimo' in raw_data:
-                    stock_minimo = int(raw_data.get('stock_minimo'))
+                if 'stock_minimo' in item_data:
+                    stock_minimo = int(item_data.get('stock_minimo'))
                     if stock_minimo < 0:
-                        return {"error": "El stock mínimo no puede ser negativo"}, 400
+                        return None, ({"error": "El stock mínimo no puede ser negativo en un item", "item": item_data}, 400)
                         
             except (ValueError, TypeError):
-                return {"error": "Valores numéricos inválidos"}, 400
+                return None, ({"error": "Valores numéricos inválidos en un item", "item": item_data}, 400)
             
             # Validar permisos por almacén
-            claims = get_jwt()
             if claims.get('rol') != 'admin' and almacen_id != claims.get('almacen_id'):
-                return {"error": "No tiene permisos para este almacén"}, 403
+                return None, ({"error": "No tiene permisos para este almacén en un item", "item": item_data}, 403)
             
             # Validar relaciones
             try:
                 presentacion = PresentacionProducto.query.get_or_404(presentacion_id)
                 almacen = Almacen.query.get_or_404(almacen_id)
+                # Si se provee lote_id, validarlo
+                if item_data.get('lote_id'):
+                    lote = Lote.query.get_or_404(item_data['lote_id'])
+            except (werkzeug.exceptions.NotFound, sqlalchemy.orm.exc.NoResultFound) as e:
+                # Captura específica para 404 de get_or_404
+                return None, ({"error": f"Relación inválida (ID no encontrado): {str(e.description)}", "item": item_data}, 400)
             except Exception as e:
-                return {"error": f"Relación inválida: {str(e)}"}, 400
+                # Captura para otras excepciones inesperadas durante la validación de relaciones
+                return None, ({"error": f"Error inesperado al validar relaciones: {str(e)}", "item": item_data}, 500)
             
             # Verificar unicidad
             if Inventario.query.filter_by(
                 presentacion_id=presentacion_id,
                 almacen_id=almacen_id
             ).first():
-                return {"error": "Ya existe un registro de inventario para esta presentación en este almacén"}, 409
+                return None, ({"error": "Ya existe un registro de inventario para esta presentación en este almacén", "item": item_data}, 409)
             
             # Cargar con el esquema después de validaciones básicas
-            data = inventario_schema.load(raw_data)
+            data = inventario_schema.load(item_data)
             
             # Procesar movimiento si hay cantidad inicial
             if data.cantidad > 0:
@@ -169,28 +203,22 @@ class InventarioResource(Resource):
                         
                         # Verificar stock disponible en lote
                         if not lote.cantidad_disponible_kg or lote.cantidad_disponible_kg < kg_a_restar:
-                            return {
-                                "error": "Stock insuficiente en el lote",
-                                "disponible_kg": str(lote.cantidad_disponible_kg),
-                                "requerido_kg": str(kg_a_restar)
-                            }, 400
+                            return None, ({"error": "Stock insuficiente en el lote", "disponible_kg": str(lote.cantidad_disponible_kg), "requerido_kg": str(kg_a_restar), "item": item_data}, 400)
                         
                         # Actualizar lote
                         lote.cantidad_disponible_kg -= kg_a_restar
                     except (InvalidOperation, TypeError) as e:
-                        return {"error": f"Error en cálculo de cantidades: {str(e)}"}, 400
+                        return None, ({"error": f"Error en cálculo de cantidades: {str(e)}", "item": item_data}, 400)
             
             # Guardar en la base de datos
             db.session.add(data)
-            db.session.commit()
             
-            logger.info(f"Inventario creado: Presentación {presentacion_id}, Almacén {almacen_id}, Cantidad {cantidad}")
-            return inventario_schema.dump(data), 201
+            return data, None # Retorna el objeto inventario creado y sin errores
             
         except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error en POST inventario: {str(e)}")
-            return {"error": "Error al crear inventario", "details": str(e)}, 500
+            logger.error(f"Error al procesar item de inventario: {str(e)}")
+            # No se hace rollback aquí, se delega al método post principal
+            return None, ({"error": "Error interno al procesar item de inventario", "details": str(e), "item": item_data}, 500)
 
     @jwt_required()
     @mismo_almacen_o_admin
