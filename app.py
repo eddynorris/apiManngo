@@ -118,7 +118,7 @@ if app.config['JWT_SECRET_KEY'] is None or app.config['JWT_SECRET_KEY'] == 'inse
 # Inicializar extensiones
 db.init_app(app)
 jwt.init_app(app)
-api = Api(app, prefix='/api')
+api = Api(app)
 
 # Configurar Rate Limiter
 limiter = Limiter(
