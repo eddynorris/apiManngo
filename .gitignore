@@ -73,6 +73,7 @@ Thumbs.db
 # Rules
 .cursor/
 .cursor/rules
+.claude/
 
 # Uploads directory
 uploads/

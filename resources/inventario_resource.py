@@ -223,20 +223,35 @@ class InventarioResource(Resource):
     @jwt_required()
     @mismo_almacen_o_admin
     @handle_db_errors
-    def put(self, inventario_id):
-        """Actualiza un registro de inventario existente"""
+    def put(self, inventario_id=None):
+        """
+        Actualiza registro(s) de inventario existente(s)
+        - Con ID: Actualiza un solo registro
+        - Sin ID: Actualiza múltiples registros (batch update)
+        """
         try:
-            if not inventario_id:
-                return {"error": "Se requiere ID de inventario"}, 400
-            
-            # Validar formato de entrada
             if not request.is_json:
                 return {"error": "Se esperaba contenido JSON"}, 400
                 
             raw_data = request.get_json()
-            if not raw_data:
+            if raw_data is None:
                 return {"error": "Datos JSON no válidos o vacíos"}, 400
             
+            # Actualización individual
+            if inventario_id:
+                return self._update_single_inventario(inventario_id, raw_data)
+            
+            # Actualización múltiple (batch)
+            return self._update_multiple_inventarios(raw_data)
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error en PUT inventario: {str(e)}")
+            return {"error": "Error al actualizar inventario"}, 500
+
+    def _update_single_inventario(self, inventario_id, raw_data):
+        """Actualiza un solo registro de inventario"""
+        try:
             # Buscar el registro existente
             inventario = Inventario.query.get_or_404(inventario_id)
             
@@ -245,6 +260,82 @@ class InventarioResource(Resource):
             if claims.get('rol') != 'admin' and inventario.almacen_id != claims.get('almacen_id'):
                 return {"error": "No tiene permisos para modificar este inventario"}, 403
             
+            # Validar y actualizar
+            inventario, error_response = self._validate_and_update_inventario(inventario, raw_data, claims)
+            if error_response:
+                return error_response[0], error_response[1]
+            
+            db.session.commit()
+            
+            logger.info(f"Inventario actualizado: ID {inventario_id}, Presentación {inventario.presentacion_id}, Almacén {inventario.almacen_id}")
+            return inventario_schema.dump(inventario), 200
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error en actualización individual: {str(e)}")
+            return {"error": "Error al actualizar inventario individual"}, 500
+
+    def _update_multiple_inventarios(self, raw_data):
+        """Actualiza múltiples registros de inventario"""
+        try:
+            # Validar que sea una lista
+            if not isinstance(raw_data, list):
+                return {"error": "Para actualización múltiple se esperaba una lista de objetos"}, 400
+            
+            if not raw_data:
+                return {"error": "Lista vacía para actualización múltiple"}, 400
+            
+            updated_inventarios = []
+            claims = get_jwt()
+            
+            for item_data in raw_data:
+                # Validar que cada item tenga ID
+                if 'id' not in item_data:
+                    db.session.rollback()
+                    return {"error": "Cada item debe tener un 'id' para actualización múltiple", "item": item_data}, 400
+                
+                try:
+                    inventario_id = int(item_data['id'])
+                    inventario = Inventario.query.get(inventario_id)
+                    
+                    if not inventario:
+                        db.session.rollback()
+                        return {"error": f"Inventario con ID {inventario_id} no encontrado", "item": item_data}, 404
+                    
+                    # Verificar permisos
+                    if claims.get('rol') != 'admin' and inventario.almacen_id != claims.get('almacen_id'):
+                        db.session.rollback()
+                        return {"error": f"No tiene permisos para modificar inventario ID {inventario_id}"}, 403
+                    
+                    # Validar y actualizar
+                    updated_inventario, error_response = self._validate_and_update_inventario(inventario, item_data, claims)
+                    if error_response:
+                        db.session.rollback()
+                        return error_response[0], error_response[1]
+                    
+                    updated_inventarios.append(updated_inventario)
+                    
+                except (ValueError, TypeError):
+                    db.session.rollback()
+                    return {"error": "ID de inventario inválido", "item": item_data}, 400
+                except Exception as e:
+                    db.session.rollback()
+                    logger.error(f"Error procesando item {item_data}: {str(e)}")
+                    return {"error": f"Error procesando item: {str(e)}", "item": item_data}, 500
+            
+            db.session.commit()
+            
+            logger.info(f"Inventarios actualizados en batch: {len(updated_inventarios)} registros")
+            return inventarios_schema.dump(updated_inventarios), 200
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error en actualización múltiple: {str(e)}")
+            return {"error": "Error al actualizar inventarios múltiples"}, 500
+
+    def _validate_and_update_inventario(self, inventario, raw_data, claims):
+        """Valida y actualiza un inventario. Retorna (inventario, error_response)"""
+        try:
             # Validar campos inmutables
             immutable_fields = ["presentacion_id", "almacen_id"]
             for field in immutable_fields:
@@ -253,26 +344,26 @@ class InventarioResource(Resource):
                     new_value = raw_data[field]
                     try:
                         if int(new_value) != int(current_value):
-                            return {"error": f"Campo inmutable '{field}' no puede modificarse"}, 400
+                            return None, ({"error": f"Campo inmutable '{field}' no puede modificarse", "inventario_id": inventario.id}, 400)
                     except (ValueError, TypeError):
-                        return {"error": f"Valor inválido para '{field}'"}, 400
+                        return None, ({"error": f"Valor inválido para '{field}'", "inventario_id": inventario.id}, 400)
 
             # Validar valores numéricos
             if 'cantidad' in raw_data:
                 try:
                     nueva_cantidad = int(raw_data['cantidad'])
                     if nueva_cantidad < 0:
-                        return {"error": "La cantidad no puede ser negativa"}, 400
+                        return None, ({"error": "La cantidad no puede ser negativa", "inventario_id": inventario.id}, 400)
                 except (ValueError, TypeError):
-                    return {"error": "Valor de cantidad inválido"}, 400
+                    return None, ({"error": "Valor de cantidad inválido", "inventario_id": inventario.id}, 400)
             
             if 'stock_minimo' in raw_data:
                 try:
                     stock_minimo = int(raw_data['stock_minimo'])
                     if stock_minimo < 0:
-                        return {"error": "El stock mínimo no puede ser negativo"}, 400
+                        return None, ({"error": "El stock mínimo no puede ser negativo", "inventario_id": inventario.id}, 400)
                 except (ValueError, TypeError):
-                    return {"error": "Valor de stock mínimo inválido"}, 400
+                    return None, ({"error": "Valor de stock mínimo inválido", "inventario_id": inventario.id}, 400)
 
             # Capturar el lote actual y el nuevo si se está cambiando
             lote_actual_id = getattr(inventario, 'lote_id', None)
@@ -283,7 +374,7 @@ class InventarioResource(Resource):
                     if lote_nuevo_id:
                         Lote.query.get_or_404(int(lote_nuevo_id))
                 except (ValueError, TypeError):
-                    return {"error": "ID de lote inválido"}, 400
+                    return None, ({"error": "ID de lote inválido", "inventario_id": inventario.id}, 400)
 
             # Si hay cambio en la cantidad, registrar movimiento y actualizar lote
             if 'cantidad' in raw_data:
@@ -325,16 +416,17 @@ class InventarioResource(Resource):
                                         if lote.cantidad_disponible_kg >= kg_a_restar:
                                             lote.cantidad_disponible_kg -= kg_a_restar
                                         else:
-                                            return {
+                                            return None, ({
                                                 "error": "Stock insuficiente en el lote",
                                                 "disponible_kg": str(lote.cantidad_disponible_kg),
-                                                "requerido_kg": str(kg_a_restar)
-                                            }, 400
+                                                "requerido_kg": str(kg_a_restar),
+                                                "inventario_id": inventario.id
+                                            }, 400)
                                     except (InvalidOperation, TypeError) as e:
-                                        return {"error": f"Error en cálculo: {str(e)}"}, 400
+                                        return None, ({"error": f"Error en cálculo: {str(e)}", "inventario_id": inventario.id}, 400)
                 
                 except (ValueError, TypeError) as e:
-                    return {"error": f"Error en actualización de cantidad: {str(e)}"}, 400
+                    return None, ({"error": f"Error en actualización de cantidad: {str(e)}", "inventario_id": inventario.id}, 400)
             
             # Cargar datos validados sobre la instancia existente
             updated_inventario = inventario_schema.load(
@@ -343,15 +435,11 @@ class InventarioResource(Resource):
                 partial=True
             )
 
-            db.session.commit()
-            
-            logger.info(f"Inventario actualizado: ID {inventario_id}, Presentación {inventario.presentacion_id}, Almacén {inventario.almacen_id}")
-            return inventario_schema.dump(updated_inventario), 200
+            return updated_inventario, None
             
         except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error en PUT inventario: {str(e)}")
-            return {"error": "Error al actualizar inventario"}, 500
+            logger.error(f"Error en validación y actualización: {str(e)}")
+            return None, ({"error": "Error interno en validación", "inventario_id": inventario.id}, 500)
 
     @jwt_required()
     @mismo_almacen_o_admin

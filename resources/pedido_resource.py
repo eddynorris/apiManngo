@@ -6,7 +6,7 @@ from schemas import pedido_schema, pedidos_schema, venta_schema, clientes_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from utils.file_handlers import get_presigned_url
 import logging
 from sqlalchemy import asc, desc
@@ -194,7 +194,14 @@ class PedidoConversionResource(Resource):
         """
         Convierte un pedido en una venta real
         """
-        pedido = Pedido.query.get_or_404(pedido_id)
+        # Obtener claims una sola vez al inicio
+        claims = get_jwt()
+        
+        # Cargar el pedido con las relaciones necesarias
+        pedido = Pedido.query.options(
+            db.joinedload(Pedido.cliente),
+            db.joinedload(Pedido.detalles).joinedload(PedidoDetalle.presentacion)
+        ).get_or_404(pedido_id)
         
         # Validaciones previas
         if pedido.estado == 'entregado':
@@ -222,7 +229,7 @@ class PedidoConversionResource(Resource):
             
             if not inventario or inventario.cantidad < detalle.cantidad:
                 inventarios_insuficientes.append({
-                    "presentacion": detalle.presentacion.nombre, # Asume relación cargada
+                    "presentacion": detalle.presentacion.nombre if detalle.presentacion else f"Presentación {detalle.presentacion_id}",
                     "solicitado": detalle.cantidad,
                     "disponible": inventario.cantidad if inventario else 0
                 })
@@ -244,6 +251,10 @@ class PedidoConversionResource(Resource):
         # Agregar detalles y calcular total
         total = 0
         for detalle_pedido in pedido.detalles:
+            # Verificar que la presentación existe y tiene precio
+            if not detalle_pedido.presentacion:
+                return {"error": f"Presentación {detalle_pedido.presentacion_id} no encontrada"}, 400
+                
             precio_actual = detalle_pedido.presentacion.precio_venta
             
             # Usar precio actual o el estimado, según configuración
@@ -259,38 +270,49 @@ class PedidoConversionResource(Resource):
             total += detalle_venta.cantidad * detalle_venta.precio_unitario
         
         venta.total = total
+        venta.fecha = datetime.now(timezone.utc)
+        venta.vendedor_id = claims.get('sub')
+        
+        # Añadir venta a la sesión para obtener un ID
+        db.session.add(venta)
+        db.session.flush()  # Esto asigna un ID sin hacer commit
         
         # Actualizar inventario y crear movimientos de salida
-        claims = get_jwt()
         for detalle in venta.detalles:
-            inventario = Inventario.query.filter_by(
-                presentacion_id=detalle.presentacion_id,
-                almacen_id=venta.almacen_id
-            ).first()
+            inventario = inventarios_dict.get(detalle.presentacion_id)
+            if not inventario:
+                return {"error": f"No se encontró inventario para presentación {detalle.presentacion_id}"}, 400
             
             inventario.cantidad -= detalle.cantidad
             
             # Registrar movimiento
+            # Usar el nombre del cliente de forma segura
+            cliente_nombre = pedido.cliente.nombre if pedido.cliente else f"Cliente {pedido.cliente_id}"
             movimiento = Movimiento(
                 tipo='salida',
                 presentacion_id=detalle.presentacion_id,
                 lote_id=inventario.lote_id,
                 cantidad=detalle.cantidad,
                 usuario_id=claims.get('sub'),
-                motivo=f"Venta ID: {venta.id} - Cliente: {pedido.cliente.nombre} (desde pedido {pedido.id})"
+                fecha=datetime.now(timezone.utc),
+                motivo=f"Venta ID: {venta.id} - Cliente: {cliente_nombre} (desde pedido {pedido.id})"
             )
             db.session.add(movimiento)
         
-        # Actualizar cliente si es necesario
-        if venta.consumo_diario_kg:
+        # Actualizar cliente si es necesario (verificar que el campo existe)
+        if hasattr(venta, 'consumo_diario_kg') and venta.consumo_diario_kg:
             cliente = Cliente.query.get(venta.cliente_id)
-            cliente.ultima_fecha_compra = datetime.now(timezone.utc)
-            cliente.frecuencia_compra_dias = (venta.total / Decimal(venta.consumo_diario_kg)).quantize(Decimal('1.00'))
+            if cliente:
+                cliente.ultima_fecha_compra = datetime.now(timezone.utc)
+                try:
+                    cliente.frecuencia_compra_dias = (venta.total / Decimal(venta.consumo_diario_kg)).quantize(Decimal('1.00'))
+                except (InvalidOperation, TypeError):
+                    # Si hay error en el cálculo, no actualizar frecuencia
+                    pass
         
         # Marcar pedido como entregado
         pedido.estado = 'entregado'
         
-        db.session.add(venta)
         db.session.commit()
         
         return {

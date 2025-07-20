@@ -6,6 +6,7 @@ from functools import wraps
 from flask_jwt_extended import verify_jwt_in_request, get_jwt
 import logging
 import re
+import werkzeug.exceptions
 
 # Configuración de logging
 logger = logging.getLogger(__name__)
@@ -48,6 +49,9 @@ def handle_db_errors(func):
         except ValidationError as e:
             logger.warning(f"Error de validación: {e.messages}")
             return {"message": "Datos inválidos", "errors": e.messages}, 400
+        except werkzeug.exceptions.HTTPException as e:
+            # Permitir que las excepciones HTTP se propaguen sin modificar
+            raise e
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error en {func.__name__}: {str(e)}")
@@ -155,6 +159,9 @@ def mismo_almacen_o_admin(fn):
             
             return fn(*args, **kwargs)
             
+        except werkzeug.exceptions.HTTPException as e:
+            # Permitir que las excepciones HTTP se propaguen sin modificar
+            raise e
         except Exception as e:
             logger.error(f"Error en verificación de almacén: {str(e)}")
             return {"error": "Error en verificación de acceso"}, 401
