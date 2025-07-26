@@ -27,14 +27,20 @@ from resources.venta_resource import VentaFormDataResource
 from resources.ventadetalle_resource import VentaDetalleResource
 from resources.deposito_bancario_resource import DepositoBancarioResource
 from resources.dashboard_resource import DashboardResource
+from resources.reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource
 
 from extensions import db, jwt
 import os
 import logging
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
-load_dotenv()
+# Cargar variables de entorno según el entorno
+env_file = os.environ.get('ENV_FILE', '.env.local')  # Default a desarrollo local
+if not os.path.exists(env_file):
+    # Si no existe el archivo específico, usar .env como fallback
+    env_file = '.env'
+    
+load_dotenv(env_file)
 
 # Determinar entorno (production, development, etc.)
 FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
@@ -46,6 +52,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Log del archivo de configuración cargado
+logger.info(f"📁 Cargando configuración desde: {env_file}")
+logger.info(f"🔧 Entorno: {FLASK_ENV}")
+logger.info(f"🚀 Modo producción: {IS_PRODUCTION}")
 
 # Configurar Watchtower para enviar logs a CloudWatch en producción
 if IS_PRODUCTION:
@@ -90,8 +101,22 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['S3_BUCKET'] = os.environ.get('S3_BUCKET')
 app.config['S3_REGION'] = os.environ.get('AWS_REGION') # Reutilizar si es la misma región
 
+# Configuración de archivos locales para desarrollo
+if not IS_PRODUCTION:
+    # En desarrollo, crear directorio uploads si no existe
+    upload_dir = os.path.join(os.getcwd(), 'uploads')
+    if not os.path.exists(upload_dir):
+        os.makedirs(upload_dir)
+        os.makedirs(os.path.join(upload_dir, 'comprobantes'), exist_ok=True)
+        os.makedirs(os.path.join(upload_dir, 'presentaciones'), exist_ok=True)
+    app.config['UPLOAD_FOLDER'] = upload_dir
+    logger.info(f"📁 Directorio de uploads para desarrollo: {upload_dir}")
+
 if not app.config['S3_BUCKET'] or not app.config['S3_REGION']:
-    logger.warning("Configuración de S3 incompleta (S3_BUCKET o AWS_REGION). El manejo de archivos podría fallar.")
+    if IS_PRODUCTION:
+        logger.error("Configuración de S3 requerida en producción (S3_BUCKET y AWS_REGION).")
+    else:
+        logger.info("S3 no configurado - usando almacenamiento local para desarrollo.")
 
 # Configuración de límite de tamaño de archivo (se mantiene por si se usa en validación)
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 16 * 1024 * 1024)) # Default 16MB max
@@ -201,6 +226,25 @@ def health_check():
     # Podría expandirse para verificar conexión a BD, etc.
     return jsonify({"status": "ok"}), 200
 
+# Endpoint de diagnóstico para desarrollo
+@app.route('/config')
+@limiter.exempt
+def config_info():
+    if IS_PRODUCTION:
+        return jsonify({"error": "Endpoint no disponible en producción"}), 404
+    
+    return jsonify({
+        "env_file": env_file,
+        "flask_env": FLASK_ENV,
+        "is_production": IS_PRODUCTION,
+        "database_type": "sqlite" if "sqlite" in app.config['SQLALCHEMY_DATABASE_URI'] else "postgresql",
+        "s3_configured": bool(app.config.get('S3_BUCKET')),
+        "upload_folder": app.config.get('UPLOAD_FOLDER', 'S3'),
+        "cors_origins": os.environ.get('ALLOWED_ORIGINS', '*'),
+        "jwt_expires": app.config.get('JWT_ACCESS_TOKEN_EXPIRES'),
+        "rate_limit": os.environ.get('DEFAULT_RATE_LIMIT', '200 per day;50 per hour')
+    }), 200
+
 # Registrar recursos (aplicar rate limiting si es necesario)
 # Ejemplo de límite específico para login:
 # limiter.limit("5 per minute")(AuthResource)
@@ -228,6 +272,10 @@ api.add_resource(PedidoResource, '/pedidos', '/pedidos/<int:pedido_id>')
 api.add_resource(PedidoConversionResource, '/pedidos/<int:pedido_id>/convertir')
 api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
 api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
+
+# Reportes Financieros
+api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')
+api.add_resource(ResumenFinancieroResource, '/reportes/resumen-financiero')
 
 
 if __name__ == '__main__':

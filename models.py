@@ -157,6 +157,7 @@ class VentaDetalle(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     venta_id = db.Column(db.Integer, db.ForeignKey('ventas.id', ondelete='CASCADE'), nullable=False)
     presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=False)
+    lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='SET NULL'), nullable=True)
     cantidad = db.Column(db.Integer, nullable=False)
     precio_unitario = db.Column(db.Numeric(12, 2), nullable=False)  # Precio en el momento de la venta
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
@@ -164,6 +165,7 @@ class VentaDetalle(db.Model):
 
     # Relación
     presentacion = db.relationship('PresentacionProducto')
+    lote = db.relationship('Lote')
 
     @property
     def total_linea(self):

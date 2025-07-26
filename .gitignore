@@ -40,6 +40,8 @@ MANIFEST
 instance/
 .flaskenv
 .env
+.env.local
+.env.production
 
 # Unit test / coverage reports
 htmlcov/

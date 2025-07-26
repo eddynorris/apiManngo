@@ -122,6 +122,7 @@ class DashboardResource(Resource):
                     clientes_con_saldo_map[cliente.id] = {
                         "cliente_id": cliente.id,
                         "nombre": cliente.nombre,
+                        "ciudad": cliente.ciudad, # Añadir la ciudad del cliente
                         "saldo_pendiente_total": Decimal('0'),
                         "ventas_pendientes": []
                     }
@@ -155,14 +156,17 @@ class DashboardResource(Resource):
             clientes_saldo_data = list(clientes_con_saldo_map.values())
             for cliente_data in clientes_saldo_data:
                 cliente_data["saldo_pendiente_total"] = float(cliente_data["saldo_pendiente_total"])
-
+                
+            # Calcular la sumatoria total de la deuda de todos los clientes
+            total_deuda_clientes = sum(c["saldo_pendiente_total"] for c in clientes_saldo_data)
 
             # --- Ensamblar Respuesta Final ---
             dashboard_data = {
                 # Ya no se incluye 'periodo', 'ventas_por_dia', 'pedidos_programados_por_dia'
                 "alertas_stock_bajo": stock_bajo_data,
                 "alertas_lotes_bajos": lotes_alerta_data,
-                "clientes_con_saldo_pendiente": clientes_saldo_data
+                "clientes_con_saldo_pendiente": clientes_saldo_data,
+                "total_deuda_clientes": total_deuda_clientes
             }
 
             return dashboard_data, 200

@@ -16,6 +16,7 @@ from .ventadetalle_resource import VentaDetalleResource
 from .pedido_resource import PedidoResource, PedidoFormDataResource
 from .deposito_bancario_resource import DepositoBancarioResource
 from .dashboard_resource import DashboardResource
+from .reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource
 
 __all__ = [
     'AuthResource',
@@ -36,8 +37,10 @@ __all__ = [
     'PagoResource',
     'PedidoResource',
     'PedidoFormDataResource',
-    'DepositoBancarioResource'
-    'DashboardResource'
+    'DepositoBancarioResource',
+    'DashboardResource',
+    'ReporteVentasPresentacionResource',
+    'ResumenFinancieroResource'
 ]
 
 def init_resources(api):
@@ -64,3 +67,7 @@ def init_resources(api):
     api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
     api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
     api.add_resource(DashboardResource, '/dashboard')
+    
+    # Reportes
+    api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')
+    api.add_resource(ResumenFinancieroResource, '/reportes/resumen-financiero')
