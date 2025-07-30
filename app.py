@@ -28,19 +28,13 @@ from resources.ventadetalle_resource import VentaDetalleResource
 from resources.deposito_bancario_resource import DepositoBancarioResource
 from resources.dashboard_resource import DashboardResource
 from resources.reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource
+from resources.chat_resource import ChatResource 
+from scripts.sync_supabase import sync_supabase_command
 
 from extensions import db, jwt
 import os
 import logging
-from dotenv import load_dotenv
 
-# Cargar variables de entorno según el entorno
-env_file = os.environ.get('ENV_FILE', '.env.local')  # Default a desarrollo local
-if not os.path.exists(env_file):
-    # Si no existe el archivo específico, usar .env como fallback
-    env_file = '.env'
-    
-load_dotenv(env_file)
 
 # Determinar entorno (production, development, etc.)
 FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
@@ -53,8 +47,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Log del archivo de configuración cargado
-logger.info(f"📁 Cargando configuración desde: {env_file}")
+
 logger.info(f"🔧 Entorno: {FLASK_ENV}")
 logger.info(f"🚀 Modo producción: {IS_PRODUCTION}")
 
@@ -178,6 +171,9 @@ talisman = Talisman(
 )
 logger.info("Flask-Talisman inicializado.")
 
+# Registrar comandos CLI personalizados
+app.cli.add_command(sync_supabase_command)
+
 # JWT Error handling
 @jwt.unauthorized_loader
 def unauthorized_callback(callback):
@@ -272,6 +268,7 @@ api.add_resource(PedidoResource, '/pedidos', '/pedidos/<int:pedido_id>')
 api.add_resource(PedidoConversionResource, '/pedidos/<int:pedido_id>/convertir')
 api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
 api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
+api.add_resource(ChatResource, '/chat')
 
 # Reportes Financieros
 api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')

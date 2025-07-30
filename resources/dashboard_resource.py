@@ -122,7 +122,7 @@ class DashboardResource(Resource):
                     clientes_con_saldo_map[cliente.id] = {
                         "cliente_id": cliente.id,
                         "nombre": cliente.nombre,
-                        "ciudad": cliente.ciudad, # Añadir la ciudad del cliente
+                        "ciudad": cliente.ciudad,
                         "saldo_pendiente_total": Decimal('0'),
                         "ventas_pendientes": []
                     }

@@ -299,13 +299,21 @@ class VentaFormDataResource(Resource):
         """
         claims = get_jwt()
         user_almacen_id = claims.get('almacen_id')
+        user_rol = claims.get('rol')
 
-        # --- Lógica de Validación Simplificada ---
-        # El usuario solo puede solicitar datos de su propio almacén.
-        if not user_almacen_id:
-            return {"error": "El token del usuario no tiene un almacén asignado."}, 403
-        
-        target_almacen_id = user_almacen_id
+        # Permite que un admin o un usuario con el mismo almacen_id solicite datos de un almacén específico
+        requested_almacen_id = request.args.get('almacen_id', type=int)
+
+        if requested_almacen_id:
+            if user_rol == 'admin' or requested_almacen_id == user_almacen_id:
+                target_almacen_id = requested_almacen_id
+            else:
+                return {"error": "No tienes permiso para acceder a los datos de este almacén."}, 403
+        else:
+            # Si no se especifica un almacén, usa el del usuario logueado
+            if not user_almacen_id:
+                return {"error": "El token del usuario no tiene un almacén asignado y no se especificó uno."}, 403
+            target_almacen_id = user_almacen_id
 
         try:
             # --- Consultas en Paralelo (si es posible) o secuenciales ---
@@ -319,7 +327,7 @@ class VentaFormDataResource(Resource):
                 orm.joinedload(Inventario.lote)
             ).filter(
                 Inventario.almacen_id == target_almacen_id,
-                Inventario.cantidad > 0,  # Solo mostrar productos con stock
+
                 PresentacionProducto.activo == True
             ).join(
                 PresentacionProducto, Inventario.presentacion_id == PresentacionProducto.id
