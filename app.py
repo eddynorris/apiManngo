@@ -17,7 +17,7 @@ from resources.gasto_resource import GastoResource
 from resources.movimiento_resource import MovimientoResource
 from resources.venta_resource import VentaResource
 from resources.user_resource import UserResource
-from resources.inventario_resource import InventarioResource
+from resources.inventario_resource import InventarioResource, InventarioGlobalResource
 from resources.lote_resource import LoteResource
 from resources.merma_resource import MermaResource
 from resources.presentacion_resource import PresentacionResource
@@ -261,6 +261,7 @@ api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimien
 api.add_resource(VentaResource, '/ventas', '/ventas/<int:venta_id>')
 api.add_resource(VentaFormDataResource, '/ventas/form-data')
 api.add_resource(InventarioResource, '/inventarios', '/inventarios/<int:inventario_id>')
+api.add_resource(InventarioGlobalResource, '/inventario/reporte-global')
 api.add_resource(PresentacionResource, '/presentaciones', '/presentaciones/<int:presentacion_id>')
 api.add_resource(MermaResource, '/mermas', '/mermas/<int:merma_id>')
 api.add_resource(LoteResource, '/lotes', '/lotes/<int:lote_id>')
@@ -271,8 +272,8 @@ api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
 api.add_resource(ChatResource, '/chat')
 
 # Reportes Financieros
-api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')
-api.add_resource(ResumenFinancieroResource, '/reportes/resumen-financiero')
+api.add_resource(ReporteVentasPresentacionResource, '/api/reportes/ventas-presentacion')
+api.add_resource(ResumenFinancieroResource, '/api/reportes/resumen-financiero')
 
 
 if __name__ == '__main__':

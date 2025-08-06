@@ -172,6 +172,7 @@ class PagoSchema(SQLAlchemyAutoSchema):
 class GastoSchema(SQLAlchemyAutoSchema):
     almacen = fields.Nested(AlmacenSchema, only=("id", "nombre"))
     usuario = fields.Nested(UserSchema, only=("id", "username"))
+    lote = fields.Nested(LoteSchema, only=("id", "descripcion"), dump_only=True)
     monto = fields.Decimal(as_string=True)
 
 

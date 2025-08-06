@@ -49,6 +49,8 @@ class GastoResource(Resource):
             query = query.filter_by(fecha=fecha)
         if usuario_id := request.args.get('usuario_id'):
             query = query.filter_by(usuario_id=usuario_id)
+        if lote_id := request.args.get('lote_id'):
+            query = query.filter_by(lote_id=lote_id)
 
         # --- APLICAR ORDENACIÓN ---
         query = query.order_by(order_func(column_to_sort))
@@ -73,7 +75,11 @@ class GastoResource(Resource):
     @handle_db_errors
     def post(self):
         """Registra nuevo gasto con validación de categoría"""
-        data = gasto_schema.load(request.get_json())
+        json_data = request.get_json()
+        if json_data.get('lote_id'):
+            Lote.query.get_or_404(json_data['lote_id'])
+
+        data = gasto_schema.load(json_data)
         Almacen.query.get_or_404(data.almacen_id)
         data.usuario_id = get_jwt().get('sub')  # Asignar usuario actual
         

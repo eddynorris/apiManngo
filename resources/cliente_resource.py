@@ -30,11 +30,11 @@ class ClienteResource(Resource):
             # Construir query con filtros
             query = Cliente.query
             
-            # Aplicar filtros sanitizados
-            if nombre := request.args.get('nombre'):
-                # Sanitizar input para evitar inyección SQL
-                nombre = re.sub(r'[^\w\s\-áéíóúÁÉÍÓÚñÑ]', '', nombre)
-                query = query.filter(Cliente.nombre.ilike(f'%{nombre}%'))
+            # Aplicar filtros para búsqueda por nombre o término de búsqueda genérico
+            search_term = request.args.get('nombre') or request.args.get('search')
+            if search_term:
+                # Usar ilike para búsqueda case-insensitive. SQLAlchemy previene inyección SQL.
+                query = query.filter(Cliente.nombre.ilike(f'%{search_term}%'))
                 
             if telefono := request.args.get('telefono'):
                 # Validar formato básico de teléfono

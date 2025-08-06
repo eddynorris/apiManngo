@@ -289,12 +289,14 @@ class Gasto(db.Model):
     fecha = db.Column(db.Date)
     categoria = db.Column(db.String(50), nullable=False)  # "logistica", "personal", "otros"
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'))  # Relación con almacén
+    lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id'), nullable=True)
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     usuario = db.relationship('Users')
     almacen = db.relationship('Almacen')
+    lote = db.relationship('Lote')
 
     __table_args__ = (
         CheckConstraint("categoria IN ('logistica', 'personal', 'otros')"),

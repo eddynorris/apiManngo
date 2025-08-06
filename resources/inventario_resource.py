@@ -14,6 +14,72 @@ import sqlalchemy.orm.exc
 # Configurar logging
 logger = logging.getLogger(__name__)
 
+class InventarioGlobalResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """
+        Genera un reporte de inventario global, agrupado por presentación,
+        mostrando el stock total, la proyección de ventas y el detalle por almacén y lote.
+        """
+        try:
+            # Subconsulta para obtener el stock por almacen y lote para cada presentación
+            stock_por_almacen_lote = db.session.query(
+                Inventario.presentacion_id,
+                Almacen.nombre.label('almacen_nombre'),
+                Lote.descripcion.label('lote_descripcion'),
+                Lote.id.label('lote_id'),
+                Lote.cantidad_disponible_kg.label('lote_kg_disponible'),
+                Inventario.cantidad
+            ).join(Almacen, Inventario.almacen_id == Almacen.id).outerjoin(Lote, Inventario.lote_id == Lote.id).subquery()
+
+            # Consulta principal para agregar por presentación
+            reporte = db.session.query(
+                PresentacionProducto.id.label('presentacion_id'),
+                PresentacionProducto.nombre.label('nombre_presentacion'),
+                PresentacionProducto.precio_venta,
+                db.func.sum(Inventario.cantidad).label('stock_total_unidades')
+            ).join(Inventario, PresentacionProducto.id == Inventario.presentacion_id).group_by(
+                PresentacionProducto.id, 
+                PresentacionProducto.nombre,
+                PresentacionProducto.precio_venta
+            ).order_by(PresentacionProducto.nombre).all()
+
+            resultado_final = []
+            for item in reporte:
+                detalles = db.session.query(stock_por_almacen_lote)\
+                    .filter(stock_por_almacen_lote.c.presentacion_id == item.presentacion_id)\
+                    .all()
+                
+                detalles_serializados = [
+                    {
+                        'almacen': d.almacen_nombre,
+                        'lote_id': d.lote_id,
+                        'lote': d.lote_descripcion or 'Sin Lote Asignado',
+                        'lote_kg_disponible': float(d.lote_kg_disponible) if d.lote_kg_disponible is not None else 0,
+                        'stock': d.cantidad
+                    } for d in detalles
+                ]
+
+                total_unidades = int(item.stock_total_unidades)
+                precio_venta = item.precio_venta
+                proyeccion_venta = total_unidades * precio_venta if precio_venta else 0
+
+                resultado_final.append({
+                    'presentacion_id': item.presentacion_id,
+                    'nombre_presentacion': item.nombre_presentacion,
+                    'stock_total_unidades': total_unidades,
+                    'proyeccion_venta': float(proyeccion_venta),
+                    'detalle_por_almacen': detalles_serializados
+                })
+
+            return resultado_final, 200
+
+        except Exception as e:
+            logger.error(f"Error al generar reporte de inventario global: {str(e)}")
+            return {"error": "Error al procesar la solicitud del reporte"}, 500
+
+
 class InventarioResource(Resource):
     @jwt_required()
     @handle_db_errors
