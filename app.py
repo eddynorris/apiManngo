@@ -112,7 +112,7 @@ if not app.config['S3_BUCKET'] or not app.config['S3_REGION']:
         logger.info("S3 no configurado - usando almacenamiento local para desarrollo.")
 
 # Configuración de límite de tamaño de archivo (se mantiene por si se usa en validación)
-app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 16 * 1024 * 1024)) # Default 16MB max
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 50 * 1024 * 1024)) # Default 50MB max
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'pdf'} # Mantener para validación
 
 # JWT config con valores seguros
