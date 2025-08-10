@@ -109,18 +109,39 @@ class ResumenFinancieroResource(Resource):
 
             ventas_subquery = ventas_filtradas_query.subquery()
 
-            # --- 3. Calcular totales de VENTAS ---
+            # --- 3. Calcular totales de VENTAS (Subtotal por filtros) ---
             resumen_ventas = db.session.query(
                 func.sum(ventas_subquery.c.total_linea),
                 func.count(distinct(ventas_subquery.c.venta_id))
             ).first()
             total_ventas, num_ventas = resumen_ventas
+            total_ventas = total_ventas or Decimal('0.00')
+            num_ventas = num_ventas or 0
 
-            # --- 4. Calcular totales de PAGOS ---
             venta_ids_filtradas = db.session.query(ventas_subquery.c.venta_id).distinct()
-            total_pagado = db.session.query(func.sum(Pago.monto))\
-                .filter(Pago.venta_id.in_(venta_ids_filtradas))\
-                .scalar()
+
+            if lote_id:
+                # --- 4. Lógica de deuda y pago para filtro por LOTE ---
+                # La deuda se calcula sobre el TOTAL de las ventas que contienen el lote.
+                pagos_por_venta_sq = db.session.query(
+                    Pago.venta_id,
+                    func.sum(Pago.monto).label('total_pagado')
+                ).group_by(Pago.venta_id).subquery()
+
+                deuda_total_query = db.session.query(
+                    func.sum(Venta.total - func.coalesce(pagos_por_venta_sq.c.total_pagado, 0))
+                ).select_from(Venta).outerjoin(
+                    pagos_por_venta_sq, Venta.id == pagos_por_venta_sq.c.venta_id
+                ).filter(Venta.id.in_(venta_ids_filtradas))
+                
+                total_deuda = deuda_total_query.scalar() or Decimal('0.00')
+                total_pagado = total_ventas - total_deuda
+            else:
+                # --- 4. Lógica de deuda y pago para filtros GENERALES ---
+                total_pagado = db.session.query(func.sum(Pago.monto))\
+                    .filter(Pago.venta_id.in_(venta_ids_filtradas))\
+                    .scalar() or Decimal('0.00')
+                total_deuda = total_ventas - total_pagado
 
             # --- 5. Calcular GASTOS ---
             gastos_query = db.session.query(func.sum(Gasto.monto), func.count(Gasto.id))
@@ -128,17 +149,15 @@ class ResumenFinancieroResource(Resource):
                 gastos_query = gastos_query.filter(Gasto.fecha.between(fecha_inicio, fecha_fin))
             if almacen_id:
                 gastos_query = gastos_query.filter(Gasto.almacen_id == almacen_id)
+            if lote_id:
+                gastos_query = gastos_query.filter(Gasto.lote_id == lote_id)
             
             total_gastos, num_gastos = gastos_query.first()
 
             # --- 6. Formatear resultados ---
-            total_ventas = total_ventas or Decimal('0.00')
-            num_ventas = num_ventas or 0
-            total_pagado = total_pagado or Decimal('0.00')
             total_gastos = total_gastos or Decimal('0.00')
             num_gastos = num_gastos or 0
 
-            total_deuda = total_ventas - total_pagado
             ganancia_neta = total_ventas - total_gastos
             margen_ganancia = (ganancia_neta / total_ventas * 100) if total_ventas > 0 else Decimal('0.00')
 
