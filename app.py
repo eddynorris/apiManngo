@@ -94,16 +94,16 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['S3_BUCKET'] = os.environ.get('S3_BUCKET')
 app.config['S3_REGION'] = os.environ.get('AWS_REGION') # Reutilizar si es la misma región
 
-# Configuración de archivos locales para desarrollo
-if not IS_PRODUCTION:
-    # En desarrollo, crear directorio uploads si no existe
-    upload_dir = os.path.join(os.getcwd(), 'uploads')
-    if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
-        os.makedirs(os.path.join(upload_dir, 'comprobantes'), exist_ok=True)
-        os.makedirs(os.path.join(upload_dir, 'presentaciones'), exist_ok=True)
-    app.config['UPLOAD_FOLDER'] = upload_dir
-    logger.info(f"📁 Directorio de uploads para desarrollo: {upload_dir}")
+# Configuración de archivos locales para desarrollo (desactivado para forzar S3 en local)
+# if not IS_PRODUCTION:
+#     # En desarrollo, crear directorio uploads si no existe
+#     upload_dir = os.path.join(os.getcwd(), 'uploads')
+#     if not os.path.exists(upload_dir):
+#         os.makedirs(upload_dir)
+#         os.makedirs(os.path.join(upload_dir, 'comprobantes'), exist_ok=True)
+#         os.makedirs(os.path.join(upload_dir, 'presentaciones'), exist_ok=True)
+#     app.config['UPLOAD_FOLDER'] = upload_dir
+#     logger.info(f"📁 Directorio de uploads para desarrollo: {upload_dir}")
 
 if not app.config['S3_BUCKET'] or not app.config['S3_REGION']:
     if IS_PRODUCTION:
@@ -272,8 +272,8 @@ api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
 api.add_resource(ChatResource, '/chat')
 
 # Reportes Financieros
-api.add_resource(ReporteVentasPresentacionResource, '/api/reportes/ventas-presentacion')
-api.add_resource(ResumenFinancieroResource, '/api/reportes/resumen-financiero')
+api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')
+api.add_resource(ResumenFinancieroResource, '/reportes/resumen-financiero')
 
 
 if __name__ == '__main__':
