@@ -80,16 +80,20 @@ if IS_PRODUCTION:
 
 app = Flask(__name__)
 
-# Configuración de CORS - en producción limitar orígenes
-allowed_origins = os.environ.get('ALLOWED_ORIGINS', '*' if not IS_PRODUCTION else '')
-if not allowed_origins and IS_PRODUCTION:
-    logger.warning("ALLOWED_ORIGINS no está configurado para producción. CORS estará desactivado.")
-    CORS(app, origins=[]) # Desactivar si no hay orígenes configurados en prod
-elif allowed_origins == '*':
-    logger.warning("CORS configurado con '*' - Considera limitar orígenes en producción.")
-    CORS(app, resources={r"/*": {"origins": "*"}})
+# Configuración de CORS
+if IS_PRODUCTION:
+    allowed_origins_env = os.environ.get('ALLOWED_ORIGINS')
+    if allowed_origins_env:
+        origins = allowed_origins_env.split(',')
+        logger.info(f"CORS configurado para producción con orígenes: {origins}")
+    else:
+        origins = ['https://www.manngojk.lat', 'https://admin.manngojk.lat']
+        logger.warning(f"La variable de entorno ALLOWED_ORIGINS no está definida en producción. Usando orígenes predeterminados: {origins}")
+    CORS(app, resources={r"/*": {"origins": origins}})
 else:
-    CORS(app, resources={r"/*": {"origins": allowed_origins.split(',')}})
+    # En desarrollo, permitir cualquier origen para facilitar las pruebas locales
+    CORS(app, resources={r"/*": {"origins": "*"}})
+    logger.info("CORS configurado para desarrollo, permitiendo todos los orígenes ('*').")
 
 # Configuración de la base de datos desde variables de entorno
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'postgresql://postgres:123456@localhost/manngo_db')
