@@ -1,6 +1,9 @@
 from flask import Flask, jsonify, send_from_directory
+from dotenv import load_dotenv
 from flask_restful import Api
 from flask_cors import CORS
+
+load_dotenv()
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
