@@ -12,6 +12,7 @@ from resources.producto_resource import ProductoResource
 from resources.proveedor_resource import ProveedorResource
 from resources.almacen_resource import AlmacenResource
 from resources.cliente_resource import ClienteResource
+from resources.cliente_proyeccion_resource import ClienteProyeccionResource
 from resources.pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource
 from resources.gasto_resource import GastoResource
 from resources.movimiento_resource import MovimientoResource
@@ -256,6 +257,7 @@ api.add_resource(PagoBatchResource, '/pagos/batch')
 api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
 api.add_resource(AlmacenResource, '/almacenes', '/almacenes/<int:almacen_id>')
 api.add_resource(ClienteResource, '/clientes', '/clientes/<int:cliente_id>')
+api.add_resource(ClienteProyeccionResource, '/clientes/proyecciones', '/clientes/proyecciones/<int:cliente_id>')
 api.add_resource(GastoResource, '/gastos', '/gastos/<int:gasto_id>')
 api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimiento_id>')
 api.add_resource(VentaResource, '/ventas', '/ventas/<int:venta_id>')
