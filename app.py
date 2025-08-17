@@ -10,30 +10,7 @@ from flask_limiter.util import get_remote_address
 from flask_talisman import Talisman
 import watchtower
 import boto3
-from resources.auth_resource import AuthResource
-from resources.producto_resource import ProductoResource
-from resources.proveedor_resource import ProveedorResource
-from resources.almacen_resource import AlmacenResource
-from resources.cliente_resource import ClienteResource
-from resources.cliente_proyeccion_resource import ClienteProyeccionResource
-from resources.cliente_export_resource import ClienteExportResource
-from resources.pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource
-from resources.gasto_resource import GastoResource
-from resources.movimiento_resource import MovimientoResource
-from resources.venta_resource import VentaResource
-from resources.user_resource import UserResource
-from resources.inventario_resource import InventarioResource, InventarioGlobalResource
-from resources.lote_resource import LoteResource
-from resources.merma_resource import MermaResource
-from resources.presentacion_resource import PresentacionResource
-from resources.pedido_resource import PedidoResource, PedidoConversionResource
-from resources.pedido_resource import PedidoFormDataResource
-from resources.venta_resource import VentaFormDataResource
-from resources.ventadetalle_resource import VentaDetalleResource
-from resources.deposito_bancario_resource import DepositoBancarioResource
-from resources.dashboard_resource import DashboardResource
-from resources.reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource
-from resources.chat_resource import ChatResource 
+from resources import init_resources
 from scripts.sync_supabase import sync_supabase_command
 
 from extensions import db, jwt
@@ -255,36 +232,7 @@ def config_info():
 # limiter.limit("5 per minute")(AuthResource)
 #api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
 
-api.add_resource(DashboardResource, '/dashboard')
-api.add_resource(AuthResource, '/auth')
-api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
-api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
-api.add_resource(PagoResource, '/pagos', '/pagos/<int:pago_id>')
-api.add_resource(PagosPorVentaResource, '/pagos/venta/<int:venta_id>')
-api.add_resource(PagoBatchResource, '/pagos/batch')
-api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
-api.add_resource(AlmacenResource, '/almacenes', '/almacenes/<int:almacen_id>')
-api.add_resource(ClienteResource, '/clientes', '/clientes/<int:cliente_id>')
-api.add_resource(ClienteProyeccionResource, '/clientes/proyecciones', '/clientes/proyecciones/<int:cliente_id>')
-api.add_resource(ClienteExportResource, '/clientes/exportar')
-api.add_resource(GastoResource, '/gastos', '/gastos/<int:gasto_id>')
-api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimiento_id>')
-api.add_resource(VentaResource, '/ventas', '/ventas/<int:venta_id>')
-api.add_resource(VentaFormDataResource, '/ventas/form-data')
-api.add_resource(InventarioResource, '/inventarios', '/inventarios/<int:inventario_id>')
-api.add_resource(InventarioGlobalResource, '/inventario/reporte-global')
-api.add_resource(PresentacionResource, '/presentaciones', '/presentaciones/<int:presentacion_id>')
-api.add_resource(MermaResource, '/mermas', '/mermas/<int:merma_id>')
-api.add_resource(LoteResource, '/lotes', '/lotes/<int:lote_id>')
-api.add_resource(PedidoResource, '/pedidos', '/pedidos/<int:pedido_id>')
-api.add_resource(PedidoConversionResource, '/pedidos/<int:pedido_id>/convertir')
-api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
-api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
-api.add_resource(ChatResource, '/chat')
-
-# Reportes Financieros
-api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')
-api.add_resource(ResumenFinancieroResource, '/reportes/resumen-financiero')
+init_resources(api)
 
 
 if __name__ == '__main__':

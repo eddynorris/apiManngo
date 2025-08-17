@@ -1,12 +1,18 @@
 # ARCHIVO: gasto_resource.py
-from flask_restful import Resource
+from flask_restful import Resource, reqparse
 from flask_jwt_extended import jwt_required, get_jwt
-from flask import request
+from flask import request, send_file
 from models import Gasto, Almacen, Users
 from schemas import gasto_schema, gastos_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE
 from sqlalchemy import asc, desc
+import pandas as pd
+import io
+import logging
+
+# Configurar logging
+logger = logging.getLogger(__name__)
 
 class GastoResource(Resource):
     @jwt_required()
@@ -111,3 +117,73 @@ class GastoResource(Resource):
         db.session.delete(gasto)
         db.session.commit()
         return "Gasto eliminado correctamente", 200
+
+class GastoExportResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """
+        Exporta todos los gastos a un archivo Excel, opcionalmente filtrado.
+        """
+        parser = reqparse.RequestParser()
+        parser.add_argument('categoria', type=str, location='args')
+        parser.add_argument('fecha', type=str, location='args')
+        parser.add_argument('usuario_id', type=int, location='args')
+        parser.add_argument('lote_id', type=int, location='args')
+        args = parser.parse_args()
+
+        try:
+            query = Gasto.query.join(Almacen).join(Users)
+
+            if args['categoria']:
+                query = query.filter(Gasto.categoria == args['categoria'])
+            if args['fecha']:
+                query = query.filter(Gasto.fecha == args['fecha'])
+            if args['usuario_id']:
+                query = query.filter(Gasto.usuario_id == args['usuario_id'])
+            if args['lote_id']:
+                query = query.filter(Gasto.lote_id == args['lote_id'])
+
+            gastos = query.all()
+            if not gastos:
+                return {"message": "No hay gastos para exportar con los filtros seleccionados"}, 404
+
+            # Serializar los datos incluyendo relaciones
+            data = gastos_schema.dump(gastos)
+
+            df = pd.DataFrame(data)
+            
+            # Mapeo de campos anidados a columnas planas
+            if not df.empty:
+                df['almacen_nombre'] = df['almacen'].apply(lambda x: x.get('nombre') if isinstance(x, dict) else None)
+                df['usuario_username'] = df['usuario'].apply(lambda x: x.get('username') if isinstance(x, dict) else None)
+
+            columnas_deseadas = {
+                'id': 'ID',
+                'fecha': 'Fecha',
+                'monto': 'Monto',
+                'categoria': 'Categoría',
+                'descripcion': 'Descripción',
+                'almacen_nombre': 'Almacén',
+                'usuario_username': 'Usuario'
+            }
+            
+            df_optimizado = df[list(columnas_deseadas.keys())]
+            df_optimizado = df_optimizado.rename(columns=columnas_deseadas)
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_optimizado.to_excel(writer, index=False, sheet_name='Gastos')
+            
+            output.seek(0)
+
+            return send_file(
+                output,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                as_attachment=True,
+                download_name='gastos.xlsx'
+            )
+
+        except Exception as e:
+            logger.error(f"Error al exportar gastos: {str(e)}")
+            return {"error": "Error interno al generar el archivo Excel"}, 500
