@@ -342,7 +342,7 @@ class VentaFormDataResource(Resource):
                 dumped_presentacion = presentacion_schema.dump(presentacion)
                 
                 # Añadir datos adicionales del inventario y lote
-                dumped_presentacion['stock_disponible'] = inventario.cantidad
+                dumped_presentacion['stock_disponible'] = float(inventario.cantidad)
                 dumped_presentacion['lote_id'] = lote.id if lote else None
                 dumped_presentacion['lote_descripcion'] = lote.descripcion if lote else "Sin lote asignado"
                 

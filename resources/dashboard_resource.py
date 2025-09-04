@@ -81,7 +81,7 @@ class DashboardResource(Resource):
                 {
                     "presentacion_id": item.presentacion_id,
                     "nombre": item.presentacion_nombre,
-                    "cantidad": item.cantidad,
+                    "cantidad": float(item.cantidad),
                     "stock_minimo": item.stock_minimo,
                     "almacen_id": item.almacen_id,
                     "almacen_nombre": item.almacen_nombre

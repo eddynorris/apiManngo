@@ -2,12 +2,13 @@ from .almacen_resource import AlmacenResource
 from .auth_resource import AuthResource
 from .chat_resource import ChatResource
 from .cliente_proyeccion_resource import ClienteProyeccionResource
-from .cliente_resource import ClienteExportResource
-from .cliente_resource import ClienteResource
+from .cliente_resource import ClienteExportResource, ClienteResource
 from .dashboard_resource import DashboardResource
 from .deposito_bancario_resource import DepositoBancarioResource
 from .gasto_resource import GastoResource, GastoExportResource
+from .produccion_resource import ProduccionResource, ProduccionEnsamblajeResource
 from .inventario_resource import InventarioResource, InventarioGlobalResource
+from .transferencia_resource import TransferenciaInventarioResource # <-- Importado desde el nuevo archivo
 from .lote_resource import LoteResource
 from .merma_resource import MermaResource
 from .movimiento_resource import MovimientoResource
@@ -16,7 +17,9 @@ from .pedido_resource import PedidoResource, PedidoConversionResource, PedidoFor
 from .presentacion_resource import PresentacionResource
 from .producto_resource import ProductoResource
 from .proveedor_resource import ProveedorResource
+from .receta_resource import RecetaResource
 from .reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource
+from .reporte_produccion_resource import ReporteProduccionBriquetasResource, ReporteProduccionGeneralResource
 from .user_resource import UserResource
 from .venta_resource import VentaResource, VentaFormDataResource
 from .ventadetalle_resource import VentaDetalleResource
@@ -34,6 +37,7 @@ __all__ = [
     'GastoExportResource',
     'InventarioResource',
     'InventarioGlobalResource',
+    'TransferenciaInventarioResource',
     'LoteResource',
     'MermaResource',
     'MovimientoResource',
@@ -44,10 +48,15 @@ __all__ = [
     'PedidoConversionResource',
     'PedidoFormDataResource',
     'PresentacionResource',
+    'ProduccionEnsamblajeResource',
+    'ProduccionResource',
     'ProductoResource',
     'ProveedorResource',
+    'RecetaResource',
     'ReporteVentasPresentacionResource',
     'ResumenFinancieroResource',
+    'ReporteProduccionBriquetasResource',
+    'ReporteProduccionGeneralResource',
     'UserResource',
     'VentaResource',
     'VentaFormDataResource',
@@ -68,8 +77,11 @@ def init_resources(api):
     api.add_resource(ClienteExportResource, '/clientes/exportar')
     api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
     api.add_resource(LoteResource, '/lotes', '/lotes/<int:lote_id>')
+    
+    # Inventario y Movimientos
     api.add_resource(InventarioResource, '/inventarios', '/inventarios/<int:inventario_id>')
     api.add_resource(InventarioGlobalResource, '/inventario/reporte-global')
+    api.add_resource(TransferenciaInventarioResource, '/inventario/transferir')
     api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimiento_id>')
     
     # Ventas
@@ -93,10 +105,20 @@ def init_resources(api):
     api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
     api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
     
+    # --- Producción y Recetas ---
+    # Gestión de Recetas (Admin)
+    api.add_resource(RecetaResource, '/recetas', '/recetas/<int:id>')
+    # Endpoint principal para registrar producción (para operadores)
+    api.add_resource(ProduccionResource, '/produccion')
+    # Endpoint de motor interno para ensamblaje (uso interno)
+    api.add_resource(ProduccionEnsamblajeResource, '/produccion/ensamblaje')
+
     # Dashboard y Reportes
     api.add_resource(DashboardResource, '/dashboard')
     api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')
     api.add_resource(ResumenFinancieroResource, '/reportes/resumen-financiero')
+    api.add_resource(ReporteProduccionBriquetasResource, '/reportes/produccion-briquetas')
+    api.add_resource(ReporteProduccionGeneralResource, '/reportes/produccion-general')
     
     # Chat
     api.add_resource(ChatResource, '/chat')

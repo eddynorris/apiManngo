@@ -23,7 +23,7 @@ class InventarioGlobalResource(Resource):
         mostrando el stock total, la proyección de ventas y el detalle por almacén y lote.
         """
         try:
-            # Subconsulta para obtener el stock por almacen y lote para cada presentación
+            # Subconsulta para obtener el stock por almacen y lote para cada presentación (solo tipo 'procesado')
             stock_por_almacen_lote = db.session.query(
                 Inventario.presentacion_id,
                 Almacen.nombre.label('almacen_nombre'),
@@ -31,15 +31,20 @@ class InventarioGlobalResource(Resource):
                 Lote.id.label('lote_id'),
                 Lote.cantidad_disponible_kg.label('lote_kg_disponible'),
                 Inventario.cantidad
-            ).join(Almacen, Inventario.almacen_id == Almacen.id).outerjoin(Lote, Inventario.lote_id == Lote.id).subquery()
+            ).join(Almacen, Inventario.almacen_id == Almacen.id
+            ).join(PresentacionProducto, Inventario.presentacion_id == PresentacionProducto.id
+            ).filter(PresentacionProducto.tipo == 'procesado'
+            ).outerjoin(Lote, Inventario.lote_id == Lote.id).subquery()
 
-            # Consulta principal para agregar por presentación
+            # Consulta principal para agregar por presentación (solo tipo 'procesado')
             reporte = db.session.query(
                 PresentacionProducto.id.label('presentacion_id'),
                 PresentacionProducto.nombre.label('nombre_presentacion'),
                 PresentacionProducto.precio_venta,
                 db.func.sum(Inventario.cantidad).label('stock_total_unidades')
-            ).join(Inventario, PresentacionProducto.id == Inventario.presentacion_id).group_by(
+            ).join(Inventario, PresentacionProducto.id == Inventario.presentacion_id
+            ).filter(PresentacionProducto.tipo == 'procesado'
+            ).group_by(
                 PresentacionProducto.id, 
                 PresentacionProducto.nombre,
                 PresentacionProducto.precio_venta
@@ -57,7 +62,7 @@ class InventarioGlobalResource(Resource):
                         'lote_id': d.lote_id,
                         'lote': d.lote_descripcion or 'Sin Lote Asignado',
                         'lote_kg_disponible': float(d.lote_kg_disponible) if d.lote_kg_disponible is not None else 0,
-                        'stock': d.cantidad
+                        'stock': float(d.cantidad) if d.cantidad is not None else 0
                     } for d in detalles
                 ]
 
@@ -201,7 +206,7 @@ class InventarioResource(Resource):
             try:
                 presentacion_id = int(item_data.get('presentacion_id'))
                 almacen_id = int(item_data.get('almacen_id'))
-                cantidad = int(item_data.get('cantidad'))
+                cantidad = Decimal(item_data.get('cantidad'))
                 
                 if cantidad < 0:
                     return None, ({"error": "La cantidad no puede ser negativa en un item", "item": item_data}, 400)
@@ -233,11 +238,23 @@ class InventarioResource(Resource):
                 return None, ({"error": f"Error inesperado al validar relaciones: {str(e)}", "item": item_data}, 500)
             
             # Verificar unicidad
-            if Inventario.query.filter_by(
+            lote_id = item_data.get('lote_id')
+            query = Inventario.query.filter_by(
                 presentacion_id=presentacion_id,
                 almacen_id=almacen_id
-            ).first():
-                return None, ({"error": "Ya existe un registro de inventario para esta presentación en este almacén", "item": item_data}, 409)
+            )
+            if lote_id:
+                query = query.filter_by(lote_id=lote_id)
+            else:
+                query = query.filter(Inventario.lote_id.is_(None))
+
+            if query.first():
+                error_msg = f"Ya existe un registro de inventario para esta presentación en este almacén"
+                if lote_id:
+                    error_msg += f" con el lote ID {lote_id}"
+                else:
+                    error_msg += " sin lote asignado"
+                return None, ({"error": error_msg, "item": item_data}, 409)
             
             # Cargar con el esquema después de validaciones básicas
             data = inventario_schema.load(item_data)
@@ -417,10 +434,10 @@ class InventarioResource(Resource):
             # Validar valores numéricos
             if 'cantidad' in raw_data:
                 try:
-                    nueva_cantidad = int(raw_data['cantidad'])
+                    nueva_cantidad = Decimal(raw_data['cantidad'])
                     if nueva_cantidad < 0:
                         return None, ({"error": "La cantidad no puede ser negativa", "inventario_id": inventario.id}, 400)
-                except (ValueError, TypeError):
+                except (InvalidOperation, TypeError):
                     return None, ({"error": "Valor de cantidad inválido", "inventario_id": inventario.id}, 400)
             
             if 'stock_minimo' in raw_data:
@@ -445,7 +462,7 @@ class InventarioResource(Resource):
             # Si hay cambio en la cantidad, registrar movimiento y actualizar lote
             if 'cantidad' in raw_data:
                 try:
-                    nueva_cantidad = int(raw_data['cantidad'])
+                    nueva_cantidad = Decimal(raw_data['cantidad'])
                     diferencia = nueva_cantidad - inventario.cantidad
                     
                     if diferencia != 0:
@@ -482,14 +499,9 @@ class InventarioResource(Resource):
                                         if lote.cantidad_disponible_kg >= kg_a_restar:
                                             lote.cantidad_disponible_kg -= kg_a_restar
                                         else:
-                                            return None, ({
-                                                "error": "Stock insuficiente en el lote",
-                                                "disponible_kg": str(lote.cantidad_disponible_kg),
-                                                "requerido_kg": str(kg_a_restar),
-                                                "inventario_id": inventario.id
-                                            }, 400)
+                                            return None, ({"error": "Stock insuficiente en el lote", "disponible_kg": str(lote.cantidad_disponible_kg), "requerido_kg": str(kg_a_restar), "inventario_id": inventario.id}, 400)
                                     except (InvalidOperation, TypeError) as e:
-                                        return None, ({"error": f"Error en cálculo: {str(e)}", "inventario_id": inventario.id}, 400)
+                                        return None, ({"error": f"Error en cálculo de cantidades: {str(e)}", "inventario_id": inventario.id}, 400)
                 
                 except (ValueError, TypeError) as e:
                     return None, ({"error": f"Error en actualización de cantidad: {str(e)}", "inventario_id": inventario.id}, 400)
@@ -546,5 +558,3 @@ class InventarioResource(Resource):
             db.session.rollback()
             logger.error(f"Error en DELETE inventario: {str(e)}")
             return {"error": "Error al eliminar inventario"}, 500
-
-

@@ -49,26 +49,38 @@ class PresentacionProducto(db.Model):
     producto = db.relationship('Producto', backref=db.backref('presentaciones', lazy=True))
 
     __table_args__ = (
-        CheckConstraint("tipo IN ('bruto', 'procesado', 'merma', 'briqueta', 'detalle')"),
+        CheckConstraint("tipo IN ('bruto', 'procesado', 'merma', 'briqueta', 'detalle', 'insumo')"),
         UniqueConstraint('producto_id', 'nombre', name='uq_producto_nombre_presentacion')
     )
 
 class Lote(db.Model):
     __tablename__ = 'lotes'
     id = db.Column(db.Integer, primary_key=True)
-    producto_id = db.Column(db.Integer, db.ForeignKey('productos.id', ondelete='CASCADE'), nullable=False)
+    
+    # Campos existentes
+    producto_id = db.Column(db.Integer, db.ForeignKey('productos.id', ondelete='CASCADE'), nullable=True)
     proveedor_id = db.Column(db.Integer, db.ForeignKey('proveedores.id', ondelete='SET NULL'), nullable=True)
     descripcion = db.Column(db.String(255))
-    peso_humedo_kg = db.Column(db.Numeric(10, 2), nullable=False)  # Peso inicial (mojado)
-    peso_seco_kg = db.Column(db.Numeric(10, 2))  # Peso real después de secado
+    peso_humedo_kg = db.Column(db.Numeric(10, 2), nullable=True)
+    peso_seco_kg = db.Column(db.Numeric(10, 2), nullable=True)
     cantidad_disponible_kg = db.Column(db.Numeric(10, 2))
     fecha_ingreso = db.Column(db.DateTime(timezone=True))
+    
+    # Nuevos campos para Lotes de Producción
+    codigo_lote = db.Column(db.String(100), unique=True, nullable=True)
+    es_produccion = db.Column(db.Boolean, default=False, nullable=False)
+    lote_origen_id = db.Column(db.Integer, db.ForeignKey('lotes.id'), nullable=True)
+    cantidad_inicial_kg = db.Column(db.Numeric(10, 2))
+    fecha_produccion = db.Column(db.DateTime(timezone=True))
+
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     # Relaciones
     producto = db.relationship('Producto', backref=db.backref('lotes', lazy=True))
     proveedor = db.relationship('Proveedor', backref=db.backref('lotes', lazy=True))
+    
+    lote_origen = db.relationship('Lote', remote_side=[id], backref='lotes_derivados')
 
 class Almacen(db.Model):
     __tablename__ = 'almacenes'
@@ -93,7 +105,7 @@ class Inventario(db.Model):
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='CASCADE'), nullable=False)
     lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='SET NULL'))
 
-    cantidad = db.Column(db.Integer, nullable=False, default=0)
+    cantidad = db.Column(db.Numeric(12, 4), nullable=False, default=0)
     stock_minimo = db.Column(db.Integer, nullable=False, default=10)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     ultima_actualizacion = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -104,7 +116,7 @@ class Inventario(db.Model):
 
     __table_args__ = (
         # Garantizar que no haya duplicados para la combinación de estos tres campos
-        UniqueConstraint('presentacion_id', 'almacen_id', name='uq_inventario_compuesto'),
+        UniqueConstraint('presentacion_id', 'almacen_id', 'lote_id', name='uq_inventario_compuesto'),
         
         # Índices para mejorar el rendimiento de consultas comunes
         Index('idx_inventario_almacen', 'almacen_id', 'presentacion_id'),
@@ -243,13 +255,13 @@ class Movimiento(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(10), nullable=False)
     
-    # Relación con PresentacionProducto (1)
-    presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'))
+    # Relación con PresentacionProducto (1) - Nullable para materias primas
+    presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=True)
     presentacion = db.relationship('PresentacionProducto')
     
     # Relación con Lote (2)
     lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='SET NULL'))
-    lote = db.relationship('Lote')
+    lote = db.relationship('Lote', foreign_keys=[lote_id])
     
     # Relación con Usuario (3)
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
@@ -258,6 +270,15 @@ class Movimiento(db.Model):
     cantidad = db.Column(db.Numeric(12, 2), nullable=False)
     fecha = db.Column(db.DateTime(timezone=True))
     motivo = db.Column(db.String(255))
+    
+    # Campos adicionales para trazabilidad de producción
+    tipo_operacion = db.Column(db.String(20))  # "produccion", "venta", "ajuste", "merma", "transferencia"
+    lote_origen_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='SET NULL'))  # Para conversiones
+    lote_origen = db.relationship('Lote', foreign_keys='Movimiento.lote_origen_id')
+    cantidad_kg_procesados = db.Column(db.Numeric(10, 2))  # Kg de materia prima utilizados
+    eficiencia_conversion = db.Column(db.Numeric(5, 2))  # % de eficiencia en la conversión
+    turno_produccion = db.Column(db.String(10))  # "mañana", "tarde", "noche"
+    
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
@@ -279,6 +300,9 @@ class Movimiento(db.Model):
     __table_args__ = (
         CheckConstraint("tipo IN ('entrada', 'salida')"),
         CheckConstraint("cantidad > 0"),
+        CheckConstraint("tipo_operacion IN ('produccion', 'venta', 'ajuste', 'merma', 'transferencia', 'ensamblaje') OR tipo_operacion IS NULL"),
+        CheckConstraint("turno_produccion IN ('mañana', 'tarde', 'noche') OR turno_produccion IS NULL"),
+        CheckConstraint("eficiencia_conversion >= 0 AND eficiencia_conversion <= 100 OR eficiencia_conversion IS NULL"),
     )
 
 class Gasto(db.Model):
@@ -360,4 +384,34 @@ class DepositoBancario(db.Model):
     
     __table_args__ = (
         CheckConstraint("monto_depositado > 0"),
+    )
+
+class Receta(db.Model):
+    __tablename__ = 'recetas'
+    id = db.Column(db.Integer, primary_key=True)
+    # La presentación final que esta receta produce
+    presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=False, unique=True)
+    nombre = db.Column(db.String(255), nullable=False)
+    descripcion = db.Column(db.Text)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+
+    presentacion = db.relationship('PresentacionProducto', backref=db.backref('receta', uselist=False, lazy=True))
+    componentes = db.relationship('ComponenteReceta', backref='receta', lazy=True, cascade="all, delete-orphan")
+
+class ComponenteReceta(db.Model):
+    __tablename__ = 'componentes_receta'
+    id = db.Column(db.Integer, primary_key=True)
+    receta_id = db.Column(db.Integer, db.ForeignKey('recetas.id', ondelete='CASCADE'), nullable=False)
+    # La presentación del componente que se consume
+    componente_presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=False)
+    # Cantidad del componente necesaria para producir UNA unidad del producto final
+    cantidad_necesaria = db.Column(db.Numeric(12, 4), nullable=False)
+    tipo_consumo = db.Column(db.String(20), nullable=False, default='insumo') # 'materia_prima' o 'insumo'
+
+    componente_presentacion = db.relationship('PresentacionProducto', foreign_keys=[componente_presentacion_id])
+
+    __table_args__ = (
+        CheckConstraint("tipo_consumo IN ('materia_prima', 'insumo')"),
+        UniqueConstraint('receta_id', 'componente_presentacion_id', name='uq_receta_componente')
     )

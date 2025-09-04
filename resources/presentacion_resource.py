@@ -39,8 +39,13 @@ class PresentacionResource(Resource):
         query = PresentacionProducto.query
         if producto_id := request.args.get('producto_id'):
             query = query.filter_by(producto_id=producto_id)
-        if tipo := request.args.get('tipo'):
-            query = query.filter_by(tipo=tipo)
+        
+        # Filtro por tipo mejorado para aceptar múltiples valores separados por coma
+        if tipos_str := request.args.get('tipo'):
+            tipos = [t.strip() for t in tipos_str.split(',') if t.strip()]
+            if tipos:
+                query = query.filter(PresentacionProducto.tipo.in_(tipos))
+
         if activo_str := request.args.get('activo'): # Renombrado para claridad
             activo = activo_str.lower() == 'true'
             query = query.filter_by(activo=activo)
@@ -81,10 +86,17 @@ class PresentacionResource(Resource):
     @rol_requerido('admin', 'gerente')
     @handle_db_errors
     def post(self):
-        """Crea nueva presentación con posibilidad de subir foto y crea inventario inicial"""
+        """
+        Crea una nueva presentación y su registro de inventario inicial.
+        - Acepta un `almacen_id` opcional.
+        - Si se provee `almacen_id`, el inventario se crea solo en ese almacén.
+        - Si no se provee, el inventario se crea en TODOS los almacenes existentes.
+        """
         # Procesar datos JSON
         if 'application/json' in request.content_type:
             data = request.get_json()
+            almacen_id = data.pop('almacen_id', None) # Extraer almacen_id y quitarlo de data
+
             # Validar con Marshmallow
             errors = presentacion_schema.validate(data)
             if errors:
@@ -105,18 +117,37 @@ class PresentacionResource(Resource):
                 }, 409
 
             db.session.add(nueva_presentacion)
-            # --- CREACIÓN DE INVENTARIO ---
             db.session.flush() # Obtener el ID de la nueva presentación
-            almacenes = Almacen.query.all()
-            for almacen in almacenes:
+
+            # --- LÓGICA DE CREACIÓN DE INVENTARIO ---
+            if almacen_id:
+                almacen = Almacen.query.get(almacen_id)
+                if not almacen:
+                    db.session.rollback()
+                    return {"error": f"El almacén con ID {almacen_id} no existe."}, 404
+                
                 inv = Inventario(
                     presentacion_id=nueva_presentacion.id,
                     almacen_id=almacen.id,
-                    cantidad=0 # Stock inicial 0
-                    # stock_minimo usará el default del modelo
+                    cantidad=0
                 )
                 db.session.add(inv)
-            # -----------------------------
+            else:
+                # Comportamiento anterior: crear en todos los almacenes
+                almacenes = Almacen.query.all()
+                if not almacenes:
+                    db.session.rollback()
+                    return {"error": "No se encontraron almacenes para crear el inventario."}, 404
+                
+                for almacen in almacenes:
+                    inv = Inventario(
+                        presentacion_id=nueva_presentacion.id,
+                        almacen_id=almacen.id,
+                        cantidad=0
+                    )
+                    db.session.add(inv)
+            # ------------------------------------
+
             db.session.commit()
             return presentacion_schema.dump(nueva_presentacion), 201
 
@@ -129,6 +160,7 @@ class PresentacionResource(Resource):
             tipo = request.form.get('tipo')
             precio_venta = request.form.get('precio_venta')
             activo = request.form.get('activo', 'true').lower() == 'true'
+            almacen_id = request.form.get('almacen_id') # Nuevo campo
 
             # Validaciones básicas
             if not all([producto_id, nombre, capacidad_kg, tipo, precio_venta]):
@@ -166,18 +198,37 @@ class PresentacionResource(Resource):
             )
 
             db.session.add(nueva_presentacion)
-            # --- CREACIÓN DE INVENTARIO ---
-            db.session.flush() # Obtener el ID de la nueva presentación
-            almacenes = Almacen.query.all()
-            for almacen in almacenes:
+            db.session.flush() # Obtener el ID
+
+            # --- LÓGICA DE CREACIÓN DE INVENTARIO ---
+            if almacen_id:
+                almacen = Almacen.query.get(almacen_id)
+                if not almacen:
+                    db.session.rollback()
+                    return {"error": f"El almacén con ID {almacen_id} no existe."}, 404
+                
                 inv = Inventario(
                     presentacion_id=nueva_presentacion.id,
                     almacen_id=almacen.id,
-                    cantidad=0 # Stock inicial 0
-                    # stock_minimo usará el default del modelo
+                    cantidad=0
                 )
                 db.session.add(inv)
-            # -----------------------------
+            else:
+                # Comportamiento anterior: crear en todos los almacenes
+                almacenes = Almacen.query.all()
+                if not almacenes:
+                    db.session.rollback()
+                    return {"error": "No se encontraron almacenes para crear el inventario."}, 404
+
+                for almacen in almacenes:
+                    inv = Inventario(
+                        presentacion_id=nueva_presentacion.id,
+                        almacen_id=almacen.id,
+                        cantidad=0
+                    )
+                    db.session.add(inv)
+            # ------------------------------------
+            
             db.session.commit()
 
             return presentacion_schema.dump(nueva_presentacion), 201

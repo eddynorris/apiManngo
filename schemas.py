@@ -3,7 +3,8 @@ from marshmallow_sqlalchemy import SQLAlchemyAutoSchema
 from models import (
     Users, Producto, Almacen, Cliente, Gasto, Movimiento, 
     Venta, VentaDetalle, Proveedor, Pago, Inventario,
-    PresentacionProducto, Lote, Merma, PedidoDetalle, Pedido, DepositoBancario  # Nuevos modelos
+    PresentacionProducto, Lote, Merma, PedidoDetalle, Pedido, DepositoBancario,
+    Receta, ComponenteReceta # Nuevos modelos de Recetas
 )
 from extensions import db
 from decimal import Decimal, InvalidOperation
@@ -67,6 +68,11 @@ class LoteSchema(SQLAlchemyAutoSchema):
     peso_humedo_kg = fields.Decimal(as_string=True)
     peso_seco_kg = fields.Decimal(as_string=True)
     cantidad_disponible_kg = fields.Decimal(as_string=True)
+    
+    # Nuevos campos
+    lote_origen = fields.Nested("LoteSchema", only=("id", "codigo_lote", "descripcion"), dump_only=True)
+    cantidad_inicial_kg = fields.Decimal(as_string=True)
+
 
     class Meta:
         model = Lote
@@ -91,6 +97,7 @@ class InventarioSchema(SQLAlchemyAutoSchema):
     presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre", "capacidad_kg"))
     almacen = fields.Nested(AlmacenSchema, only=("id", "nombre"))
     lote = fields.Nested(LoteSchema, only=("id", "descripcion", "cantidad_disponible_kg"))
+    cantidad = fields.Decimal(as_string=True)
 
     class Meta:
         model = Inventario
@@ -113,10 +120,13 @@ class ClienteSchema(SQLAlchemyAutoSchema):
 class MovimientoSchema(SQLAlchemyAutoSchema):
     presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre", "capacidad_kg"))
     lote = fields.Nested(LoteSchema, only=("id", "cantidad_disponible_kg", "descripcion"))
+    lote_origen = fields.Nested(LoteSchema, only=("id", "descripcion", "cantidad_disponible_kg"))
     usuario = fields.Nested(UserSchema, only=("id", "username"))
     cantidad = fields.Decimal(as_string=True)
+    cantidad_kg_procesados = fields.Decimal(as_string=True)
+    eficiencia_conversion = fields.Decimal(as_string=True)
     
-    # Campo calculado para el total en kilogramos, ahora una propiedad del modelo
+    # Campo calculado para mostrar el total en kg
     total_kg = fields.Decimal(as_string=True, dump_only=True)
 
     class Meta:
@@ -223,6 +233,28 @@ class DepositoBancarioSchema(SQLAlchemyAutoSchema):
         sqla_session = db.session
         include_fk = True
 
+# ------------------- ESQUEMAS DE RECETAS -------------------
+
+class ComponenteRecetaSchema(SQLAlchemyAutoSchema):
+    componente_presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre", "producto.nombre"))
+    cantidad_necesaria = fields.Decimal(as_string=True)
+
+    class Meta:
+        model = ComponenteReceta
+        load_instance = True
+        sqla_session = db.session
+        include_fk = True
+
+class RecetaSchema(SQLAlchemyAutoSchema):
+    presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre"))
+    componentes = fields.List(fields.Nested(ComponenteRecetaSchema))
+
+    class Meta:
+        model = Receta
+        load_instance = True
+        sqla_session = db.session
+        include_fk = True
+
 # Inicializar esquemas
 user_schema = UserSchema()
 users_schema = UserSchema(many=True)
@@ -274,3 +306,9 @@ pedidos_detalle_schema = PedidoDetalleSchema(many=True)
 
 deposito_bancario_schema = DepositoBancarioSchema()
 depositos_bancarios_schema = DepositoBancarioSchema(many=True)
+
+# Esquemas de recetas
+receta_schema = RecetaSchema()
+recetas_schema = RecetaSchema(many=True)
+componente_receta_schema = ComponenteRecetaSchema()
+componentes_receta_schema = ComponenteRecetaSchema(many=True)

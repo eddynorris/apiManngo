@@ -82,3 +82,5 @@ uploads/
 uploads/presentaciones/
 uploads/comprobantes/
 database.sql
+
+migrations/
