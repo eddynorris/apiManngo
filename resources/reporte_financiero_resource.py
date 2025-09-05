@@ -4,9 +4,13 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy import func, distinct
 from datetime import datetime
 from decimal import Decimal
+import logging
 
 from models import db, Venta, VentaDetalle, Gasto, PresentacionProducto, Lote, Pago
 from schemas import VentaDetalleSchema, GastoSchema
+
+# Configurar logging
+logger = logging.getLogger(__name__)
 
 # El recurso ReporteVentasPresentacionResource no necesita cambios,
 # su lógica de filtrado por lote es correcta para su propósito.

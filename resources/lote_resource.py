@@ -99,7 +99,6 @@ class LoteResource(Resource):
         
         # La cantidad disponible inicialmente es el peso húmedo
         nuevo_lote.cantidad_disponible_kg = peso_humedo
-        nuevo_lote.cantidad_inicial_kg = peso_humedo
 
         # 4. Guardar el lote
         db.session.add(nuevo_lote)

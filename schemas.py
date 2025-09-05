@@ -71,7 +71,7 @@ class LoteSchema(SQLAlchemyAutoSchema):
     
     # Nuevos campos
     lote_origen = fields.Nested("LoteSchema", only=("id", "codigo_lote", "descripcion"), dump_only=True)
-    cantidad_inicial_kg = fields.Decimal(as_string=True)
+
 
 
     class Meta:

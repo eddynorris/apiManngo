@@ -70,8 +70,8 @@ class Lote(db.Model):
     codigo_lote = db.Column(db.String(100), unique=True, nullable=True)
     es_produccion = db.Column(db.Boolean, default=False, nullable=False)
     lote_origen_id = db.Column(db.Integer, db.ForeignKey('lotes.id'), nullable=True)
-    cantidad_inicial_kg = db.Column(db.Numeric(10, 2))
-    fecha_produccion = db.Column(db.DateTime(timezone=True))
+
+
 
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
