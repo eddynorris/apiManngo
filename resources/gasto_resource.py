@@ -123,57 +123,67 @@ class GastoExportResource(Resource):
     @handle_db_errors
     def get(self):
         """
-        Exporta todos los gastos a un archivo Excel, opcionalmente filtrado.
+        Exporta todos los gastos a un archivo Excel de forma optimizada.
         """
         parser = reqparse.RequestParser()
         parser.add_argument('categoria', type=str, location='args')
-        parser.add_argument('fecha', type=str, location='args')
         parser.add_argument('usuario_id', type=int, location='args')
         parser.add_argument('lote_id', type=int, location='args')
+        parser.add_argument('almacen_id', type=int, location='args') # Añadido para consistencia
+        parser.add_argument('fecha_inicio', type=str, location='args') # Mejora para rangos
+        parser.add_argument('fecha_fin', type=str, location='args') # Mejora para rangos
         args = parser.parse_args()
 
         try:
-            query = Gasto.query.join(Almacen).join(Users)
+            # --- MEJORA 1: Carga ansiosa (Eager Loading) de relaciones ---
+            query = Gasto.query.options(
+                orm.joinedload(Gasto.almacen),
+                orm.joinedload(Gasto.usuario),
+                orm.joinedload(Gasto.lote) # Precargamos el lote también
+            )
 
+            # --- La lógica de filtrado se mantiene y se mejora ---
             if args['categoria']:
                 query = query.filter(Gasto.categoria == args['categoria'])
-            if args['fecha']:
-                query = query.filter(Gasto.fecha == args['fecha'])
             if args['usuario_id']:
                 query = query.filter(Gasto.usuario_id == args['usuario_id'])
             if args['lote_id']:
                 query = query.filter(Gasto.lote_id == args['lote_id'])
+            if args['almacen_id']:
+                query = query.filter(Gasto.almacen_id == args['almacen_id'])
 
-            gastos = query.all()
+            # Filtro de fecha mejorado para rangos
+            if args['fecha_inicio'] and args['fecha_fin']:
+                try:
+                    fecha_inicio = datetime.fromisoformat(args['fecha_inicio']).date()
+                    fecha_fin = datetime.fromisoformat(args['fecha_fin']).date()
+                    query = query.filter(Gasto.fecha.between(fecha_inicio, fecha_fin))
+                except ValueError:
+                    return {"error": "Formato de fecha inválido. Usa YYYY-MM-DD"}, 400
+
+            gastos = query.order_by(desc(Gasto.fecha)).all()
             if not gastos:
                 return {"message": "No hay gastos para exportar con los filtros seleccionados"}, 404
 
-            # Serializar los datos incluyendo relaciones
-            data = gastos_schema.dump(gastos)
+            # --- MEJORA 2: Construir los datos para el Excel directamente ---
+            data_para_excel = []
+            for gasto in gastos:
+                data_para_excel.append({
+                    'ID': gasto.id,
+                    'Fecha': gasto.fecha.strftime('%Y-%m-%d'),
+                    'Monto': float(gasto.monto),
+                    'Categoría': gasto.categoria,
+                    'Descripción': gasto.descripcion,
+                    'Almacén': gasto.almacen.nombre if gasto.almacen else 'N/A',
+                    'Usuario': gasto.usuario.username if gasto.usuario else 'N/A',
+                    'Lote': gasto.lote.descripcion if gasto.lote else 'N/A'
+                })
 
-            df = pd.DataFrame(data)
-            
-            # Mapeo de campos anidados a columnas planas
-            if not df.empty:
-                df['almacen_nombre'] = df['almacen'].apply(lambda x: x.get('nombre') if isinstance(x, dict) else None)
-                df['usuario_username'] = df['usuario'].apply(lambda x: x.get('username') if isinstance(x, dict) else None)
-
-            columnas_deseadas = {
-                'id': 'ID',
-                'fecha': 'Fecha',
-                'monto': 'Monto',
-                'categoria': 'Categoría',
-                'descripcion': 'Descripción',
-                'almacen_nombre': 'Almacén',
-                'usuario_username': 'Usuario'
-            }
-            
-            df_optimizado = df[list(columnas_deseadas.keys())]
-            df_optimizado = df_optimizado.rename(columns=columnas_deseadas)
+            df = pd.DataFrame(data_para_excel)
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_optimizado.to_excel(writer, index=False, sheet_name='Gastos')
+                df.to_excel(writer, index=False, sheet_name='Gastos')
             
             output.seek(0)
 
@@ -181,7 +191,7 @@ class GastoExportResource(Resource):
                 output,
                 mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 as_attachment=True,
-                download_name='gastos.xlsx'
+                download_name=f'gastos_{datetime.now().strftime("%Y%m%d")}.xlsx'
             )
 
         except Exception as e:

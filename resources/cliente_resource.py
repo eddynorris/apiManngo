@@ -2,14 +2,19 @@
 from flask_restful import Resource, reqparse
 from flask_jwt_extended import jwt_required
 from flask import request, send_file
-from models import Cliente, Venta
-from schemas import cliente_schema, clientes_schema, ClienteSchema
+from models import Cliente, Pedido, Venta
+from schemas import cliente_schema, clientes_schema, ClienteSchema, pedidos_schema
 from extensions import db
 from common import handle_db_errors, validate_pagination_params, create_pagination_response, rol_requerido
 import pandas as pd
 import re
 import io
 import logging
+import calendar
+from sqlalchemy import func, desc, asc, cast, Date, case
+from sqlalchemy.orm import aliased
+from sqlalchemy import orm
+from datetime import datetime, timezone, timedelta, date
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -233,4 +238,261 @@ class ClienteExportResource(Resource):
 
         except Exception as e:
             logger.error(f"Error al exportar clientes: {str(e)}")
+            return {"error": "Error interno al generar el archivo Excel"}, 500
+
+class ClienteProyeccionResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self, cliente_id=None):
+        if cliente_id:
+            return self._get_detalle_cliente(cliente_id)
+        else:
+            return self._get_lista_proyecciones()
+
+    def _get_detalle_cliente(self, cliente_id):
+        """
+        OPTIMIZADO PARA DETALLE: Obtiene un solo cliente y carga su historial
+        completo de ventas y pedidos de forma eficiente.
+        """
+        try:
+            # --- MEJORA PARA DETALLE: Carga ansiosa de las colecciones ---
+            cliente = Cliente.query.options(
+                orm.selectinload(Cliente.ventas),
+                orm.selectinload(Cliente.pedidos)
+            ).get_or_404(cliente_id)
+
+            # Construir la respuesta completa
+            cliente_data = cliente_schema.dump(cliente)
+            
+            # Los datos ya están cargados, no hay nuevas consultas
+            ventas = cliente.ventas
+            pedidos = cliente.pedidos
+            
+            cliente_data['pedidos'] = pedidos_schema.dump(pedidos)
+            cliente_data['ventas'] = [{
+                'id': v.id, 'fecha': v.fecha.isoformat(), 'total': float(v.total), 'estado_pago': v.estado_pago
+            } for v in sorted(ventas, key=lambda x: x.fecha, reverse=True)] # Ordenar en python
+            
+            cliente_data['proxima_compra_estimada'] = self._calcular_proyeccion_compra(cliente)
+            cliente_data['estadisticas'] = self._calcular_estadisticas_cliente(cliente, ventas, pedidos)
+
+            return cliente_data, 200
+
+        except Exception as e:
+            logger.error(f"Error al obtener detalle del cliente {cliente_id}: {str(e)}")
+            return {"error": "Error al procesar la solicitud de detalle"}, 500
+
+    def _get_lista_proyecciones(self):
+        """
+        OPTIMIZADO PARA LISTA: Usa subconsultas para obtener solo las estadísticas
+        agregadas, sin traer el historial de ventas/pedidos.
+        """
+        try:
+            # --- MEJORA PARA LISTA: Subconsulta para agregar estadísticas de ventas ---
+            venta_stats = db.session.query(
+                Venta.cliente_id.label('cliente_id'),
+                func.count(Venta.id).label('total_ventas'),
+                func.sum(Venta.total).label('monto_total_comprado')
+            ).group_by(Venta.cliente_id).subquery()
+            
+            # --- Subconsulta para agregar estadísticas de pedidos ---
+            pedido_stats = db.session.query(
+                Pedido.cliente_id.label('cliente_id'),
+                func.count(Pedido.id).label('total_pedidos')
+            ).group_by(Pedido.cliente_id).subquery()
+
+            # --- Construir la consulta principal ---
+            query = db.session.query(
+                Cliente,
+                # Usar coalesce para mostrar 0 si no hay ventas/pedidos
+                func.coalesce(venta_stats.c.total_ventas, 0).label('total_ventas'),
+                func.coalesce(venta_stats.c.monto_total_comprado, 0).label('monto_total_comprado'),
+                func.coalesce(pedido_stats.c.total_pedidos, 0).label('total_pedidos')
+            ).outerjoin(
+                venta_stats, Cliente.id == venta_stats.c.cliente_id
+            ).outerjoin(
+                pedido_stats, Cliente.id == pedido_stats.c.cliente_id
+            )
+            
+            # (El resto de tu lógica de filtrado se aplica a esta consulta principal)
+            query = query.filter(Cliente.frecuencia_compra_dias.isnot(None))
+            # ... otros filtros
+
+            # Paginación
+            page, per_page = validate_pagination_params()
+            paginated_results = query.paginate(page=page, per_page=per_page, error_out=False)
+
+            # --- Construir la respuesta final ---
+            clientes_con_proyeccion = []
+            for result in paginated_results.items:
+                cliente = result.Cliente
+                cliente_data = cliente_schema.dump(cliente)
+                
+                # Calcular la proyección (esto es rápido, no necesita consulta)
+                cliente_data['proxima_compra_estimada'] = self._calcular_proyeccion_compra(cliente)
+
+                # Agregar las estadísticas ya calculadas por la base de datos
+                monto_total = float(result.monto_total_comprado)
+                total_ventas = result.total_ventas
+                
+                cliente_data['estadisticas'] = {
+                    'total_ventas': total_ventas,
+                    'monto_total_comprado': monto_total,
+                    'total_pedidos': result.total_pedidos,
+                    'saldo_pendiente': float(cliente.saldo_pendiente),
+                    'promedio_compra': monto_total / total_ventas if total_ventas > 0 else 0,
+                    'ultima_actividad': cliente.ultima_fecha_compra.isoformat() if cliente.ultima_fecha_compra else None
+                }
+                clientes_con_proyeccion.append(cliente_data)
+
+            return {
+                "data": clientes_con_proyeccion,
+                "pagination": {
+                    "total": paginated_results.total, "page": paginated_results.page,
+                    "per_page": paginated_results.per_page, "pages": paginated_results.pages
+                }
+            }, 200
+
+        except Exception as e:
+            logger.error(f"Error al obtener lista de proyecciones: {str(e)}")
+            return {"error": "Error al procesar la lista de proyecciones"}, 500
+
+    # Estos helpers ya no necesitan hacer consultas, solo cálculos simples
+    def _calcular_proyeccion_compra(self, cliente):
+        # ... (se mantiene igual)
+        if cliente.ultima_fecha_compra and cliente.frecuencia_compra_dias and cliente.frecuencia_compra_dias > 0:
+            return (cliente.ultima_fecha_compra + timedelta(days=cliente.frecuencia_compra_dias)).isoformat()
+        return None
+    
+    def _calcular_estadisticas_cliente(self, cliente, ventas, pedidos):
+        """
+        Calcula estadísticas adicionales del cliente
+        """
+        estadisticas = {
+            'total_ventas': len(ventas),
+            'total_pedidos': len(pedidos),
+            'monto_total_comprado': 0,
+            'saldo_pendiente': float(cliente.saldo_pendiente),
+            'promedio_compra': 0,
+            'pedidos_por_estado': {},
+            'ultima_actividad': None
+        }
+        
+        # Calcular montos
+        if ventas:
+            estadisticas['monto_total_comprado'] = float(sum(venta.total for venta in ventas))
+            estadisticas['promedio_compra'] = estadisticas['monto_total_comprado'] / len(ventas)
+            estadisticas['ultima_actividad'] = ventas[0].fecha.isoformat()
+        
+        # Contar pedidos por estado
+        for pedido in pedidos:
+            estado = pedido.estado
+            estadisticas['pedidos_por_estado'][estado] = estadisticas['pedidos_por_estado'].get(estado, 0) + 1
+        
+        # Si no hay ventas pero hay pedidos, usar fecha del último pedido
+        if not estadisticas['ultima_actividad'] and pedidos:
+            estadisticas['ultima_actividad'] = pedidos[0].fecha_creacion.isoformat()
+        
+        return estadisticas
+
+class ClienteProyeccionExportResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """
+        Exporta clientes con proyecciones a un archivo Excel de forma optimizada.
+        """
+        parser = reqparse.RequestParser()
+        parser.add_argument('ciudad', type=str, location='args')
+        parser.add_argument('saldo_minimo', type=float, location='args')
+        parser.add_argument('frecuencia_minima', type=int, location='args')
+        args = parser.parse_args()
+
+        try:
+            # --- Subconsulta para agregar estadísticas de ventas ---
+            venta_stats = db.session.query(
+                Venta.cliente_id.label('cliente_id'),
+                func.count(Venta.id).label('total_ventas'),
+                func.sum(Venta.total).label('monto_total_comprado')
+            ).group_by(Venta.cliente_id).subquery()
+            
+            # --- Subconsulta para agregar estadísticas de pedidos ---
+            pedido_stats = db.session.query(
+                Pedido.cliente_id.label('cliente_id'),
+                func.count(Pedido.id).label('total_pedidos')
+            ).group_by(Pedido.cliente_id).subquery()
+
+            # --- Construir la consulta principal ---
+            query = db.session.query(
+                Cliente,
+                func.coalesce(venta_stats.c.total_ventas, 0).label('total_ventas'),
+                func.coalesce(venta_stats.c.monto_total_comprado, 0).label('monto_total_comprado'),
+                func.coalesce(pedido_stats.c.total_pedidos, 0).label('total_pedidos')
+            ).outerjoin(
+                venta_stats, Cliente.id == venta_stats.c.cliente_id
+            ).outerjoin(
+                pedido_stats, Cliente.id == pedido_stats.c.cliente_id
+            )
+            
+            # Aplicar filtros
+            if args['ciudad']:
+                query = query.filter(Cliente.ciudad.ilike(f"%{args['ciudad']}%"))
+            if args['saldo_minimo']:
+                query = query.filter(Cliente.saldo_pendiente >= args['saldo_minimo'])
+            if args['frecuencia_minima']:
+                query = query.filter(Cliente.frecuencia_compra_dias >= args['frecuencia_minima'])
+            
+            # Solo clientes con frecuencia de compra calculada
+            query = query.filter(Cliente.frecuencia_compra_dias.isnot(None))
+            
+            resultados = query.order_by(desc(Cliente.ultima_fecha_compra)).all()
+            
+            if not resultados:
+                return {"message": "No hay clientes con proyecciones para exportar con los filtros seleccionados"}, 404
+
+            # --- Construir los datos para el Excel ---
+            data_para_excel = []
+            for result in resultados:
+                cliente = result.Cliente
+                monto_total = float(result.monto_total_comprado)
+                total_ventas = result.total_ventas
+                
+                # Calcular proyección de próxima compra
+                proxima_compra = None
+                if cliente.ultima_fecha_compra and cliente.frecuencia_compra_dias and cliente.frecuencia_compra_dias > 0:
+                    proxima_compra = (cliente.ultima_fecha_compra + timedelta(days=cliente.frecuencia_compra_dias)).strftime('%Y-%m-%d')
+                
+                data_para_excel.append({
+                    'ID': cliente.id,
+                    'Nombre': cliente.nombre,
+                    'Teléfono': cliente.telefono or 'N/A',
+                    'Dirección': cliente.direccion or 'N/A',
+                    'Ciudad': cliente.ciudad or 'N/A',
+                    'Saldo Pendiente': float(cliente.saldo_pendiente),
+                    'Última Compra': cliente.ultima_fecha_compra.strftime('%Y-%m-%d') if cliente.ultima_fecha_compra else 'N/A',
+                    'Frecuencia Compra (días)': cliente.frecuencia_compra_dias or 0,
+                    'Próxima Compra Estimada': proxima_compra or 'N/A',
+                    'Total Ventas': total_ventas,
+                    'Monto Total Comprado': monto_total,
+                    'Promedio por Compra': monto_total / total_ventas if total_ventas > 0 else 0,
+                    'Total Pedidos': result.total_pedidos
+                })
+
+            df = pd.DataFrame(data_para_excel)
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Clientes Proyecciones')
+            
+            output.seek(0)
+
+            return send_file(
+                output,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                as_attachment=True,
+                download_name=f'clientes_proyecciones_{datetime.now().strftime("%Y%m%d")}.xlsx'
+            )
+
+        except Exception as e:
+            logger.error(f"Error al exportar clientes con proyecciones: {str(e)}")
             return {"error": "Error interno al generar el archivo Excel"}, 500

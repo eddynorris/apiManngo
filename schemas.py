@@ -170,6 +170,8 @@ class PagoSchema(SQLAlchemyAutoSchema):
     venta = fields.Nested(VentaSchema, only=("id", "total"), dump_only=True)
     usuario = fields.Nested(UserSchema, only=("id", "username"), dump_only=True)
     monto = fields.Decimal(as_string=True)
+    monto_depositado = fields.Decimal(as_string=True)
+    monto_en_gerencia = fields.Decimal(as_string=True, dump_only=True)  # Propiedad calculada
     comprobante_url = fields.String(dump_only=True)
 
     class Meta:

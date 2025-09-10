@@ -163,8 +163,7 @@ class DashboardResource(Resource):
             # --- Ensamblar Respuesta Final ---
             dashboard_data = {
                 # Ya no se incluye 'periodo', 'ventas_por_dia', 'pedidos_programados_por_dia'
-                "alertas_stock_bajo": stock_bajo_data,
-                "alertas_lotes_bajos": lotes_alerta_data,
+                # Removidas: "alertas_stock_bajo" y "alertas_lotes_bajos"
                 "clientes_con_saldo_pendiente": clientes_saldo_data,
                 "total_deuda_clientes": total_deuda_clientes
             }

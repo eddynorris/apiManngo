@@ -241,13 +241,30 @@ class Pago(db.Model):
     metodo_pago = db.Column(db.String(20), nullable=False)  # "efectivo", "transferencia", "tarjeta"
     referencia = db.Column(db.String(50))  # Número de transacción o comprobante
     url_comprobante = db.Column(db.String(255))
+    
+    # Campos para rastreo de depósitos directos a cuenta corporativa
+    monto_depositado = db.Column(db.Numeric(12, 2), nullable=True)  # Monto realmente depositado en cuenta corporativa
+    depositado = db.Column(db.Boolean, default=False, nullable=False)  # Si se realizó el depósito
+    fecha_deposito = db.Column(db.DateTime(timezone=True), nullable=True)  # Fecha del depósito bancario
+
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
     usuario = db.relationship('Users')
 
+    @property
+    def monto_en_gerencia(self):
+        """Calcula el monto que quedó en manos de gerentes (no depositado)"""
+        if self.depositado and self.monto_depositado is not None:
+            return self.monto - self.monto_depositado
+        elif not self.depositado:
+            return self.monto
+        return 0
+
     __table_args__ = (
         CheckConstraint("metodo_pago IN ('efectivo', 'deposito', 'transferencia', 'tarjeta', 'yape_plin', 'otro')"),
+        CheckConstraint("monto_depositado >= 0 OR monto_depositado IS NULL"),
+        CheckConstraint("(depositado = true AND monto_depositado IS NOT NULL AND fecha_deposito IS NOT NULL) OR (depositado = false)"),
     )
 
 class Movimiento(db.Model):

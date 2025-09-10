@@ -1,10 +1,8 @@
 from .almacen_resource import AlmacenResource
 from .auth_resource import AuthResource
 from .chat_resource import ChatResource
-from .cliente_proyeccion_resource import ClienteProyeccionResource
-from .cliente_resource import ClienteExportResource, ClienteResource
+from .cliente_resource import ClienteExportResource, ClienteResource, ClienteProyeccionResource, ClienteProyeccionExportResource
 from .dashboard_resource import DashboardResource
-from .deposito_bancario_resource import DepositoBancarioResource
 from .gasto_resource import GastoResource, GastoExportResource
 from .produccion_resource import ProduccionResource, ProduccionEnsamblajeResource
 from .inventario_resource import InventarioResource, InventarioGlobalResource
@@ -12,7 +10,7 @@ from .transferencia_resource import TransferenciaInventarioResource # <-- Import
 from .lote_resource import LoteResource
 from .merma_resource import MermaResource
 from .movimiento_resource import MovimientoResource
-from .pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource
+from .pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource, DepositoBancarioResource as PagoDepositoBancarioResource, PagoExportResource
 from .pedido_resource import PedidoResource, PedidoConversionResource, PedidoFormDataResource
 from .presentacion_resource import PresentacionResource
 from .producto_resource import ProductoResource
@@ -21,7 +19,7 @@ from .receta_resource import RecetaResource
 from .reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource
 from .reporte_produccion_resource import ReporteProduccionBriquetasResource, ReporteProduccionGeneralResource
 from .user_resource import UserResource
-from .venta_resource import VentaResource, VentaFormDataResource
+from .venta_resource import VentaResource, VentaFormDataResource, VentaExportResource, VentaFilterDataResource
 from .ventadetalle_resource import VentaDetalleResource
 
 __all__ = [
@@ -30,9 +28,9 @@ __all__ = [
     'ChatResource',
     'ClienteExportResource',
     'ClienteProyeccionResource',
+    'ClienteProyeccionExportResource',
     'ClienteResource',
     'DashboardResource',
-    'DepositoBancarioResource',
     'GastoResource',
     'GastoExportResource',
     'InventarioResource',
@@ -44,6 +42,8 @@ __all__ = [
     'PagoResource',
     'PagosPorVentaResource',
     'PagoBatchResource',
+    'PagoDepositoBancarioResource',
+    'PagoExportResource',
     'PedidoResource',
     'PedidoConversionResource',
     'PedidoFormDataResource',
@@ -60,6 +60,8 @@ __all__ = [
     'UserResource',
     'VentaResource',
     'VentaFormDataResource',
+    'VentaExportResource',
+    'VentaFilterDataResource',
     'VentaDetalleResource',
 ]
 
@@ -75,6 +77,7 @@ def init_resources(api):
     api.add_resource(ClienteResource, '/clientes', '/clientes/<int:cliente_id>')
     api.add_resource(ClienteProyeccionResource, '/clientes/proyecciones', '/clientes/proyecciones/<int:cliente_id>')
     api.add_resource(ClienteExportResource, '/clientes/exportar')
+    api.add_resource(ClienteProyeccionExportResource, '/clientes/proyecciones/exportar')
     api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
     api.add_resource(LoteResource, '/lotes', '/lotes/<int:lote_id>')
     
@@ -88,11 +91,15 @@ def init_resources(api):
     api.add_resource(VentaResource, '/ventas', '/ventas/<int:venta_id>')
     api.add_resource(VentaFormDataResource, '/ventas/form-data')
     api.add_resource(VentaDetalleResource, '/ventas/<int:venta_id>/detalles')
-    
+    api.add_resource(VentaExportResource, '/ventas/exportar')
+    api.add_resource(VentaFilterDataResource, '/ventas/filtros')
+
     # Pagos
     api.add_resource(PagoResource, '/pagos', '/pagos/<int:pago_id>')
     api.add_resource(PagosPorVentaResource, '/pagos/venta/<int:venta_id>')
     api.add_resource(PagoBatchResource, '/pagos/batch')
+    api.add_resource(PagoDepositoBancarioResource, '/pagos/depositos')
+    api.add_resource(PagoExportResource, '/pagos/exportar')
     
     # Gastos
     api.add_resource(GastoResource, '/gastos', '/gastos/<int:gasto_id>')
@@ -103,7 +110,6 @@ def init_resources(api):
     api.add_resource(PedidoResource, '/pedidos', '/pedidos/<int:pedido_id>')
     api.add_resource(PedidoConversionResource, '/pedidos/<int:pedido_id>/convertir')
     api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
-    api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
     
     # --- Producción y Recetas ---
     # Gestión de Recetas (Admin)
