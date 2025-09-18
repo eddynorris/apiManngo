@@ -242,6 +242,8 @@ class PagoResource(Resource):
         """Registra un nuevo pago."""
         try:
             raw_data, file, _ = _parse_request_data()
+            if raw_data.get('metodo_pago'):
+                raw_data['metodo_pago'] = raw_data['metodo_pago'].lower()
             data = pago_schema.load(raw_data)
             usuario_id = get_jwt().get("sub")
             nuevo_pago = PagoService.create_pago(data, file, usuario_id)
@@ -300,6 +302,8 @@ class PagoBatchResource(Resource):
             pagos_json_str = request.form.get('pagos_json_data')
             fecha_str = request.form.get('fecha')
             metodo_pago = request.form.get('metodo_pago')
+            if metodo_pago:
+                metodo_pago = metodo_pago.lower()
             referencia = request.form.get('referencia')
             file = request.files.get('comprobante')
 
