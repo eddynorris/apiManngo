@@ -5,7 +5,7 @@ from flask import request
 from models import DepositoBancario, Almacen, Users
 from schemas import deposito_bancario_schema, depositos_bancarios_schema
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido, validate_pagination_params, create_pagination_response
+from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido, validate_pagination_params, create_pagination_response, parse_iso_datetime
 from utils.file_handlers import save_file, delete_file, get_presigned_url
 from datetime import datetime
 from decimal import Decimal
@@ -81,13 +81,13 @@ class DepositoBancarioResource(Resource):
         # Filtrar por fecha
         if fecha_desde := request.args.get('fecha_desde'):
             try:
-                query = query.filter(DepositoBancario.fecha_deposito >= datetime.fromisoformat(fecha_desde))
+                query = query.filter(DepositoBancario.fecha_deposito >= parse_iso_datetime(fecha_desde, add_timezone=False))
             except ValueError:
                 return {"error": "Formato de fecha_desde inválido (YYYY-MM-DD)"}, 400
         if fecha_hasta := request.args.get('fecha_hasta'):
             try:
                  # Asegurarse de incluir todo el día hasta las 23:59:59.999999
-                 fecha_hasta_dt = datetime.fromisoformat(fecha_hasta).replace(hour=23, minute=59, second=59, microsecond=999999)
+                 fecha_hasta_dt = parse_iso_datetime(fecha_hasta, add_timezone=False).replace(hour=23, minute=59, second=59, microsecond=999999)
                  query = query.filter(DepositoBancario.fecha_deposito <= fecha_hasta_dt)
             except ValueError:
                 return {"error": "Formato de fecha_hasta inválido (YYYY-MM-DD)"}, 400
@@ -130,7 +130,7 @@ class DepositoBancarioResource(Resource):
             if not all([fecha_deposito_str, monto_depositado_str, almacen_id_str]):
                 return {"error": "Faltan campos requeridos (fecha_deposito, monto_depositado, almacen_id)"}, 400
 
-            fecha_deposito = datetime.fromisoformat(fecha_deposito_str)
+            fecha_deposito = parse_iso_datetime(fecha_deposito_str, add_timezone=False)
             monto_depositado = Decimal(monto_depositado_str)
             almacen_id = int(almacen_id_str)
             
@@ -192,7 +192,7 @@ class DepositoBancarioResource(Resource):
         try:
             # Actualizar campos si están presentes en el form
             if fecha_str := request.form.get('fecha_deposito'):
-                deposito.fecha_deposito = datetime.fromisoformat(fecha_str)
+                deposito.fecha_deposito = parse_iso_datetime(fecha_str, add_timezone=False)
             if monto_str := request.form.get('monto_depositado'):
                  monto = Decimal(monto_str)
                  if monto <= 0:
@@ -284,4 +284,4 @@ class DepositoBancarioResource(Resource):
             db.session.rollback()
             logger.error(f"Error al eliminar depósito ID {deposito_id}: {e}")
             # No reintentar la eliminación del archivo S3 en caso de error de DB
-            raise e # Relanzar para handle_db_errors 
+            raise e # Relanzar para handle_db_errors

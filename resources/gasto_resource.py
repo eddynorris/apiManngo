@@ -5,7 +5,7 @@ from flask import request, send_file
 from models import Gasto, Almacen, Users
 from schemas import gasto_schema, gastos_schema
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE
+from common import handle_db_errors, MAX_ITEMS_PER_PAGE, parse_iso_datetime
 from sqlalchemy import asc, desc
 import pandas as pd
 import io
@@ -155,8 +155,8 @@ class GastoExportResource(Resource):
             # Filtro de fecha mejorado para rangos
             if args['fecha_inicio'] and args['fecha_fin']:
                 try:
-                    fecha_inicio = datetime.fromisoformat(args['fecha_inicio']).date()
-                    fecha_fin = datetime.fromisoformat(args['fecha_fin']).date()
+                    fecha_inicio = parse_iso_datetime(args['fecha_inicio'], add_timezone=False).date()
+                    fecha_fin = parse_iso_datetime(args['fecha_fin'], add_timezone=False).date()
                     query = query.filter(Gasto.fecha.between(fecha_inicio, fecha_fin))
                 except ValueError:
                     return {"error": "Formato de fecha inválido. Usa YYYY-MM-DD"}, 400

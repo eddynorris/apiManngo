@@ -12,8 +12,14 @@ from sqlalchemy.orm import joinedload
 from common import handle_db_errors
 from extensions import db
 from models import Almacen, Inventario, Movimiento, PresentacionProducto
+# Imports agregados para el método GET
+from schemas import almacenes_schema
+from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
+
+
+# --- CAPA DE SERVICIO PARA LA LÓGICA DE NEGOCIO ---
 
 class TransferenciaService:
     """Encapsula toda la lógica de negocio para las transferencias de inventario."""
@@ -76,7 +82,6 @@ class TransferenciaService:
                 
                 self.transferencias_validadas.append({
                     'presentacion_id': int(transfer['presentacion_id']),
-                    'lote_id': int(transfer['lote_id']) if transfer.get('lote_id') is not None else None,
                     'cantidad': cantidad
                 })
             except (ValueError, TypeError, InvalidOperation) as e:
@@ -95,14 +100,14 @@ class TransferenciaService:
             Inventario.presentacion_id.in_(ids_presentaciones)
         ).all()
         
-        # Crear un diccionario con una clave compuesta (presentacion_id, lote_id)
-        return {(inv.presentacion_id, inv.lote_id): inv for inv in inventarios}
+        # Para almacén origen: usar solo presentacion_id (un inventario por presentación)
+        # Para almacén destino: usar solo presentacion_id (un inventario por presentación)
+        return {inv.presentacion_id: inv for inv in inventarios}
 
     def _validar_stock(self, inventarios_origen):
         """Valida que haya stock suficiente para todas las transferencias."""
         for transfer in self.transferencias_validadas:
-            clave_inv = (transfer['presentacion_id'], transfer['lote_id'])
-            inv_origen = inventarios_origen.get(clave_inv)
+            inv_origen = inventarios_origen.get(transfer['presentacion_id'])
 
             if not inv_origen or inv_origen.cantidad < transfer['cantidad']:
                 stock_disponible = inv_origen.cantidad if inv_origen else 0
@@ -123,9 +128,8 @@ class TransferenciaService:
         transferencias_realizadas_info = []
 
         for transfer in self.transferencias_validadas:
-            clave_inv = (transfer['presentacion_id'], transfer['lote_id'])
-            inv_origen = inventarios_origen[clave_inv]
-            inv_destino = inventarios_destino.get(clave_inv)
+            inv_origen = inventarios_origen[transfer['presentacion_id']]
+            inv_destino = inventarios_destino.get(transfer['presentacion_id'])
 
             cantidad = transfer['cantidad']
 
@@ -138,7 +142,7 @@ class TransferenciaService:
                 inv_destino_nuevo = Inventario(
                     presentacion_id=transfer['presentacion_id'],
                     almacen_id=self.almacen_destino_id,
-                    lote_id=transfer['lote_id'],
+                    lote_id=None,  # Las transferencias no manejan lotes específicos
                     cantidad=cantidad,
                     stock_minimo=inv_origen.stock_minimo
                 )
@@ -149,18 +153,24 @@ class TransferenciaService:
             motivo_entrada = f"Transferencia desde {self.almacen_origen.nombre} (Op: {self.id_operacion})"
 
             movimientos_a_crear.append(Movimiento(
-                tipo='salida', motivo=motivo_salida, **transfer,
+                tipo='salida', motivo=motivo_salida, 
+                presentacion_id=transfer['presentacion_id'],
+                lote_id=None,  # Las transferencias no manejan lotes específicos
+                cantidad=cantidad,
                 usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
             ))
             movimientos_a_crear.append(Movimiento(
-                tipo='entrada', motivo=motivo_entrada, **transfer,
+                tipo='entrada', motivo=motivo_entrada, 
+                presentacion_id=transfer['presentacion_id'],
+                lote_id=None,  # Las transferencias no manejan lotes específicos
+                cantidad=cantidad,
                 usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
             ))
             
             transferencias_realizadas_info.append({
                 "presentacion_nombre": inv_origen.presentacion.nombre,
                 "cantidad": str(cantidad),
-                "lote_id": transfer['lote_id']
+                "lote_id": None  # Las transferencias no manejan lotes específicos
             })
 
         db.session.add_all(movimientos_a_crear)
@@ -170,6 +180,78 @@ class TransferenciaService:
 # --- RECURSO DE LA API (MÁS LIMPIO Y SIMPLE) ---
 
 class TransferenciaInventarioResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """
+        Obtiene de forma optimizada los datos necesarios para el formulario de transferencias.
+        Devuelve una lista de almacenes y una lista de presentaciones con su
+        inventario disponible agrupado.
+        """
+        almacen_id_filtro = request.args.get('almacen_id', type=int)
+        
+        try:
+            # 1. Obtener todos los almacenes para los selectores del frontend
+            almacenes = Almacen.query.order_by(Almacen.nombre).all()
+
+            # 2. Consulta única y optimizada para todo el inventario relevante
+            query = db.session.query(Inventario).options(
+                joinedload(Inventario.presentacion),
+                joinedload(Inventario.lote),
+                joinedload(Inventario.almacen)
+            ).join(
+                PresentacionProducto, Inventario.presentacion_id == PresentacionProducto.id
+            ).filter(
+                PresentacionProducto.activo == True,
+                PresentacionProducto.tipo == 'procesado',
+                Inventario.cantidad > 0
+            ).order_by(PresentacionProducto.nombre, Inventario.almacen_id)
+
+            if almacen_id_filtro:
+                query = query.filter(Inventario.almacen_id == almacen_id_filtro)
+            
+            inventario_disponible = query.all()
+
+            # 3. Procesar y agrupar los datos eficientemente en Python
+            presentaciones_agrupadas = {}
+            for inv in inventario_disponible:
+                pres_id = inv.presentacion.id
+                
+                # Si es la primera vez que vemos esta presentación, creamos su objeto base
+                if pres_id not in presentaciones_agrupadas:
+                    presentaciones_agrupadas[pres_id] = {
+                        "id": pres_id,
+                        "nombre": inv.presentacion.nombre,
+                        "url_foto": get_presigned_url(inv.presentacion.url_foto) if inv.presentacion.url_foto else None,
+                        "inventarios": []
+                    }
+
+                # Construimos la información del lote manualmente para evitar schemas en bucle
+                lote_info = None
+                if inv.lote:
+                    lote_info = {
+                        "id": inv.lote.id,
+                        "descripcion": inv.lote.descripcion
+                    }
+
+                # Agregamos la información de este inventario específico a su presentación
+                presentaciones_agrupadas[pres_id]['inventarios'].append({
+                    "almacen_id": inv.almacen_id,
+                    "almacen_nombre": inv.almacen.nombre,
+                    "stock_disponible": float(inv.cantidad),
+                    "lote_id": inv.lote_id,
+                    "lote_info": lote_info
+                })
+            
+            return {
+                "almacenes": almacenes_schema.dump(almacenes),
+                "presentaciones_disponibles": list(presentaciones_agrupadas.values())
+            }, 200
+
+        except Exception as e:
+            logger.error(f"Error al obtener datos para formulario de transferencia: {str(e)}", exc_info=True)
+            return {"error": "Error interno al obtener datos para transferencias."}, 500
+
     @jwt_required()
     @handle_db_errors
     def post(self):
@@ -197,3 +279,4 @@ class TransferenciaInventarioResource(Resource):
             db.session.rollback()
             logger.error(f"Error crítico en transferencia: {str(e)}", exc_info=True)
             return {"error": "Ocurrió un error interno al procesar la transferencia."}, 500
+

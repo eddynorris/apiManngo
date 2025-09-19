@@ -7,12 +7,78 @@ from flask_jwt_extended import verify_jwt_in_request, get_jwt
 import logging
 import re
 import werkzeug.exceptions
+from datetime import datetime, timezone
 
 # Configuración de logging
 logger = logging.getLogger(__name__)
 
 # Límite de paginación para evitar consultas pesadas
 MAX_ITEMS_PER_PAGE = 100
+
+def parse_iso_datetime(date_string, add_timezone=True):
+    """
+    Parsea una fecha ISO 8601 de manera robusta, manejando diferentes formatos.
+    
+    Args:
+        date_string (str): Fecha en formato ISO 8601
+        add_timezone (bool): Si True, agrega timezone UTC si no está presente
+        
+    Returns:
+        datetime: Objeto datetime parseado
+        
+    Raises:
+        ValueError: Si el formato de fecha es inválido
+    """
+    if not date_string:
+        raise ValueError("La fecha no puede estar vacía")
+    
+    # Normalizar la cadena de fecha
+    date_string = date_string.strip()
+    
+    # Manejar diferentes formatos de timezone
+    if date_string.endswith('Z'):
+        # Formato con Z (Zulu time)
+        date_string = date_string.replace('Z', '+00:00')
+    elif '+' not in date_string and '-' not in date_string[-6:]:
+        # No tiene timezone, agregar UTC si se solicita
+        if add_timezone:
+            if 'T' in date_string:
+                date_string += '+00:00'
+            else:
+                # Solo fecha, agregar hora y timezone
+                date_string += 'T00:00:00+00:00'
+    
+    try:
+        # Intentar parsear con fromisoformat
+        dt = datetime.fromisoformat(date_string)
+        
+        # Si add_timezone es True y no tiene timezone, agregar UTC
+        if add_timezone and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+            
+        return dt
+    except ValueError as e:
+        # Si falla, intentar otros formatos comunes
+        formats_to_try = [
+            '%Y-%m-%dT%H:%M:%S.%fZ',
+            '%Y-%m-%dT%H:%M:%SZ', 
+            '%Y-%m-%dT%H:%M:%S.%f',
+            '%Y-%m-%dT%H:%M:%S',
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%d'
+        ]
+        
+        for fmt in formats_to_try:
+            try:
+                dt = datetime.strptime(date_string.replace('Z', ''), fmt)
+                if add_timezone:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except ValueError:
+                continue
+                
+        # Si ningún formato funciona, lanzar error descriptivo
+        raise ValueError(f"Formato de fecha inválido: '{date_string}'. Use formato ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)")
 
 def sanitize_input(value, allowed_pattern=None):
     """Sanitiza entrada para prevenir inyección SQL y otros ataques"""

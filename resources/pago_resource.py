@@ -13,7 +13,7 @@ from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import BadRequest, NotFound, Forbidden
 
-from common import MAX_ITEMS_PER_PAGE, handle_db_errors
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, parse_iso_datetime
 from extensions import db
 from models import Almacen, Cliente, Pago, Users, Venta, Gasto
 from schemas import pago_schema, pagos_schema, gastos_schema
@@ -152,7 +152,7 @@ class PagoService:
                 pagos_data_list = json.loads(pagos_json_str)
                 if not isinstance(pagos_data_list, list) or not pagos_data_list:
                     raise PagoValidationError("pagos_json_data debe ser una lista no vacía.")
-                fecha_pago = datetime.fromisoformat(fecha_str)
+                fecha_pago = parse_iso_datetime(fecha_str, add_timezone=False)
             except (json.JSONDecodeError, ValueError):
                 raise PagoValidationError("Formato JSON o de fecha inválido.")
 
@@ -390,7 +390,7 @@ class DepositoBancarioResource(Resource):
             return {"error": "Campos requeridos: 'depositos' (lista) y 'fecha_deposito'"}, 400
         
         try:
-            fecha_deposito = datetime.fromisoformat(fecha_deposito_str.replace('Z', '+00:00'))
+            fecha_deposito = parse_iso_datetime(fecha_deposito_str, add_timezone=True)
         except ValueError:
             return {"error": "Formato de fecha inválido"}, 400
 
@@ -520,10 +520,10 @@ class CierreCajaResource(Resource):
             if not fecha_inicio_str or not fecha_fin_str:
                 return {"error": "Los filtros 'fecha_inicio' y 'fecha_fin' son requeridos."}, 400
 
-            fecha_inicio = datetime.fromisoformat(fecha_inicio_str).replace(tzinfo=timezone.utc)
-            fecha_fin = datetime.fromisoformat(fecha_fin_str).replace(tzinfo=timezone.utc)
-        except ValueError:
-            return {"error": "Formato de fecha inválido. Usa ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)."}, 400
+            fecha_inicio = parse_iso_datetime(fecha_inicio_str, add_timezone=True)
+            fecha_fin = parse_iso_datetime(fecha_fin_str, add_timezone=True)
+        except ValueError as e:
+            return {"error": str(e)}, 400
 
         almacen_id = request.args.get('almacen_id', type=int)
         usuario_id = request.args.get('usuario_id', type=int)

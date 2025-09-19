@@ -70,6 +70,7 @@ class Lote(db.Model):
     codigo_lote = db.Column(db.String(100), unique=True, nullable=True)
     es_produccion = db.Column(db.Boolean, default=False, nullable=False)
     lote_origen_id = db.Column(db.Integer, db.ForeignKey('lotes.id'), nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=True)
 
 
 

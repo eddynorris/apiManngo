@@ -4,7 +4,7 @@ from flask import request, send_file
 from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Lote, Users
 from schemas import venta_schema, ventas_schema, clientes_schema, almacenes_schema, presentacion_schema
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
+from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
 from utils.file_handlers import get_presigned_url
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -68,8 +68,8 @@ class VentaResource(Resource):
 
         if filters["fecha_inicio"] and filters["fecha_fin"]:
             try:
-                fecha_inicio = datetime.fromisoformat(filters["fecha_inicio"]).replace(tzinfo=timezone.utc)
-                fecha_fin = datetime.fromisoformat(filters["fecha_fin"]).replace(tzinfo=timezone.utc)
+                fecha_inicio = parse_iso_datetime(filters["fecha_inicio"], add_timezone=True)
+                fecha_fin = parse_iso_datetime(filters["fecha_fin"], add_timezone=True)
                 query = query.filter(Venta.fecha.between(fecha_inicio, fecha_fin))
             except ValueError:
                 return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400
@@ -416,8 +416,8 @@ class VentaExportResource(Resource):
 
             if args['fecha_inicio'] and args['fecha_fin']:
                 try:
-                    fecha_inicio = datetime.fromisoformat(args['fecha_inicio']).replace(tzinfo=timezone.utc)
-                    fecha_fin = datetime.fromisoformat(args['fecha_fin']).replace(tzinfo=timezone.utc)
+                    fecha_inicio = parse_iso_datetime(args['fecha_inicio'], add_timezone=True)
+                    fecha_fin = parse_iso_datetime(args['fecha_fin'], add_timezone=True)
                     query = query.filter(Venta.fecha.between(fecha_inicio, fecha_fin))
                 except ValueError:
                     return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400

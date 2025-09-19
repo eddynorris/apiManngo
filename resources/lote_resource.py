@@ -27,6 +27,7 @@ class LoteResource(Resource):
             'peso_humedo_kg': Lote.peso_humedo_kg,
             'peso_seco_kg': Lote.peso_seco_kg,
             'cantidad_disponible_kg': Lote.cantidad_disponible_kg,
+            'is_active': Lote.is_active,
             'producto_nombre': Producto.nombre,
             'proveedor_nombre': Proveedor.nombre
         }
@@ -35,6 +36,15 @@ class LoteResource(Resource):
         order_func = desc if sort_order == 'desc' else asc
 
         query = Lote.query
+
+        # Filtro por is_active
+        is_active = request.args.get('is_active')
+        if is_active is not None:
+            # Convertir string a boolean
+            if is_active.lower() in ['true', '1', 'yes']:
+                query = query.filter(Lote.is_active == True)
+            elif is_active.lower() in ['false', '0', 'no']:
+                query = query.filter(Lote.is_active == False)
 
         if sort_by == 'producto_nombre':
             query = query.join(Producto, Lote.producto_id == Producto.id)
@@ -96,6 +106,10 @@ class LoteResource(Resource):
         # Si no se proporciona peso seco, usar el húmedo como inicial
         if not nuevo_lote.peso_seco_kg:
             nuevo_lote.peso_seco_kg = peso_humedo
+        
+        # Establecer is_active como True por defecto si no se proporciona
+        if not hasattr(nuevo_lote, 'is_active') or nuevo_lote.is_active is None:
+            nuevo_lote.is_active = True
         
         # La cantidad disponible inicialmente es el peso húmedo
         nuevo_lote.cantidad_disponible_kg = peso_humedo

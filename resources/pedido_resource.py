@@ -4,7 +4,7 @@ from flask import request
 from models import Pedido, PedidoDetalle, Cliente, PresentacionProducto, Almacen, Inventario, Movimiento, VentaDetalle, Venta, Users
 from schemas import pedido_schema, pedidos_schema, venta_schema, clientes_schema, almacenes_schema, presentacion_schema
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin
+from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from utils.file_handlers import get_presigned_url
@@ -87,8 +87,8 @@ class PedidoResource(Resource):
         if fecha_inicio := request.args.get('fecha_inicio'):
             if fecha_fin := request.args.get('fecha_fin'):
                 try:
-                    fecha_inicio = datetime.fromisoformat(fecha_inicio).replace(tzinfo=timezone.utc)
-                    fecha_fin = datetime.fromisoformat(fecha_fin).replace(tzinfo=timezone.utc)
+                    fecha_inicio = parse_iso_datetime(fecha_inicio, add_timezone=True)
+                    fecha_fin = parse_iso_datetime(fecha_fin, add_timezone=True)
                     
                     # Filtrar por fecha de entrega
                     query = query.filter(Pedido.fecha_entrega.between(fecha_inicio, fecha_fin))
