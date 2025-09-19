@@ -10,7 +10,7 @@ from .transferencia_resource import TransferenciaInventarioResource # <-- Import
 from .lote_resource import LoteResource
 from .merma_resource import MermaResource
 from .movimiento_resource import MovimientoResource
-from .pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource, DepositoBancarioResource as PagoDepositoBancarioResource, PagoExportResource
+from .pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource, DepositoBancarioResource as PagoDepositoBancarioResource, PagoExportResource, CierreCajaResource
 from .pedido_resource import PedidoResource, PedidoConversionResource, PedidoFormDataResource
 from .presentacion_resource import PresentacionResource
 from .producto_resource import ProductoResource
@@ -44,6 +44,7 @@ __all__ = [
     'PagoBatchResource',
     'PagoDepositoBancarioResource',
     'PagoExportResource',
+    'CierreCajaResource',
     'PedidoResource',
     'PedidoConversionResource',
     'PedidoFormDataResource',
@@ -100,6 +101,7 @@ def init_resources(api):
     api.add_resource(PagoBatchResource, '/pagos/batch')
     api.add_resource(PagoDepositoBancarioResource, '/pagos/depositos')
     api.add_resource(PagoExportResource, '/pagos/exportar')
+    api.add_resource(CierreCajaResource, '/pagos/cierrecaja')
     
     # Gastos
     api.add_resource(GastoResource, '/gastos', '/gastos/<int:gasto_id>')

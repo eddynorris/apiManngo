@@ -167,7 +167,7 @@ class VentaSchema(SQLAlchemyAutoSchema):
         unknown = EXCLUDE
 
 class PagoSchema(SQLAlchemyAutoSchema):
-    venta = fields.Nested(VentaSchema, only=("id", "total"), dump_only=True)
+    venta = fields.Nested(VentaSchema, only=("id", "total","cliente"), dump_only=True)
     usuario = fields.Nested(UserSchema, only=("id", "username"), dump_only=True)
     monto = fields.Decimal(as_string=True)
     monto_depositado = fields.Decimal(as_string=True)

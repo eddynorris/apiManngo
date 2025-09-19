@@ -2,27 +2,27 @@
 import json
 import logging
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import pandas as pd
 from flask import request, send_file
 from flask_jwt_extended import jwt_required, get_jwt
-from flask_restful import Resource, reqparse
-from sqlalchemy import asc, desc
+from flask_restful import Resource
+from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import BadRequest, NotFound, Forbidden
 
 from common import MAX_ITEMS_PER_PAGE, handle_db_errors
 from extensions import db
-from models import Almacen, Cliente, Pago, Users, Venta
-from schemas import pago_schema, pagos_schema
+from models import Almacen, Cliente, Pago, Users, Venta, Gasto
+from schemas import pago_schema, pagos_schema, gastos_schema
 from utils.file_handlers import delete_file, get_presigned_url, save_file
 
 # Configuración de Logging
 logger = logging.getLogger(__name__)
 
-# --- EXCEPCIONES PERSONALIZADAS PARA LA LÓGICA DE NEGOCIO ---
+# --- EXCEPCIONES PERSONALIZADAS ---
 class PagoValidationError(ValueError):
     """Error de validación específico para la lógica de pagos."""
     pass
@@ -33,8 +33,9 @@ class PagoService:
 
     @staticmethod
     def find_pago_by_id(pago_id):
-        """Encuentra un pago por su ID o lanza un error 404."""
-        pago = Pago.query.get(pago_id)
+        """Encuentra un pago por su ID o lanza un error 404 si no se encuentra."""
+        # MEJORA: Usar db.session.get() y get_or_404 para consistencia y simplicidad.
+        pago = db.session.get(Pago, pago_id)
         if not pago:
             raise NotFound("Pago no encontrado.")
         return pago
@@ -44,6 +45,7 @@ class PagoService:
         """Valida que el monto de un pago no exceda el saldo pendiente de la venta."""
         pagos_anteriores = sum(p.monto for p in venta.pagos if p.id != pago_existente_id)
         saldo_pendiente = venta.total - pagos_anteriores
+        # Se usa una pequeña tolerancia para evitar errores de punto flotante con Decimal
         if monto > saldo_pendiente + Decimal("0.001"):
             raise PagoValidationError(
                 f"El monto a pagar ({monto}) excede el saldo pendiente ({saldo_pendiente})."
@@ -51,7 +53,7 @@ class PagoService:
 
     @staticmethod
     def get_pagos_query(filters):
-        """Construye una consulta de pagos optimizada con filtros y carga ansiosa."""
+        """Construye una consulta de pagos optimizada con filtros y carga ansiosa (eager loading)."""
         query = Pago.query.options(
             joinedload(Pago.venta).joinedload(Venta.cliente),
             joinedload(Pago.venta).joinedload(Venta.almacen),
@@ -80,19 +82,24 @@ class PagoService:
         venta_id = data.get("venta_id")
         if not venta_id:
             raise PagoValidationError("El campo 'venta_id' es requerido.")
+        
         venta = Venta.query.get_or_404(venta_id)
         monto = data.get("monto", Decimal("0"))
+        
         PagoService._validate_monto(venta, monto)
+        
         s3_key = None
         if file and file.filename:
             s3_key = save_file(file, "comprobantes")
             if not s3_key:
                 raise Exception("Ocurrió un error interno al guardar el comprobante.")
+        
         nuevo_pago = Pago(**data)
         nuevo_pago.usuario_id = usuario_id
         nuevo_pago.url_comprobante = s3_key
+        
         db.session.add(nuevo_pago)
-        venta.actualizar_estado(nuevo_pago)
+        venta.actualizar_estado() # La actualización ahora se basa en el estado de la sesión
         return nuevo_pago
 
     @staticmethod
@@ -100,10 +107,13 @@ class PagoService:
         """Actualiza un pago existente, valida y gestiona el comprobante."""
         pago = PagoService.find_pago_by_id(pago_id)
         venta = pago.venta
+        
         if "monto" in data:
             PagoService._validate_monto(venta, data["monto"], pago_existente_id=pago_id)
+        
         for key, value in data.items():
             setattr(pago, key, value)
+            
         if eliminar_comprobante and pago.url_comprobante:
             delete_file(pago.url_comprobante)
             pago.url_comprobante = None
@@ -114,6 +124,7 @@ class PagoService:
             if not s3_key:
                 raise Exception("Error al subir el nuevo comprobante.")
             pago.url_comprobante = s3_key
+            
         venta.actualizar_estado()
         return pago
 
@@ -129,13 +140,9 @@ class PagoService:
 
     @staticmethod
     def create_batch_pagos(pagos_json_str, file, fecha_str, metodo_pago, referencia, claims):
-        """
-        Crea múltiples pagos en lote desde un único comprobante (opcional).
-        Operación transaccional: o todo tiene éxito o todo se revierte.
-        """
+        """Crea múltiples pagos en lote. Operación transaccional."""
         s3_key_comprobante = None
         try:
-            # Solo guardar el archivo si existe.
             if file and file.filename:
                 s3_key_comprobante = save_file(file, 'comprobantes')
                 if not s3_key_comprobante:
@@ -149,52 +156,67 @@ class PagoService:
             except (json.JSONDecodeError, ValueError):
                 raise PagoValidationError("Formato JSON o de fecha inválido.")
 
-            ventas_procesadas = {}
+            venta_ids = {p.get('venta_id') for p in pagos_data_list if p.get('venta_id') is not None}
+            if not venta_ids:
+                raise PagoValidationError("No se proporcionaron IDs de venta en los datos de pagos.")
+
+            # OPTIMIZACIÓN: Realizar una sola consulta para todas las ventas.
+            ventas = Venta.query.filter(Venta.id.in_(venta_ids)).all()
+            ventas_map = {v.id: v for v in ventas}
+            
+            if len(ventas_map) != len(venta_ids):
+                raise NotFound("Una o más ventas no fueron encontradas.")
+
             pagos_a_crear_info = []
+            saldos_provisionales = {vid: v.saldo_pendiente for vid, v in ventas_map.items()}
 
             for pago_info in pagos_data_list:
                 venta_id = pago_info.get('venta_id')
                 monto_str = pago_info.get('monto')
+
                 if venta_id is None or monto_str is None:
                     raise PagoValidationError(f"Cada pago debe tener venta_id y monto. Falló en: {pago_info}")
+
+                venta = ventas_map.get(venta_id)
+                if not venta:
+                    raise NotFound(f"Venta con ID {venta_id} no encontrada (esto no debería ocurrir).")
+                
+                if claims.get('rol') != 'admin' and venta.almacen_id != claims.get('almacen_id'):
+                    raise Forbidden(f"No tiene permisos para pagos en el almacén de la venta {venta_id}.")
+                
                 monto = Decimal(str(monto_str))
                 if monto <= 0:
                     raise PagoValidationError(f"El monto para venta_id {venta_id} debe ser positivo.")
-                if venta_id not in ventas_procesadas:
-                    venta = Venta.query.get(venta_id)
-                    if not venta:
-                        raise NotFound(f"Venta con ID {venta_id} no encontrada.")
-                    if claims.get('rol') != 'admin' and venta.almacen_id != claims.get('almacen_id'):
-                        raise Forbidden(f"No tiene permisos para pagos en el almacén de la venta {venta_id}.")
-                    ventas_procesadas[venta_id] = {"venta_obj": venta, "saldo_pendiente": venta.saldo_pendiente}
-                
-                saldo_actual = ventas_procesadas[venta_id]["saldo_pendiente"]
+
+                saldo_actual = saldos_provisionales[venta_id]
                 if monto > saldo_actual + Decimal('0.001'):
                     raise PagoValidationError(f"Monto {monto} para venta {venta_id} excede el saldo de {saldo_actual}.")
                 
-                ventas_procesadas[venta_id]["saldo_pendiente"] -= monto
+                saldos_provisionales[venta_id] -= monto
                 pagos_a_crear_info.append({"venta_id": venta_id, "monto": monto})
 
             pagos_creados = []
             usuario_id = claims.get('sub')
             for pago_info in pagos_a_crear_info:
-                venta = ventas_procesadas[pago_info['venta_id']]['venta_obj']
                 nuevo_pago = Pago(
                     venta_id=pago_info['venta_id'], usuario_id=usuario_id, monto=pago_info['monto'],
                     fecha=fecha_pago, metodo_pago=metodo_pago, referencia=referencia,
                     url_comprobante=s3_key_comprobante
                 )
                 db.session.add(nuevo_pago)
-                venta.actualizar_estado(nuevo_pago)
                 pagos_creados.append(nuevo_pago)
+            
+            # Actualizar el estado de todas las ventas afectadas al final
+            for venta in ventas_map.values():
+                venta.actualizar_estado()
+
             return pagos_creados
         except Exception:
-            # Si se subió un archivo y algo falló después, se elimina.
             if s3_key_comprobante:
                 delete_file(s3_key_comprobante)
             raise
 
-# --- FUNCIONES AUXILIARES PARA RESOURCES ---
+# --- FUNCIONES AUXILIARES ---
 def _parse_request_data():
     """Unifica la obtención de datos de JSON y multipart/form-data."""
     if 'multipart/form-data' in request.content_type:
@@ -208,7 +230,8 @@ def _parse_request_data():
 
 def _get_presigned_url_for_item(item_dump, s3_key):
     """Genera y asigna una URL pre-firmada a un objeto serializado."""
-    item_dump['url_comprobante'] = get_presigned_url(s3_key) if s3_key else None
+    if s3_key:
+        item_dump['url_comprobante'] = get_presigned_url(s3_key)
     return item_dump
 
 # --- RESOURCES DE LA API ---
@@ -228,13 +251,25 @@ class PagoResource(Resource):
         sort_column = getattr(Pago, sort_by, Pago.fecha)
         order_func = desc if sort_order == 'desc' else asc
         query = query.order_by(order_func(sort_column))
+        
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         pagos_paginados = query.paginate(page=page, per_page=per_page, error_out=False)
         pagos_dump = pagos_schema.dump(pagos_paginados.items)
-        for i, pago in enumerate(pagos_paginados.items):
-             _get_presigned_url_for_item(pagos_dump[i], pago.url_comprobante)
-        return {"data": pagos_dump, "pagination": {"total": pagos_paginados.total, "page": pagos_paginados.page, "per_page": pagos_paginados.per_page, "pages": pagos_paginados.pages,}}, 200
+        
+        # MEJORA: Usar zip para una iteración más segura y pitónica.
+        for pago_obj, dump_item in zip(pagos_paginados.items, pagos_dump):
+             _get_presigned_url_for_item(dump_item, pago_obj.url_comprobante)
+
+        return {
+            "data": pagos_dump, 
+            "pagination": {
+                "total": pagos_paginados.total, 
+                "page": pagos_paginados.page, 
+                "per_page": pagos_paginados.per_page, 
+                "pages": pagos_paginados.pages,
+            }
+        }, 200
 
     @jwt_required()
     @handle_db_errors
@@ -244,15 +279,20 @@ class PagoResource(Resource):
             raw_data, file, _ = _parse_request_data()
             if raw_data.get('metodo_pago'):
                 raw_data['metodo_pago'] = raw_data['metodo_pago'].lower()
+                
             data = pago_schema.load(raw_data)
             usuario_id = get_jwt().get("sub")
             nuevo_pago = PagoService.create_pago(data, file, usuario_id)
-            db.session.commit()  # Cambio de flush() a commit() para guardar en BD
+            
+            db.session.commit()
+            
             pago_dump = pago_schema.dump(nuevo_pago)
             return _get_presigned_url_for_item(pago_dump, nuevo_pago.url_comprobante), 201
         except PagoValidationError as e:
+            db.session.rollback()
             return {"error": str(e)}, 400
         except Exception as e:
+            db.session.rollback()
             logger.error(f"Error al crear pago: {e}")
             return {"error": "Error interno al procesar el pago."}, 500
 
@@ -264,11 +304,16 @@ class PagoResource(Resource):
             raw_data, file, eliminar_comprobante = _parse_request_data()
             data = pago_schema.load(raw_data, partial=True)
             pago_actualizado = PagoService.update_pago(pago_id, data, file, eliminar_comprobante)
+
+            db.session.commit()
+            
             pago_dump = pago_schema.dump(pago_actualizado)
             return _get_presigned_url_for_item(pago_dump, pago_actualizado.url_comprobante), 200
         except PagoValidationError as e:
+            db.session.rollback()
             return {"error": str(e)}, 400
         except Exception as e:
+            db.session.rollback()
             logger.error(f"Error al actualizar pago {pago_id}: {e}")
             return {"error": "Error interno al actualizar el pago."}, 500
 
@@ -277,7 +322,9 @@ class PagoResource(Resource):
     def delete(self, pago_id):
         """Elimina un pago."""
         PagoService.delete_pago(pago_id)
+        db.session.commit()
         return {"message": "Pago eliminado exitosamente"}, 200
+
 
 class PagosPorVentaResource(Resource):
     @jwt_required()
@@ -328,59 +375,106 @@ class PagoBatchResource(Resource):
             return {"error": "Ocurrió un error interno, la operación fue revertida."}, 500
 
 class DepositoBancarioResource(Resource):
-    """Endpoint para registrar depósitos bancarios de pagos existentes"""
     @jwt_required()
     @handle_db_errors
     def post(self):
-        """Registra un depósito bancario para uno o múltiples pagos"""
+        """Registra un depósito bancario para uno o múltiples pagos."""
         data = request.get_json()
         if not data:
             return {"error": "No se proporcionaron datos"}, 400
-        pago_ids = data.get('pago_ids', [])
-        monto_depositado = data.get('monto_depositado')
-        fecha_deposito = data.get('fecha_deposito')
-        if not all([pago_ids, monto_depositado, fecha_deposito]):
-            return {"error": "Campos requeridos: pago_ids, monto_depositado, fecha_deposito"}, 400
+        
+        depositos = data.get('depositos', [])
+        fecha_deposito_str = data.get('fecha_deposito')
+
+        if not depositos or not fecha_deposito_str:
+            return {"error": "Campos requeridos: 'depositos' (lista) y 'fecha_deposito'"}, 400
+        
         try:
-            monto_depositado = Decimal(str(monto_depositado))
-        except (ValueError, InvalidOperation):
-            return {"error": "Monto depositado inválido"}, 400
+            fecha_deposito = datetime.fromisoformat(fecha_deposito_str.replace('Z', '+00:00'))
+        except ValueError:
+            return {"error": "Formato de fecha inválido"}, 400
+
+        pago_ids = [d.get('pago_id') for d in depositos]
+        if not all(pago_ids):
+             return {"error": "Cada depósito debe tener un 'pago_id'"}, 400
+
+        # OPTIMIZACIÓN: Buscar todos los pagos en una sola consulta
         pagos = Pago.query.filter(Pago.id.in_(pago_ids)).all()
-        if len(pagos) != len(pago_ids):
+        pagos_map = {p.id: p for p in pagos}
+
+        if len(pagos) != len(set(pago_ids)):
             return {"error": "Algunos pagos no fueron encontrados"}, 404
-        monto_total_pagos = sum(p.monto for p in pagos if not p.depositado)
-        if monto_depositado > monto_total_pagos:
-            return {"error": f"Monto depositado {monto_depositado} excede el total de pagos pendientes {monto_total_pagos}"}, 400
-        
+
         pagos_actualizados = []
-        monto_restante = monto_depositado
-        for pago in sorted(pagos, key=lambda p: p.fecha):
-            if monto_restante <= 0: break
-            monto_a_depositar = min(pago.monto - (pago.monto_depositado or 0), monto_restante)
+        monto_total_depositado = Decimal('0')
+
+        for deposito_data in depositos:
+            pago_id = deposito_data['pago_id']
+            monto_str = deposito_data.get('monto_depositado')
+            pago = pagos_map[pago_id]
+
+            try:
+                monto_a_depositar = Decimal(str(monto_str))
+                if monto_a_depositar < 0:
+                    raise ValueError
+            except (InvalidOperation, ValueError):
+                return {"error": f"Monto depositado inválido para pago {pago_id}"}, 400
+
+            monto_disponible = pago.monto - (pago.monto_depositado or Decimal('0'))
+            if monto_a_depositar > monto_disponible + Decimal('0.001'):
+                return {"error": f"Monto a depositar {monto_a_depositar} para pago {pago.id} excede el disponible {monto_disponible}"}, 400
+
             if monto_a_depositar > 0:
-                pago.monto_depositado = (pago.monto_depositado or 0) + monto_a_depositar
+                pago.monto_depositado = (pago.monto_depositado or Decimal('0')) + monto_a_depositar
                 pago.depositado = True
-                pago.fecha_deposito = datetime.fromisoformat(fecha_deposito.replace('Z', '+00:00')) if isinstance(fecha_deposito, str) else fecha_deposito
-                monto_restante -= monto_a_depositar
+                pago.fecha_deposito = fecha_deposito
+                pago.depositado
                 pagos_actualizados.append(pago)
-        return {"message": "Depósito registrado exitosamente.", "pagos_actualizados": len(pagos_actualizados), "monto_total_depositado": str(monto_depositado), "pagos": [pago_schema.dump(p) for p in pagos_actualizados]}, 200
+                monto_total_depositado += monto_a_depositar
         
+        db.session.commit()
+
+        return {
+            "message": "Depósito registrado exitosamente.",
+            "pagos_actualizados": len(pagos_actualizados),
+            "monto_total_depositado": str(monto_total_depositado),
+            "pagos": [pago_schema.dump(p) for p in pagos_actualizados]
+        }, 200
+
     @jwt_required()
     @handle_db_errors
     def get(self):
-        """Obtiene resumen de depósitos y montos en gerencia"""
-        query = db.session.query(Pago).join(Venta)
+        """Obtiene resumen de depósitos y montos en gerencia, incluyendo datos del cliente."""
+        # MEJORA: Añadir joinedload para incluir Venta y Cliente en una sola consulta.
+        query = db.session.query(Pago).options(
+            joinedload(Pago.venta).joinedload(Venta.cliente)
+        )
+
         if fecha_desde := request.args.get('fecha_desde'):
             query = query.filter(Pago.fecha >= fecha_desde)
         if fecha_hasta := request.args.get('fecha_hasta'):
             query = query.filter(Pago.fecha <= fecha_hasta)
         if almacen_id := request.args.get('almacen_id'):
-            query = query.filter(Venta.almacen_id == almacen_id)
+            query = query.join(Venta).filter(Venta.almacen_id == almacen_id)
+        
         pagos = query.all()
+
         total_pagos = sum(p.monto for p in pagos)
         total_depositado = sum(p.monto_depositado or 0 for p in pagos)
         total_en_gerencia = total_pagos - total_depositado
-        return {"resumen": {"total_pagos": str(total_pagos), "total_depositado": str(total_depositado), "total_en_gerencia": str(total_en_gerencia)}, "pagos_depositados": [pago_schema.dump(p) for p in pagos if p.depositado], "pagos_pendientes_deposito": [pago_schema.dump(p) for p in pagos if not p.depositado]}, 200
+        
+        pagos_dump_depositados = pagos_schema.dump([p for p in pagos if p.depositado])
+        pagos_dump_pendientes = pagos_schema.dump([p for p in pagos if not p.depositado])
+        
+        return {
+            "resumen": {
+                "total_pagos": str(total_pagos), 
+                "total_depositado": str(total_depositado), 
+                "total_en_gerencia": str(total_en_gerencia)
+            }, 
+            "pagos_depositados": pagos_dump_depositados, 
+            "pagos_pendientes_deposito": pagos_dump_pendientes
+        }, 200
 
 class PagoExportResource(Resource):
     @jwt_required()
@@ -414,3 +508,64 @@ class PagoExportResource(Resource):
         except Exception as e:
             logger.error(f"Error al exportar pagos: {str(e)}")
             return {"error": "Error interno al generar el archivo Excel."}, 500
+
+class CierreCajaResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """Obtiene datos para el Cierre de Caja, incluyendo detalles del cliente en los pagos."""
+        try:
+            fecha_inicio_str = request.args.get('fecha_inicio')
+            fecha_fin_str = request.args.get('fecha_fin')
+            if not fecha_inicio_str or not fecha_fin_str:
+                return {"error": "Los filtros 'fecha_inicio' y 'fecha_fin' son requeridos."}, 400
+
+            fecha_inicio = datetime.fromisoformat(fecha_inicio_str).replace(tzinfo=timezone.utc)
+            fecha_fin = datetime.fromisoformat(fecha_fin_str).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return {"error": "Formato de fecha inválido. Usa ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)."}, 400
+
+        almacen_id = request.args.get('almacen_id', type=int)
+        usuario_id = request.args.get('usuario_id', type=int)
+
+        # MEJORA: Asegurar que se cargue el cliente junto con el pago y la venta.
+        pagos_query = db.session.query(Pago).options(
+            joinedload(Pago.venta).joinedload(Venta.cliente), # Carga Cliente
+            joinedload(Pago.usuario)
+        ).filter(
+            Pago.depositado == False,
+            Pago.fecha.between(fecha_inicio, fecha_fin)
+        )
+        if usuario_id:
+            pagos_query = pagos_query.filter(Pago.usuario_id == usuario_id)
+        if almacen_id:
+            pagos_query = pagos_query.join(Venta).filter(Venta.almacen_id == almacen_id)
+
+        gastos_query = db.session.query(Gasto).filter(
+            Gasto.fecha.between(fecha_inicio.date(), fecha_fin.date())
+        )
+        if usuario_id:
+            gastos_query = gastos_query.filter(Gasto.usuario_id == usuario_id)
+        if almacen_id:
+            gastos_query = gastos_query.filter(Gasto.almacen_id == almacen_id)
+
+        # Consultas de agregación y detalle
+        total_cobrado_pendiente = pagos_query.with_entities(func.sum(Pago.monto)).scalar() or Decimal('0.0')
+        total_gastado = gastos_query.with_entities(func.sum(Gasto.monto)).scalar() or Decimal('0.0')
+
+        pagos_pendientes_detalle = pagos_query.order_by(Pago.fecha.asc()).all()
+        gastos_detalle = gastos_query.order_by(Gasto.fecha.asc()).all()
+
+        efectivo_esperado = total_cobrado_pendiente - total_gastado
+
+        return {
+            "resumen": {
+                "total_cobrado_pendiente": str(total_cobrado_pendiente),
+                "total_gastado": str(total_gastado),
+                "efectivo_esperado": str(efectivo_esperado)
+            },
+            "detalles": {
+                "pagos_pendientes": pagos_schema.dump(pagos_pendientes_detalle),
+                "gastos": gastos_schema.dump(gastos_detalle)
+            }
+        }, 200
