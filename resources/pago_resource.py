@@ -130,11 +130,22 @@ class PagoService:
 
     @staticmethod
     def delete_pago(pago_id):
-        """Elimina un pago, su comprobante y actualiza la venta."""
+        """Elimina un pago, su comprobante (solo si no es usado por otros pagos) y actualiza la venta."""
         pago = PagoService.find_pago_by_id(pago_id)
         venta = pago.venta
+        
         if pago.url_comprobante:
-            delete_file(pago.url_comprobante)
+            # --- LÓGICA DE SEGURIDAD AÑADIDA ---
+            # Contar cuántos otros pagos usan el mismo comprobante.
+            otros_pagos_con_mismo_comprobante = db.session.query(Pago.id).filter(
+                Pago.url_comprobante == pago.url_comprobante,
+                Pago.id != pago.id
+            ).count()
+
+            # Solo borrar el archivo si ningún otro pago lo está usando.
+            if otros_pagos_con_mismo_comprobante == 0:
+                delete_file(pago.url_comprobante)
+        
         db.session.delete(pago)
         venta.actualizar_estado()
 
@@ -379,13 +390,24 @@ class DepositoBancarioResource(Resource):
     @jwt_required()
     @handle_db_errors
     def post(self):
-        """Registra un depósito bancario para uno o múltiples pagos."""
-        data = request.get_json()
-        if not data:
-            return {"error": "No se proporcionaron datos"}, 400
-        
-        depositos = data.get('depositos', [])
-        fecha_deposito_str = data.get('fecha_deposito')
+        """Registra un depósito bancario para uno o múltiples pagos y asocia un comprobante común."""
+        comprobante_file = None
+        if 'multipart/form-data' in request.content_type:
+            depositos_json_str = request.form.get('depositos')
+            fecha_deposito_str = request.form.get('fecha_deposito')
+            comprobante_file = request.files.get('comprobante_deposito') # Nombre más específico
+            
+            if not depositos_json_str:
+                return {"error": "Campo 'depositos' (JSON string) es requerido"}, 400
+            try:
+                depositos = json.loads(depositos_json_str)
+            except json.JSONDecodeError:
+                return {"error": "Formato JSON inválido en 'depositos'"}, 400
+        else:
+            data = request.get_json()
+            if not data: return {"error": "No se proporcionaron datos"}, 400
+            depositos = data.get('depositos', [])
+            fecha_deposito_str = data.get('fecha_deposito')
 
         if not depositos or not fecha_deposito_str:
             return {"error": "Campos requeridos: 'depositos' (lista) y 'fecha_deposito'"}, 400
@@ -395,15 +417,18 @@ class DepositoBancarioResource(Resource):
         except ValueError:
             return {"error": "Formato de fecha inválido"}, 400
 
-        pago_ids = [d.get('pago_id') for d in depositos]
-        if not all(pago_ids):
-             return {"error": "Cada depósito debe tener un 'pago_id'"}, 400
+        s3_key_comprobante = None
+        if comprobante_file and comprobante_file.filename:
+            s3_key_comprobante = save_file(comprobante_file, 'comprobantes_depositos')
+            if not s3_key_comprobante:
+                return {"error": "Error interno al guardar el comprobante"}, 500
 
-        # OPTIMIZACIÓN: Buscar todos los pagos en una sola consulta
+        pago_ids = [d.get('pago_id') for d in depositos]
         pagos = Pago.query.filter(Pago.id.in_(pago_ids)).all()
         pagos_map = {p.id: p for p in pagos}
 
         if len(pagos) != len(set(pago_ids)):
+            if s3_key_comprobante: delete_file(s3_key_comprobante)
             return {"error": "Algunos pagos no fueron encontrados"}, 404
 
         pagos_actualizados = []
@@ -411,25 +436,23 @@ class DepositoBancarioResource(Resource):
 
         for deposito_data in depositos:
             pago_id = deposito_data['pago_id']
-            monto_str = deposito_data.get('monto_depositado')
+            monto_a_depositar = Decimal(str(deposito_data.get('monto_depositado', '0')))
             pago = pagos_map[pago_id]
-
-            try:
-                monto_a_depositar = Decimal(str(monto_str))
-                if monto_a_depositar < 0:
-                    raise ValueError
-            except (InvalidOperation, ValueError):
-                return {"error": f"Monto depositado inválido para pago {pago_id}"}, 400
-
+            
             monto_disponible = pago.monto - (pago.monto_depositado or Decimal('0'))
             if monto_a_depositar > monto_disponible + Decimal('0.001'):
-                return {"error": f"Monto a depositar {monto_a_depositar} para pago {pago.id} excede el disponible {monto_disponible}"}, 400
+                if s3_key_comprobante: delete_file(s3_key_comprobante)
+                return {"error": f"Monto para pago {pago.id} excede el disponible {monto_disponible}"}, 400
 
             if monto_a_depositar > 0:
                 pago.monto_depositado = (pago.monto_depositado or Decimal('0')) + monto_a_depositar
                 pago.depositado = True
                 pago.fecha_deposito = fecha_deposito
-                pago.depositado
+                
+                # Asigna la URL del comprobante a cada pago
+                if s3_key_comprobante:
+                    pago.url_comprobante = s3_key_comprobante
+                
                 pagos_actualizados.append(pago)
                 monto_total_depositado += monto_a_depositar
         
@@ -438,44 +461,9 @@ class DepositoBancarioResource(Resource):
         return {
             "message": "Depósito registrado exitosamente.",
             "pagos_actualizados": len(pagos_actualizados),
-            "monto_total_depositado": str(monto_total_depositado),
             "pagos": [pago_schema.dump(p) for p in pagos_actualizados]
         }, 200
 
-    @jwt_required()
-    @handle_db_errors
-    def get(self):
-        """Obtiene resumen de depósitos y montos en gerencia, incluyendo datos del cliente."""
-        # MEJORA: Añadir joinedload para incluir Venta y Cliente en una sola consulta.
-        query = db.session.query(Pago).options(
-            joinedload(Pago.venta).joinedload(Venta.cliente)
-        )
-
-        if fecha_desde := request.args.get('fecha_desde'):
-            query = query.filter(Pago.fecha >= fecha_desde)
-        if fecha_hasta := request.args.get('fecha_hasta'):
-            query = query.filter(Pago.fecha <= fecha_hasta)
-        if almacen_id := request.args.get('almacen_id'):
-            query = query.join(Venta).filter(Venta.almacen_id == almacen_id)
-        
-        pagos = query.all()
-
-        total_pagos = sum(p.monto for p in pagos)
-        total_depositado = sum(p.monto_depositado or 0 for p in pagos)
-        total_en_gerencia = total_pagos - total_depositado
-        
-        pagos_dump_depositados = pagos_schema.dump([p for p in pagos if p.depositado])
-        pagos_dump_pendientes = pagos_schema.dump([p for p in pagos if not p.depositado])
-        
-        return {
-            "resumen": {
-                "total_pagos": str(total_pagos), 
-                "total_depositado": str(total_depositado), 
-                "total_en_gerencia": str(total_en_gerencia)
-            }, 
-            "pagos_depositados": pagos_dump_depositados, 
-            "pagos_pendientes_deposito": pagos_dump_pendientes
-        }, 200
 
 class PagoExportResource(Resource):
     @jwt_required()
