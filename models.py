@@ -1,5 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import CheckConstraint, UniqueConstraint, Index
+from sqlalchemy import CheckConstraint, UniqueConstraint, Index, func
 from datetime import datetime, timezone
 from extensions import db
 from decimal import Decimal
@@ -147,13 +147,25 @@ class Venta(db.Model):
         total_pagado = sum(pago.monto for pago in self.pagos)
         return self.total - total_pagado
 
-    def actualizar_estado(self, nuevo_pago=None):
-        total_pagado = sum(pago.monto for pago in self.pagos)
-        if nuevo_pago:
-            total_pagado += nuevo_pago.monto
+    def actualizar_estado(self, **kwargs):
+        """
+        Actualiza el estado de pago de la venta basándose en la suma
+        directa de los pagos en la base de datos para mayor fiabilidad.
+        """
+        # Se importa aquí para evitar dependencia circular
+        from models import Pago
+
+        # Consulta directa a la BD para obtener la suma real de pagos,
+        # incluyendo los que acaban de ser "flusheados".
+        total_pagado_query = db.session.query(func.sum(Pago.monto)).filter(Pago.venta_id == self.id).scalar()
+
+        # Si no hay pagos, el resultado es None, lo convertimos a Decimal(0)
+        total_pagado = total_pagado_query or Decimal('0.0')
+
         saldo = self.total - total_pagado
-        
-        if abs(saldo) <= 0.001:
+
+        # Usar una pequeña tolerancia para errores de punto flotante
+        if abs(saldo) <= Decimal('0.001'):
             self.estado_pago = 'pagado'
         elif total_pagado > 0:
             self.estado_pago = 'parcial'
