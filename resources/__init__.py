@@ -86,6 +86,7 @@ def init_resources(api):
     api.add_resource(InventarioResource, '/inventarios', '/inventarios/<int:inventario_id>')
     api.add_resource(InventarioGlobalResource, '/inventario/reporte-global')
     api.add_resource(TransferenciaInventarioResource, '/inventario/transferir')
+
     api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimiento_id>')
     
     # Ventas

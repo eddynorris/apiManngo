@@ -206,6 +206,7 @@ class PagoService:
                 db.session.add(nuevo_pago)
                 pagos_creados.append(nuevo_pago)
             
+            db.session.flush()
             # Actualizar el estado de todas las ventas afectadas al final
             for venta in ventas_map.values():
                 venta.actualizar_estado()
