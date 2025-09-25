@@ -513,8 +513,8 @@ class CierreCajaResource(Resource):
             if not fecha_inicio_str or not fecha_fin_str:
                 return {"error": "Los filtros 'fecha_inicio' y 'fecha_fin' son requeridos."}, 400
 
-            fecha_inicio = datetime.fromisoformat(fecha_inicio_str)
-            fecha_fin = datetime.fromisoformat(fecha_fin_str)
+            fecha_inicio = parse_iso_datetime(fecha_inicio_str, add_timezone=False)
+            fecha_fin = parse_iso_datetime(fecha_fin_str, add_timezone=False)
         except (ValueError, TypeError) as e:
             return {"error": f"Formato de fecha inválido: {e}"}, 400
 
