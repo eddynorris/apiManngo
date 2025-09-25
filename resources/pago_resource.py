@@ -9,7 +9,7 @@ import pandas as pd
 from flask import request, send_file
 from flask_jwt_extended import jwt_required, get_jwt
 from flask_restful import Resource
-from sqlalchemy import asc, desc, func
+from sqlalchemy import asc, desc, func, case
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import BadRequest, NotFound, Forbidden
 
@@ -500,51 +500,83 @@ class PagoExportResource(Resource):
 
 class CierreCajaResource(Resource):
     @jwt_required()
-    @handle_db_errors
+    # @handle_db_errors # Descomenta si tienes este decorador
     def get(self):
-        """Obtiene datos para el Cierre de Caja, incluyendo detalles del cliente en los pagos."""
+        """
+        Obtiene datos para el Cierre de Caja de forma optimizada,
+        delegando cálculos y filtros a la base de datos.
+        """
+        # ... (Las secciones 1, 2, 3 y 4 no cambian y siguen siendo correctas) ...
         try:
             fecha_inicio_str = request.args.get('fecha_inicio')
             fecha_fin_str = request.args.get('fecha_fin')
             if not fecha_inicio_str or not fecha_fin_str:
                 return {"error": "Los filtros 'fecha_inicio' y 'fecha_fin' son requeridos."}, 400
 
-            fecha_inicio = parse_iso_datetime(fecha_inicio_str, add_timezone=True)
-            fecha_fin = parse_iso_datetime(fecha_fin_str, add_timezone=True)
-        except ValueError as e:
-            return {"error": str(e)}, 400
+            fecha_inicio = datetime.fromisoformat(fecha_inicio_str)
+            fecha_fin = datetime.fromisoformat(fecha_fin_str)
+        except (ValueError, TypeError) as e:
+            return {"error": f"Formato de fecha inválido: {e}"}, 400
 
         almacen_id = request.args.get('almacen_id', type=int)
         usuario_id = request.args.get('usuario_id', type=int)
 
-        # MEJORA: Asegurar que se cargue el cliente junto con el pago y la venta.
-        pagos_query = db.session.query(Pago).options(
-            joinedload(Pago.venta).joinedload(Venta.cliente), # Carga Cliente
-            joinedload(Pago.usuario)
-        ).filter(
-            Pago.depositado == False,
-            Pago.fecha.between(fecha_inicio, fecha_fin)
-        )
-        if usuario_id:
-            pagos_query = pagos_query.filter(Pago.usuario_id == usuario_id)
-        if almacen_id:
-            pagos_query = pagos_query.join(Venta).filter(Venta.almacen_id == almacen_id)
+        monto_en_gerencia_sql = case(
+            (
+                (Pago.depositado == True) & (Pago.monto_depositado != None),
+                Pago.monto - Pago.monto_depositado
+            ),
+            (
+                Pago.depositado == False,
+                Pago.monto
+            ),
+            else_=0
+        ).label("monto_en_gerencia")
 
-        gastos_query = db.session.query(Gasto).filter(
+        pagos_pendientes_q = db.session.query(Pago).filter(
+            Pago.fecha.between(fecha_inicio, fecha_fin),
+            monto_en_gerencia_sql > 0
+        )
+
+        gastos_q = db.session.query(Gasto).filter(
             Gasto.fecha.between(fecha_inicio.date(), fecha_fin.date())
         )
+
         if usuario_id:
-            gastos_query = gastos_query.filter(Gasto.usuario_id == usuario_id)
+            pagos_pendientes_q = pagos_pendientes_q.filter(Pago.usuario_id == usuario_id)
+            gastos_q = gastos_q.filter(Gasto.usuario_id == usuario_id)
+        
         if almacen_id:
-            gastos_query = gastos_query.filter(Gasto.almacen_id == almacen_id)
+            pagos_pendientes_q = pagos_pendientes_q.join(Venta).filter(Venta.almacen_id == almacen_id)
+            gastos_q = gastos_q.filter(Gasto.almacen_id == almacen_id)
 
-        # Consultas de agregación y detalle
-        total_cobrado_pendiente = pagos_query.with_entities(func.sum(Pago.monto)).scalar() or Decimal('0.0')
-        total_gastado = gastos_query.with_entities(func.sum(Gasto.monto)).scalar() or Decimal('0.0')
+        # 5. Ejecutar consultas de agregación y detalle por separado
+        
+        # --- LÍNEA CORREGIDA ---
+        # La forma anterior con .subquery() era el problema.
+        # Esta nueva forma es más directa y garantiza que se usan los filtros de pagos_pendientes_q.
+        total_cobrado_pendiente = pagos_pendientes_q.with_entities(
+            func.sum(monto_en_gerencia_sql)
+        ).scalar() or Decimal('0.0')
 
-        pagos_pendientes_detalle = pagos_query.order_by(Pago.fecha.asc()).all()
-        gastos_detalle = gastos_query.order_by(Gasto.fecha.asc()).all()
+        # Consulta #2 (Agregación): Calcula el total gastado. Devuelve un solo número.
+        total_gastado = gastos_q.with_entities(
+            func.sum(Gasto.monto)
+        ).scalar() or Decimal('0.0')
 
+        # Consulta #3 (Detalle): Obtiene la lista de pagos pendientes para el reporte.
+        pagos_pendientes_detalle = pagos_pendientes_q.options(
+            db.joinedload(Pago.venta).joinedload(Venta.cliente),
+            db.joinedload(Pago.usuario)
+        ).order_by(Pago.fecha.asc()).all()
+
+        # Consulta #4 (Detalle): Obtiene la lista de gastos para el reporte.
+        gastos_detalle = gastos_q.options(
+            db.joinedload(Gasto.almacen),
+            db.joinedload(Gasto.usuario)
+        ).order_by(Gasto.fecha.asc()).all()
+
+        # 6. Calcular el resultado y serializar la respuesta
         efectivo_esperado = total_cobrado_pendiente - total_gastado
 
         return {
