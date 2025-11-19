@@ -445,3 +445,20 @@ class ComponenteReceta(db.Model):
         CheckConstraint("tipo_consumo IN ('materia_prima', 'insumo')"),
         UniqueConstraint('receta_id', 'componente_presentacion_id', name='uq_receta_componente')
     )
+
+class VistaClienteProyeccion(db.Model):
+    __tablename__ = 'vista_clientes_proyeccion'
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(255))
+    telefono = db.Column(db.String(20))
+    ciudad = db.Column(db.String(100))
+    ultima_fecha_compra = db.Column(db.DateTime(timezone=True))
+    frecuencia_compra_dias = db.Column(db.Integer)
+    saldo_pendiente = db.Column(db.Numeric(12, 2))
+    proxima_compra_estimada = db.Column(db.DateTime(timezone=True))
+    dias_desde_ultima_compra = db.Column(db.Integer)
+    dias_retraso = db.Column(db.Integer)
+    estado_proyeccion = db.Column(db.String(20))
+    total_ventas = db.Column(db.Integer)
+    monto_total_comprado = db.Column(db.Numeric(12, 2))
+    promedio_compra = db.Column(db.Numeric(12, 2))

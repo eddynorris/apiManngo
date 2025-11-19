@@ -201,6 +201,48 @@ def handle_not_found_error(e):
 def handle_method_not_allowed(e):
     return jsonify({"error": "Método no permitido"}), 405
 
+@app.errorhandler(413)
+def handle_request_entity_too_large(e):
+    """Maneja el error 413 Request Entity Too Large con información útil para debug."""
+    content_length = request.content_length or 0
+    max_content_length = app.config.get('MAX_CONTENT_LENGTH', 0)
+    
+    logger.error(f"Error 413 - Request Entity Too Large: "
+                f"Content-Length: {content_length} bytes, "
+                f"MAX_CONTENT_LENGTH: {max_content_length} bytes, "
+                f"URL: {request.url}, "
+                f"Method: {request.method}, "
+                f"Content-Type: {request.content_type}")
+    
+    # Información adicional para debug
+    debug_info = {}
+    if not IS_PRODUCTION:
+        debug_info = {
+            "content_length_received": content_length,
+            "max_content_length_configured": max_content_length,
+            "content_type": request.content_type,
+            "url": request.url,
+            "method": request.method
+        }
+    
+    return jsonify({
+        "error": "Request Entity Too Large",
+        "message": f"El tamaño de la solicitud ({content_length} bytes) excede el límite permitido ({max_content_length} bytes)",
+        "possible_causes": [
+            "El archivo adjunto es demasiado grande",
+            "Los datos JSON son demasiado extensos", 
+            "Límite configurado en el servidor web (Nginx/Apache)",
+            "Límite configurado en el proxy/load balancer",
+            "Límite configurado en el servidor WSGI (Gunicorn/uWSGI)"
+        ],
+        "suggestions": [
+            "Reduzca el tamaño del archivo adjunto",
+            "Divida los datos en múltiples requests más pequeños",
+            "Contacte al administrador para revisar la configuración del servidor"
+        ],
+        **debug_info
+    }), 413
+
 # Health check endpoint
 @app.route('/health')
 @limiter.exempt # Eximir health check del rate limiting

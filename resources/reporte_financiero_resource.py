@@ -6,7 +6,8 @@ from datetime import datetime
 from decimal import Decimal
 import logging
 
-from models import db, Venta, VentaDetalle, Gasto, PresentacionProducto, Lote, Pago
+from models import db, Venta, VentaDetalle, Gasto, PresentacionProducto, Lote, Pago, Inventario, Almacen
+from common import handle_db_errors
 from schemas import VentaDetalleSchema, GastoSchema
 
 # Configurar logging
@@ -180,3 +181,186 @@ class ResumenFinancieroResource(Resource):
             db.session.rollback()
             logger.exception("Error en ResumenFinancieroResource")
             return {'error': 'Error interno del servidor', 'details': str(e)}, 500
+
+
+class ReporteUnificadoResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def get(self):
+        """
+        Reporte unificado:
+        - resumen_financiero
+        - kpis
+        - ventas_por_presentacion
+        - inventario_actual
+        Filtros: fecha_inicio, fecha_fin (YYYY-MM-DD), almacen_id, lote_id
+        """
+        # --- Filtros ---
+        fecha_inicio_str = request.args.get('fecha_inicio')
+        fecha_fin_str = request.args.get('fecha_fin')
+        almacen_id = request.args.get('almacen_id', type=int)
+        lote_id = request.args.get('lote_id', type=int)
+
+        fecha_inicio, fecha_fin = None, None
+        if fecha_inicio_str and fecha_fin_str:
+            try:
+                fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
+                fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+            except ValueError:
+                return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
+
+        # --- Ventas base (líneas) ---
+        ventas_q = db.session.query(
+            VentaDetalle.presentacion_id,
+            VentaDetalle.venta_id,
+            VentaDetalle.cantidad.label('unidades'),
+            (VentaDetalle.cantidad * VentaDetalle.precio_unitario).label('total_linea'),
+            (VentaDetalle.cantidad * PresentacionProducto.capacidad_kg).label('kg_linea')
+        ).join(Venta, Venta.id == VentaDetalle.venta_id)
+        ventas_q = ventas_q.join(PresentacionProducto, PresentacionProducto.id == VentaDetalle.presentacion_id)
+        if fecha_inicio and fecha_fin:
+            ventas_q = ventas_q.filter(func.date(Venta.fecha).between(fecha_inicio, fecha_fin))
+        if almacen_id:
+            ventas_q = ventas_q.filter(Venta.almacen_id == almacen_id)
+        if lote_id:
+            ventas_q = ventas_q.filter(VentaDetalle.lote_id == lote_id)
+
+        ventas_sq = ventas_q.subquery()
+
+        # --- Resumen financiero ---
+        total_ventas, num_ventas = db.session.query(
+            func.coalesce(func.sum(ventas_sq.c.total_linea), 0),
+            func.count(distinct(ventas_sq.c.venta_id))
+        ).first()
+        pagos_por_venta_sq = db.session.query(
+            Pago.venta_id,
+            func.sum(Pago.monto).label('total_pagado')
+        ).group_by(Pago.venta_id).subquery()
+
+        venta_ids_filtradas = db.session.query(ventas_sq.c.venta_id).distinct()
+        if lote_id:
+            deuda_total_query = db.session.query(
+                func.coalesce(func.sum(Venta.total - func.coalesce(pagos_por_venta_sq.c.total_pagado, 0)), 0)
+            ).select_from(Venta).outerjoin(
+                pagos_por_venta_sq, Venta.id == pagos_por_venta_sq.c.venta_id
+            ).filter(Venta.id.in_(venta_ids_filtradas))
+            total_deuda = deuda_total_query.scalar() or Decimal('0.00')
+            total_pagado = Decimal(total_ventas) - total_deuda
+        else:
+            total_pagado = db.session.query(func.coalesce(func.sum(Pago.monto), 0))\
+                .filter(Pago.venta_id.in_(venta_ids_filtradas)).scalar() or Decimal('0.00')
+            total_deuda = Decimal(total_ventas) - total_pagado
+
+        gastos_q = db.session.query(func.coalesce(func.sum(Gasto.monto), 0), func.count(Gasto.id))
+        if fecha_inicio and fecha_fin:
+            gastos_q = gastos_q.filter(Gasto.fecha.between(fecha_inicio, fecha_fin))
+        if almacen_id:
+            gastos_q = gastos_q.filter(Gasto.almacen_id == almacen_id)
+        if lote_id:
+            gastos_q = gastos_q.filter(Gasto.lote_id == lote_id)
+        total_gastos, num_gastos = gastos_q.first()
+
+        total_ventas_dec = Decimal(str(total_ventas))
+        total_gastos_dec = Decimal(str(total_gastos))
+        ganancia_neta = total_ventas_dec - total_gastos_dec
+        margen_ganancia = (ganancia_neta / total_ventas_dec * 100) if total_ventas_dec > 0 else Decimal('0.00')
+
+        resumen_financiero = {
+            'total_ventas': str(total_ventas_dec.quantize(Decimal('0.01'))),
+            'total_gastos': str(total_gastos_dec.quantize(Decimal('0.01'))),
+            'ganancia_neta': str(ganancia_neta.quantize(Decimal('0.01'))),
+            'margen_ganancia': f'{margen_ganancia:.2f}%',
+            'total_deuda': str(Decimal(str(total_deuda)).quantize(Decimal('0.01'))),
+            'total_pagado': str(Decimal(str(total_pagado)).quantize(Decimal('0.01')))
+        }
+
+        # --- KPIs ---
+        total_unidades_vendidas, total_kg_vendidos = db.session.query(
+            func.coalesce(func.sum(ventas_sq.c.unidades), 0),
+            func.coalesce(func.sum(ventas_sq.c.kg_linea), 0)
+        ).first()
+        # Inventario valor actual
+        inv_q = db.session.query(
+            func.coalesce(func.sum(Inventario.cantidad * PresentacionProducto.precio_venta), 0)
+        ).join(PresentacionProducto, PresentacionProducto.id == Inventario.presentacion_id).filter(
+            PresentacionProducto.tipo.in_(['procesado', 'briqueta'])
+        )
+        if almacen_id:
+            inv_q = inv_q.filter(Inventario.almacen_id == almacen_id)
+        valor_inventario_actual = inv_q.scalar() or 0
+        kpis = {
+            'total_kg_vendidos': float(total_kg_vendidos or 0),
+            'total_unidades_vendidas': int(total_unidades_vendidas or 0),
+            'valor_inventario_actual': float(valor_inventario_actual)
+        }
+
+        # --- Ventas por presentación ---
+        ventas_por_presentacion = []
+        vpp_rows = db.session.query(
+            ventas_sq.c.presentacion_id,
+            PresentacionProducto.nombre.label('presentacion_nombre'),
+            func.coalesce(func.sum(ventas_sq.c.unidades), 0).label('unidades_vendidas'),
+            func.coalesce(func.sum(ventas_sq.c.total_linea), 0).label('total_vendido'),
+            func.coalesce(func.sum(ventas_sq.c.kg_linea), 0).label('kg_vendidos')
+        ).join(PresentacionProducto, PresentacionProducto.id == ventas_sq.c.presentacion_id)\
+         .group_by(ventas_sq.c.presentacion_id, PresentacionProducto.nombre).all()
+        for r in vpp_rows:
+            ventas_por_presentacion.append({
+                'presentacion_id': int(r.presentacion_id),
+                'presentacion_nombre': r.presentacion_nombre,
+                'unidades_vendidas': int(r.unidades_vendidas or 0),
+                'total_vendido': str(Decimal(str(r.total_vendido or 0)).quantize(Decimal('0.01'))),
+                'kg_vendidos': float(r.kg_vendidos or 0)
+            })
+
+        # --- Inventario actual ---
+        inventario_actual = []
+        inv_rows = db.session.query(
+            Inventario.presentacion_id,
+            PresentacionProducto.nombre.label('presentacion_nombre'),
+            func.coalesce(func.sum(Inventario.cantidad), 0).label('stock_unidades'),
+            func.coalesce(func.sum(Inventario.cantidad * PresentacionProducto.capacidad_kg), 0).label('stock_kg'),
+            func.coalesce(func.sum(Inventario.cantidad * PresentacionProducto.precio_venta), 0).label('valor_estimado')
+        ).join(PresentacionProducto, PresentacionProducto.id == Inventario.presentacion_id).filter(
+            PresentacionProducto.tipo.in_(['procesado', 'briqueta'])
+        )
+        if almacen_id:
+            inv_rows = inv_rows.filter(Inventario.almacen_id == almacen_id)
+        inv_rows = inv_rows.group_by(Inventario.presentacion_id, PresentacionProducto.nombre).all()
+
+        # detalle por almacenes
+        detalle_rows = db.session.query(
+            Inventario.presentacion_id,
+            Almacen.nombre.label('almacen'),
+            func.coalesce(func.sum(Inventario.cantidad), 0).label('cantidad')
+        ).join(Almacen, Almacen.id == Inventario.almacen_id).join(
+            PresentacionProducto, PresentacionProducto.id == Inventario.presentacion_id
+        ).filter(
+            PresentacionProducto.tipo.in_(['procesado', 'briqueta'])
+        )
+        if almacen_id:
+            detalle_rows = detalle_rows.filter(Inventario.almacen_id == almacen_id)
+        detalle_rows = detalle_rows.group_by(Inventario.presentacion_id, Almacen.nombre).all()
+        detalle_map = {}
+        for d in detalle_rows:
+            detalle_map.setdefault(int(d.presentacion_id), []).append({
+                'almacen': d.almacen,
+                'cantidad': int(d.cantidad or 0)
+            })
+
+        for r in inv_rows:
+            inventario_actual.append({
+                'presentacion_id': int(r.presentacion_id),
+                'presentacion_nombre': r.presentacion_nombre,
+                'stock_unidades': int(r.stock_unidades or 0),
+                'stock_kg': float(r.stock_kg or 0),
+                'valor_estimado': str(Decimal(str(r.valor_estimado or 0)).quantize(Decimal('0.01'))),
+                'detalle_almacenes': detalle_map.get(int(r.presentacion_id), [])
+            })
+
+        return {
+            'resumen_financiero': resumen_financiero,
+            'kpis': kpis,
+            'ventas_por_presentacion': ventas_por_presentacion,
+            'inventario_actual': inventario_actual
+        }, 200

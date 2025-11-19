@@ -16,7 +16,7 @@ from .presentacion_resource import PresentacionResource
 from .producto_resource import ProductoResource
 from .proveedor_resource import ProveedorResource
 from .receta_resource import RecetaResource
-from .reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource
+from .reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource, ReporteUnificadoResource
 from .reporte_produccion_resource import ReporteProduccionBriquetasResource, ReporteProduccionGeneralResource
 from .user_resource import UserResource
 from .venta_resource import VentaResource, VentaFormDataResource, VentaExportResource, VentaFilterDataResource
@@ -126,6 +126,7 @@ def init_resources(api):
     api.add_resource(DashboardResource, '/dashboard')
     api.add_resource(ReporteVentasPresentacionResource, '/reportes/ventas-presentacion')
     api.add_resource(ResumenFinancieroResource, '/reportes/resumen-financiero')
+    api.add_resource(ReporteUnificadoResource, '/reportes/unificado')
     api.add_resource(ReporteProduccionBriquetasResource, '/reportes/produccion-briquetas')
     api.add_resource(ReporteProduccionGeneralResource, '/reportes/produccion-general')
     
