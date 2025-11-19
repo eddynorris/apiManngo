@@ -278,6 +278,8 @@ class Pago(db.Model):
         CheckConstraint("metodo_pago IN ('efectivo', 'deposito', 'transferencia', 'tarjeta', 'yape_plin', 'otro')"),
         CheckConstraint("monto_depositado >= 0 OR monto_depositado IS NULL"),
         CheckConstraint("(depositado = true AND monto_depositado IS NOT NULL AND fecha_deposito IS NOT NULL) OR (depositado = false)"),
+        Index('idx_pago_fecha_deposito', 'fecha_deposito'),
+        Index('idx_pago_depositado_fecha', 'depositado', 'fecha_deposito'),
     )
 
 class Movimiento(db.Model):
