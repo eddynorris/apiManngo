@@ -109,6 +109,8 @@ class InventarioSchema(SQLAlchemyAutoSchema):
 class ClienteSchema(SQLAlchemyAutoSchema):
     saldo_pendiente = fields.Decimal(as_string=True, dump_only=True)
     ultima_fecha_compra = fields.DateTime(format="%Y-%m-%d")
+    proxima_compra_manual = fields.Date(format="%Y-%m-%d", allow_none=True)
+    ultimo_contacto = fields.DateTime(format="iso", allow_none=True)
 
     class Meta:
         model = Cliente
@@ -194,19 +196,6 @@ class GastoSchema(SQLAlchemyAutoSchema):
         unknown = EXCLUDE
         sqla_session = db.session
         include_fk = True
-
-class PagoDepositoHistorialSchema(SQLAlchemyAutoSchema):
-    monto_depositado = fields.Decimal(as_string=True)
-    comprobante_url = fields.String(attribute='url_comprobante', dump_only=True)
-    class Meta:
-        model = Pago
-        load_instance = True
-        unknown = EXCLUDE
-        sqla_session = db.session
-        include_fk = True
-        fields = (
-            'id', 'venta_id', 'usuario_id', 'monto_depositado', 'fecha_deposito', 'metodo_pago', 'referencia', 'comprobante_url'
-        )
 
 class PedidoDetalleSchema(SQLAlchemyAutoSchema):
     presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre", "precio_venta", "url_foto"))
@@ -321,7 +310,6 @@ pedidos_detalle_schema = PedidoDetalleSchema(many=True)
 
 deposito_bancario_schema = DepositoBancarioSchema()
 depositos_bancarios_schema = DepositoBancarioSchema(many=True)
-depositos_historial_schema = PagoDepositoHistorialSchema(many=True)
 
 # Esquemas de recetas
 receta_schema = RecetaSchema()

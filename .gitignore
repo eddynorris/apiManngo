@@ -82,5 +82,5 @@ uploads/
 uploads/presentaciones/
 uploads/comprobantes/
 database.sql
-
+migration_view.sql
 migrations/

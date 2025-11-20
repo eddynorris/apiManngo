@@ -136,7 +136,6 @@ class ClienteResource(Resource):
             )
             
             db.session.commit()
-            logger.info(f"Cliente actualizado: {cliente.id} - {cliente.nombre}")
             return cliente_schema.dump(cliente_actualizado), 200
             
         except Exception as e:
@@ -328,11 +327,7 @@ class ClienteProyeccionResource(Resource):
                 ciudad = self._sanitize_text(args.get('ciudad'))
                 if ciudad:
                     query = query.filter(VistaClienteProyeccion.ciudad.ilike(f'%{ciudad}%'))
-            query = query.filter(
-                VistaClienteProyeccion.frecuencia_compra_dias.isnot(None),
-                VistaClienteProyeccion.frecuencia_compra_dias > 0,
-                VistaClienteProyeccion.proxima_compra_estimada.isnot(None)
-            )
+            # Incluir TODOS los clientes; el orden enviará sin proyección al final
             single_date, start_date, end_date = self._parse_date_args(args)
             if single_date or start_date or end_date:
                 date_col = cast(VistaClienteProyeccion.proxima_compra_estimada, Date)
@@ -348,9 +343,6 @@ class ClienteProyeccionResource(Resource):
             paginated_results = query.paginate(page=page, per_page=per_page, error_out=False)
             clientes_con_proyeccion = []
             for vp in paginated_results.items:
-                estado = None
-                if vp.frecuencia_compra_dias and vp.frecuencia_compra_dias > 0 and vp.ultima_fecha_compra:
-                    estado = 'retrasado' if (vp.dias_retraso or 0) > 0 else ('proximo' if vp.estado_proyeccion == 'proximo' else 'programado')
                 cliente_data = {
                     'codigo': str(vp.id),
                     'nombre': vp.nombre,
@@ -358,7 +350,7 @@ class ClienteProyeccionResource(Resource):
                     'ciudad': vp.ciudad,
                     'ultima_fecha_compra': vp.ultima_fecha_compra.isoformat() if vp.ultima_fecha_compra else None,
                     'proxima_fecha_estimada': vp.proxima_compra_estimada.isoformat() if vp.proxima_compra_estimada else None,
-                    'estado_proyeccion': estado or 'sin_proyeccion'
+                    'estado_proyeccion': vp.estado_proyeccion if vp.estado_proyeccion else 'sin_proyeccion'
                 }
                 clientes_con_proyeccion.append(cliente_data)
             return {
@@ -388,26 +380,45 @@ class ClienteProyeccionResource(Resource):
                 'mensaje': 'Cliente sin historial de compras'
             }
         
-        if not cliente.frecuencia_compra_dias or cliente.frecuencia_compra_dias <= 0:
+        # Permitir proyección manual incluso si no hay frecuencia calculada
+        if (not cliente.frecuencia_compra_dias or cliente.frecuencia_compra_dias <= 0) and not cliente.proxima_compra_manual:
             return {
                 'disponible': False,
-                'mensaje': 'Se necesitan al menos 2 compras para calcular frecuencia'
+                'mensaje': 'Se necesitan al menos 2 compras para calcular frecuencia o una proyección manual'
             }
         
         try:
             fecha_actual = datetime.now(timezone.utc)
+            tipo_proyeccion = 'automatica'
+            proxima_fecha = None
             
-            # Calcular próxima fecha estimada
-            proxima_fecha = cliente.ultima_fecha_compra + timedelta(days=cliente.frecuencia_compra_dias)
+            # Prioridad: Proyección Manual
+            if cliente.proxima_compra_manual:
+                # Convertir date a datetime con timezone
+                proxima_fecha = datetime.combine(cliente.proxima_compra_manual, datetime.min.time()).replace(tzinfo=timezone.utc)
+                tipo_proyeccion = 'manual'
+            elif cliente.frecuencia_compra_dias and cliente.frecuencia_compra_dias > 0:
+                # Proyección Automática
+                proxima_fecha = cliente.ultima_fecha_compra + timedelta(days=cliente.frecuencia_compra_dias)
             
+            if not proxima_fecha:
+                 return {
+                    'disponible': False,
+                    'mensaje': 'No se pudo calcular la proyección'
+                }
+
             # Calcular días desde última compra
-            dias_desde_ultima = (fecha_actual.date() - cliente.ultima_fecha_compra.date()).days
+            dias_desde_ultima = (fecha_actual.date() - cliente.ultima_fecha_compra.date()).days if cliente.ultima_fecha_compra else 0
             
             # Calcular retraso o días restantes
             if proxima_fecha.date() < fecha_actual.date():
                 dias_retraso = (fecha_actual.date() - proxima_fecha.date()).days
                 estado = 'retrasado'
-                nivel_urgencia = self._calcular_urgencia(dias_retraso, cliente.frecuencia_compra_dias)
+                # Si es manual, la urgencia es alta si está vencida
+                if tipo_proyeccion == 'manual':
+                    nivel_urgencia = 'alta'
+                else:
+                    nivel_urgencia = self._calcular_urgencia(dias_retraso, cliente.frecuencia_compra_dias or 30)
             else:
                 dias_retraso = 0
                 dias_restantes = (proxima_fecha.date() - fecha_actual.date()).days
@@ -416,6 +427,7 @@ class ClienteProyeccionResource(Resource):
             
             return {
                 'disponible': True,
+                'tipo_proyeccion': tipo_proyeccion,
                 'fecha_estimada': proxima_fecha.isoformat(),
                 'fecha_estimada_formato': proxima_fecha.strftime('%Y-%m-%d'),
                 'dias_retraso': dias_retraso,
@@ -423,7 +435,7 @@ class ClienteProyeccionResource(Resource):
                 'frecuencia_dias': cliente.frecuencia_compra_dias,
                 'estado': estado,
                 'nivel_urgencia': nivel_urgencia,
-                'porcentaje_ciclo': min(100, int((dias_desde_ultima / cliente.frecuencia_compra_dias) * 100))
+                'porcentaje_ciclo': min(100, int((dias_desde_ultima / (cliente.frecuencia_compra_dias or 1)) * 100))
             }
             
         except Exception as e:

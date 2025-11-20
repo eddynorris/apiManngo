@@ -227,6 +227,8 @@ class Cliente(db.Model):
     ciudad = db.Column(db.String(100))
     frecuencia_compra_dias = db.Column(db.Integer)
     ultima_fecha_compra = db.Column(db.DateTime(timezone=True))
+    proxima_compra_manual = db.Column(db.Date, nullable=True)  # Fecha manual de próxima compra
+    ultimo_contacto = db.Column(db.DateTime(timezone=True), nullable=True)  # Fecha del último contacto (llamada, etc.)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
@@ -464,3 +466,5 @@ class VistaClienteProyeccion(db.Model):
     total_ventas = db.Column(db.Integer)
     monto_total_comprado = db.Column(db.Numeric(12, 2))
     promedio_compra = db.Column(db.Numeric(12, 2))
+    proxima_compra_manual = db.Column(db.Date)
+    ultimo_contacto = db.Column(db.DateTime(timezone=True))

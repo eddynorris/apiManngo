@@ -11,7 +11,6 @@ from models import (
     Lote, Pago, Inventario, Almacen
 )
 from common import handle_db_errors
-from schemas import depositos_historial_schema
 from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
