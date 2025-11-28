@@ -4,7 +4,7 @@ from models import (
     Users, Producto, Almacen, Cliente, Gasto, Movimiento, 
     Venta, VentaDetalle, Proveedor, Pago, Inventario,
     PresentacionProducto, Lote, Merma, PedidoDetalle, Pedido, DepositoBancario,
-    Receta, ComponenteReceta # Nuevos modelos de Recetas
+    Receta, ComponenteReceta, ComandoVozLog  # Added for voice command audit
 )
 from extensions import db
 from decimal import Decimal, InvalidOperation
@@ -259,6 +259,14 @@ class RecetaSchema(SQLAlchemyAutoSchema):
         sqla_session = db.session
         include_fk = True
 
+class ComandoVozLogSchema(SQLAlchemyAutoSchema):
+    """Schema for voice command audit logs"""
+    class Meta:
+        model = ComandoVozLog
+        load_instance = True
+        sqla_session = db.session
+        unknown = EXCLUDE
+
 # Inicializar esquemas
 user_schema = UserSchema()
 users_schema = UserSchema(many=True)
@@ -316,3 +324,7 @@ receta_schema = RecetaSchema()
 recetas_schema = RecetaSchema(many=True)
 componente_receta_schema = ComponenteRecetaSchema()
 componentes_receta_schema = ComponenteRecetaSchema(many=True)
+
+# Esquemas de auditoría de comandos de voz
+comando_voz_log_schema = ComandoVozLogSchema()
+comandos_voz_log_schema = ComandoVozLogSchema(many=True)

@@ -1,8 +1,7 @@
-# ARCHIVO: gasto_resource.py
 from flask_restful import Resource, reqparse
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request, send_file
-from models import Gasto, Almacen, Users
+from models import Gasto, Almacen, Users, Lote
 from schemas import gasto_schema, gastos_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, parse_iso_datetime
@@ -10,6 +9,7 @@ from sqlalchemy import asc, desc
 import pandas as pd
 import io
 import logging
+from datetime import datetime
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -40,6 +40,15 @@ class GastoResource(Resource):
         # --- Fin Lógica de Ordenación ---
 
         query = Gasto.query
+        
+        # --- FILTRO POR ROL ---
+        claims = get_jwt()
+        current_user_id = claims.get('sub')
+        rol = claims.get('rol')
+        
+        if rol != 'admin':
+            query = query.filter_by(usuario_id=current_user_id)
+        # ----------------------
 
         # --- Aplicar Joins si es necesario para ordenar ---
         if sort_by == 'almacen_nombre':
@@ -57,6 +66,8 @@ class GastoResource(Resource):
             query = query.filter_by(usuario_id=usuario_id)
         if lote_id := request.args.get('lote_id'):
             query = query.filter_by(lote_id=lote_id)
+        if almacen_id := request.args.get('almacen_id'):
+            query = query.filter_by(almacen_id=almacen_id)
 
         # --- APLICAR ORDENACIÓN ---
         query = query.order_by(order_func(column_to_sort))
@@ -116,61 +127,48 @@ class GastoResource(Resource):
         gasto = Gasto.query.get_or_404(gasto_id)
         db.session.delete(gasto)
         db.session.commit()
-        return "Gasto eliminado correctamente", 200
+        return {"message": "Gasto eliminado exitosamente"}, 200
 
 class GastoExportResource(Resource):
     @jwt_required()
     @handle_db_errors
     def get(self):
-        """
-        Exporta todos los gastos a un archivo Excel de forma optimizada.
-        """
-        parser = reqparse.RequestParser()
-        parser.add_argument('categoria', type=str, location='args')
-        parser.add_argument('usuario_id', type=int, location='args')
-        parser.add_argument('lote_id', type=int, location='args')
-        parser.add_argument('almacen_id', type=int, location='args') # Añadido para consistencia
-        parser.add_argument('fecha_inicio', type=str, location='args') # Mejora para rangos
-        parser.add_argument('fecha_fin', type=str, location='args') # Mejora para rangos
-        args = parser.parse_args()
-
+        """Exporta gastos a Excel"""
         try:
-            # --- MEJORA 1: Carga ansiosa (Eager Loading) de relaciones ---
-            query = Gasto.query.options(
-                orm.joinedload(Gasto.almacen),
-                orm.joinedload(Gasto.usuario),
-                orm.joinedload(Gasto.lote) # Precargamos el lote también
-            )
+            # --- FILTRO POR ROL ---
+            claims = get_jwt()
+            current_user_id = claims.get('sub')
+            rol = claims.get('rol')
+            
+            query = Gasto.query
+            if rol != 'admin':
+                query = query.filter_by(usuario_id=current_user_id)
+            # ----------------------
 
-            # --- La lógica de filtrado se mantiene y se mejora ---
-            if args['categoria']:
-                query = query.filter(Gasto.categoria == args['categoria'])
-            if args['usuario_id']:
-                query = query.filter(Gasto.usuario_id == args['usuario_id'])
-            if args['lote_id']:
-                query = query.filter(Gasto.lote_id == args['lote_id'])
-            if args['almacen_id']:
-                query = query.filter(Gasto.almacen_id == args['almacen_id'])
-
-            # Filtro de fecha mejorado para rangos
-            if args['fecha_inicio'] and args['fecha_fin']:
-                try:
-                    fecha_inicio = parse_iso_datetime(args['fecha_inicio'], add_timezone=False).date()
-                    fecha_fin = parse_iso_datetime(args['fecha_fin'], add_timezone=False).date()
-                    query = query.filter(Gasto.fecha.between(fecha_inicio, fecha_fin))
-                except ValueError:
-                    return {"error": "Formato de fecha inválido. Usa YYYY-MM-DD"}, 400
+            # Filtros adicionales
+            if categoria := request.args.get('categoria'):
+                query = query.filter_by(categoria=categoria)
+            if fecha_inicio := request.args.get('fecha_inicio'):
+                query = query.filter(Gasto.fecha >= fecha_inicio)
+            if fecha_fin := request.args.get('fecha_fin'):
+                query = query.filter(Gasto.fecha <= fecha_fin)
+            if usuario_id := request.args.get('usuario_id'):
+                query = query.filter_by(usuario_id=usuario_id)
+            if lote_id := request.args.get('lote_id'):
+                query = query.filter_by(lote_id=lote_id)
+            if almacen_id := request.args.get('almacen_id'):
+                query = query.filter_by(almacen_id=almacen_id)
 
             gastos = query.order_by(desc(Gasto.fecha)).all()
-            if not gastos:
-                return {"message": "No hay gastos para exportar con los filtros seleccionados"}, 404
 
-            # --- MEJORA 2: Construir los datos para el Excel directamente ---
+            if not gastos:
+                return {"message": "No hay gastos para exportar"}, 404
+
             data_para_excel = []
             for gasto in gastos:
                 data_para_excel.append({
                     'ID': gasto.id,
-                    'Fecha': gasto.fecha.strftime('%Y-%m-%d'),
+                    'Fecha': gasto.fecha.strftime('%Y-%m-%d') if gasto.fecha else '',
                     'Monto': float(gasto.monto),
                     'Categoría': gasto.categoria,
                     'Descripción': gasto.descripcion,

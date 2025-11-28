@@ -139,6 +139,7 @@ class Venta(db.Model):
 
     # Relaciones
     vendedor = db.relationship('Users')
+    cliente = db.relationship('Cliente', back_populates='ventas')
     detalles = db.relationship('VentaDetalle', backref='venta', lazy=True, cascade="all, delete-orphan")
     pagos = db.relationship("Pago", backref="venta", lazy=True, cascade="all, delete-orphan")
 
@@ -232,7 +233,7 @@ class Cliente(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
 
-    ventas = db.relationship('Venta', backref='cliente', lazy=True)
+    ventas = db.relationship('Venta', back_populates='cliente', lazy=True)
 
     @property
     def saldo_pendiente(self):
@@ -448,6 +449,30 @@ class ComponenteReceta(db.Model):
     __table_args__ = (
         CheckConstraint("tipo_consumo IN ('materia_prima', 'insumo')"),
         UniqueConstraint('receta_id', 'componente_presentacion_id', name='uq_receta_componente')
+    )
+
+class ComandoVozLog(db.Model):
+    """
+    Tabla de auditoría para comandos de voz.
+    Registra todos los comandos procesados por Gemini para trazabilidad,
+    detección de ataques y análisis de uso.
+    """
+    __tablename__ = 'comandos_voz_logs'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, nullable=False)  # Relación lógica con Users
+    almacen_id = db.Column(db.Integer, nullable=True)
+    texto_original = db.Column(db.Text, nullable=False)
+    interpretacion = db.Column(db.JSON, nullable=True)  # Respuesta completa de Gemini
+    accion_detectada = db.Column(db.String(50))  # 'interpretar_operacion', 'error', 'security_block'
+    exito = db.Column(db.Boolean, default=False)
+    latencia_ms = db.Column(db.Integer, nullable=True)  # Tiempo de procesamiento
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    
+    __table_args__ = (
+        Index('idx_comandos_voz_usuario', 'usuario_id'),
+        Index('idx_comandos_voz_created', 'created_at'),
+        Index('idx_comandos_voz_exito', 'exito', 'created_at'),
     )
 
 class VistaClienteProyeccion(db.Model):

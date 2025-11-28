@@ -21,6 +21,7 @@ from .reporte_produccion_resource import ReporteProduccionBriquetasResource, Rep
 from .user_resource import UserResource
 from .venta_resource import VentaResource, VentaFormDataResource, VentaExportResource, VentaFilterDataResource
 from .ventadetalle_resource import VentaDetalleResource
+from .voice_resource import VoiceCommandResource
 
 __all__ = [
     'AlmacenResource',
@@ -64,9 +65,15 @@ __all__ = [
     'VentaExportResource',
     'VentaFilterDataResource',
     'VentaDetalleResource',
+    'VoiceCommandResource',
 ]
 
-def init_resources(api):
+from resources.transaccion_resource import TransaccionCompletaResource
+
+def init_resources(api, limiter=None):
+    # ... (existing resources)
+    api.add_resource(TransaccionCompletaResource, '/transacciones/venta-completa')
+
     # Autenticación y Usuarios
     api.add_resource(AuthResource, '/auth')
     api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
@@ -133,3 +140,10 @@ def init_resources(api):
     
     # Chat
     api.add_resource(ChatResource, '/chat')
+    
+    # Voice Commands (Gemini) - Rate limited: 20/minute
+    if limiter:
+        # Aplicar rate limit de 20 comandos por minuto
+        limiter.limit("20/minute", error_message="Demasiados comandos de voz. Espera un momento.")(VoiceCommandResource)
+    
+    api.add_resource(VoiceCommandResource, '/voice/command')

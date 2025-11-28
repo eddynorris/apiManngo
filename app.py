@@ -1,197 +1,134 @@
-from flask import Flask, jsonify, send_from_directory
-from dotenv import load_dotenv
-from flask_restful import Api
+import os
+import logging
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-
-load_dotenv()
-from flask_jwt_extended import JWTManager
+from flask_restful import Api
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_talisman import Talisman
-import watchtower
-import boto3
-from resources import init_resources
-from scripts.sync_supabase import sync_supabase_command
+from dotenv import load_dotenv
 
-from extensions import db, jwt
-import os
-import logging
+# Cargar variables de entorno
+env_file = '.env.production' if os.environ.get('FLASK_ENV') == 'production' else '.env'
+load_dotenv(env_file)
 
-
-# Determinar entorno (production, development, etc.)
-FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
-IS_PRODUCTION = FLASK_ENV == 'production'
-
-# Configurar logging
+# Configuración de Logging
 logging.basicConfig(
-    level=logging.INFO if IS_PRODUCTION else logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-
+# Verificar entorno
+FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
+IS_PRODUCTION = FLASK_ENV == 'production'
 logger.info(f"🔧 Entorno: {FLASK_ENV}")
 logger.info(f"🚀 Modo producción: {IS_PRODUCTION}")
 
-# Configurar Watchtower para enviar logs a CloudWatch en producción
-if IS_PRODUCTION:
-    CLOUDWATCH_LOG_GROUP = os.environ.get('CLOUDWATCH_LOG_GROUP')
-    AWS_REGION = os.environ.get('AWS_REGION') # Necesario para Watchtower y Boto3
-    if CLOUDWATCH_LOG_GROUP and AWS_REGION:
-        try:
-            # Asegurar credenciales AWS configuradas (variables de entorno o rol IAM)
-            boto3_session = boto3.Session(region_name=AWS_REGION)
-            # Configurar handler de Watchtower
-            watchtower_handler = watchtower.CloudWatchLogHandler(
-                log_group_name=CLOUDWATCH_LOG_GROUP,
-                boto3_session=boto3_session,
-                create_log_group=False # Asume que el grupo ya existe
-            )
-            # Añadir handler al logger raíz
-            logging.getLogger().addHandler(watchtower_handler)
-            logger.info(f"Logging configurado para enviar a CloudWatch grupo: {CLOUDWATCH_LOG_GROUP} en región {AWS_REGION}")
-        except Exception as e:
-            logger.error(f"Error al configurar Watchtower: {e}")
-    else:
-        logger.warning("Watchtower no configurado: Faltan CLOUDWATCH_LOG_GROUP o AWS_REGION.")
+# Importar extensiones y recursos
+from extensions import db, jwt
+from scripts.sync_supabase import sync_supabase_command
+from resources import init_resources
 
 app = Flask(__name__)
 
 # Configuración de CORS
+allowed_origins = os.environ.get('ALLOWED_ORIGINS', '*')
+origins = allowed_origins.split(',') if ',' in allowed_origins else allowed_origins
+
 if IS_PRODUCTION:
-    allowed_origins_env = os.environ.get('ALLOWED_ORIGINS')
-    if allowed_origins_env:
-        origins = allowed_origins_env.split(',')
-        logger.info(f"CORS configurado para producción con orígenes: {origins}")
-    else:
-        origins = ['https://www.manngojk.lat', 'https://admin.manngojk.lat']
-        logger.warning(f"La variable de entorno ALLOWED_ORIGINS no está definida en producción. Usando orígenes predeterminados: {origins}")
+    logger.info(f"CORS configurado para orígenes: {origins}")
     CORS(app, resources={r"/*": {"origins": origins}})
 else:
-    # En desarrollo, permitir cualquier origen para facilitar las pruebas locales
     CORS(app, resources={r"/*": {"origins": "*"}})
     logger.info("CORS configurado para desarrollo, permitiendo todos los orígenes ('*').")
 
-# Configuración de la base de datos desde variables de entorno
+# Configuración de la base de datos
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'postgresql://postgres:123456@localhost/manngo_db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Configuración para S3 (Reemplaza UPLOAD_FOLDER)
+# Configuración S3
 app.config['S3_BUCKET'] = os.environ.get('S3_BUCKET')
-app.config['S3_REGION'] = os.environ.get('AWS_REGION') # Reutilizar si es la misma región
-
-# Configuración de archivos locales para desarrollo (desactivado para forzar S3 en local)
-# if not IS_PRODUCTION:
-#     # En desarrollo, crear directorio uploads si no existe
-#     upload_dir = os.path.join(os.getcwd(), 'uploads')
-#     if not os.path.exists(upload_dir):
-#         os.makedirs(upload_dir)
-#         os.makedirs(os.path.join(upload_dir, 'comprobantes'), exist_ok=True)
-#         os.makedirs(os.path.join(upload_dir, 'presentaciones'), exist_ok=True)
-#     app.config['UPLOAD_FOLDER'] = upload_dir
-#     logger.info(f"📁 Directorio de uploads para desarrollo: {upload_dir}")
+app.config['S3_REGION'] = os.environ.get('AWS_REGION')
 
 if not app.config['S3_BUCKET'] or not app.config['S3_REGION']:
     if IS_PRODUCTION:
-        logger.error("Configuración de S3 requerida en producción (S3_BUCKET y AWS_REGION).")
+        logger.error("Configuración de S3 requerida en producción.")
     else:
         logger.info("S3 no configurado - usando almacenamiento local para desarrollo.")
 
-# Configuración de límite de tamaño de archivo (se mantiene por si se usa en validación)
-app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 50 * 1024 * 1024)) # Default 50MB max
-app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'pdf'} # Mantener para validación
+# Configuración de Archivos
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 50 * 1024 * 1024))
+app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'pdf'}
 
-# JWT config con valores seguros
+# Configuración JWT
 jwt_expires_str = os.environ.get('JWT_EXPIRES_SECONDS', '43200')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(jwt_expires_str.split('#')[0].strip())
 app.config['JWT_ALGORITHM'] = 'HS256'
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
-app.config['JWT_BLACKLIST_ENABLED'] = False # Considera si realmente necesitas blacklist o usa tokens de corta duración + refresh tokens
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'insecure-dev-key')
+app.config['JWT_BLACKLIST_ENABLED'] = False
 
-# Configuración para Flask-Limiter
-app.config['RATELIMIT_STORAGE_URL'] = os.environ.get('LIMITER_STORAGE_URI', 'memory://') # Usar Redis en prod: redis://...
-app.config['RATELIMIT_STRATEGY'] = 'fixed-window' # o 'moving-window'
+if app.config['JWT_SECRET_KEY'] == 'insecure-dev-key' and IS_PRODUCTION:
+    raise ValueError("JWT_SECRET_KEY no configurada en producción!")
 
-if app.config['JWT_SECRET_KEY'] is None or app.config['JWT_SECRET_KEY'] == 'insecure-key':
-    if IS_PRODUCTION:
-        raise ValueError("JWT_SECRET_KEY no configurada en producción - ¡Configure una clave segura!")
-    else:
-        logger.warning("⚠️ Usando clave JWT insegura para desarrollo, no usar en producción")
-        app.config['JWT_SECRET_KEY'] = 'insecure-dev-key'
+# Configuración Limiter
+app.config['RATELIMIT_STORAGE_URL'] = os.environ.get('LIMITER_STORAGE_URI', 'memory://')
+app.config['RATELIMIT_STRATEGY'] = 'fixed-window'
 
 # Inicializar extensiones
 db.init_app(app)
 jwt.init_app(app)
 api = Api(app)
 
-# Configurar Rate Limiter
+# Inicializar Limiter
 limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=[os.environ.get('DEFAULT_RATE_LIMIT', '200 per day;50 per hour')],
-    # storage_uri se toma de app.config['RATELIMIT_STORAGE_URL']
 )
 
-# Verificar la configuración de almacenamiento del limiter
-storage_url_check = app.config.get('RATELIMIT_STORAGE_URL', '')
-if 'redis' in storage_url_check and IS_PRODUCTION:
-    logger.info(f"Flask-Limiter configurado con storage: {storage_url_check}")
-elif 'memory' in storage_url_check and IS_PRODUCTION:
-    logger.warning("Flask-Limiter está usando almacenamiento en memoria en producción. Considera usar Redis para un estado compartido.")
+# Verificar storage limiter
+storage_url = app.config.get('RATELIMIT_STORAGE_URL', '')
+if 'memory' in storage_url and IS_PRODUCTION:
+    logger.warning("Flask-Limiter usando memoria en producción. Considere Redis.")
 
-# Configurar Talisman para Headers de Seguridad (ajustar políticas según necesidad)
+# Configurar Talisman
 talisman = Talisman(
     app,
     content_security_policy={
         'default-src': '\'self\'',
-        # Añadir otros dominios si se sirven assets/scripts de CDNs, etc.
-        'img-src': ['*' , 'data:'], # Permitir imágenes de cualquier fuente y data URIs
+        'img-src': ['*', 'data:'],
         'script-src': '\'self\'',
-        'style-src': ['\'self\'', '\'unsafe-inline\''], # Ajustar si se evita inline styles
+        'style-src': ['\'self\'', '\'unsafe-inline\''],
     },
-    content_security_policy_nonce_in=['script-src'], # Para scripts inline si es necesario
-    force_https=IS_PRODUCTION, # Forzar HTTPS en producción
-    strict_transport_security=IS_PRODUCTION, # HSTS en producción
+    content_security_policy_nonce_in=['script-src'],
+    force_https=IS_PRODUCTION,
+    strict_transport_security=IS_PRODUCTION,
     session_cookie_secure=IS_PRODUCTION,
     session_cookie_http_only=True
 )
-logger.info("Flask-Talisman inicializado.")
 
-# Registrar comandos CLI personalizados
+# CLI Commands
 app.cli.add_command(sync_supabase_command)
 
-# JWT Error handling
+# JWT Error Handling
 @jwt.unauthorized_loader
 def unauthorized_callback(callback):
-    logger.warning(f"Unauthorized request: {callback}")
-    return jsonify({
-        'message': 'Se requiere autenticación',
-        'error': 'authorization_required'
-    }), 401
+    return jsonify({'message': 'Se requiere autenticación', 'error': 'authorization_required'}), 401
 
 @jwt.expired_token_loader
 def expired_token_callback(jwt_header, jwt_payload):
-    logger.warning(f"Expired token: {jwt_payload}")
-    return jsonify({
-        'message': 'El token ha expirado',
-        'error': 'token_expired'
-    }), 401
+    return jsonify({'message': 'El token ha expirado', 'error': 'token_expired'}), 401
 
 @jwt.invalid_token_loader
 def invalid_token_callback(error):
-    logger.error(f"Invalid token: {error}")
-    return jsonify({
-        'message': 'Verificación de firma fallida',
-        'error': 'invalid_token'
-    }), 401
+    return jsonify({'message': 'Verificación de firma fallida', 'error': 'invalid_token'}), 401
 
+# Error Handlers
 @app.errorhandler(500)
 def handle_internal_server_error(e):
     logger.exception(f"Internal server error: {e}")
-    return jsonify({
-        "error": "Ocurrió un error interno del servidor",
-        "details": str(e) if os.environ.get('FLASK_ENV') != 'production' else "Contacte al administrador"
-    }), 500
+    return jsonify({"error": "Ocurrió un error interno del servidor"}), 500
 
 @app.errorhandler(404)
 def handle_not_found_error(e):
@@ -203,82 +140,34 @@ def handle_method_not_allowed(e):
 
 @app.errorhandler(413)
 def handle_request_entity_too_large(e):
-    """Maneja el error 413 Request Entity Too Large con información útil para debug."""
-    content_length = request.content_length or 0
-    max_content_length = app.config.get('MAX_CONTENT_LENGTH', 0)
-    
-    logger.error(f"Error 413 - Request Entity Too Large: "
-                f"Content-Length: {content_length} bytes, "
-                f"MAX_CONTENT_LENGTH: {max_content_length} bytes, "
-                f"URL: {request.url}, "
-                f"Method: {request.method}, "
-                f"Content-Type: {request.content_type}")
-    
-    # Información adicional para debug
-    debug_info = {}
-    if not IS_PRODUCTION:
-        debug_info = {
-            "content_length_received": content_length,
-            "max_content_length_configured": max_content_length,
-            "content_type": request.content_type,
-            "url": request.url,
-            "method": request.method
-        }
-    
     return jsonify({
         "error": "Request Entity Too Large",
-        "message": f"El tamaño de la solicitud ({content_length} bytes) excede el límite permitido ({max_content_length} bytes)",
-        "possible_causes": [
-            "El archivo adjunto es demasiado grande",
-            "Los datos JSON son demasiado extensos", 
-            "Límite configurado en el servidor web (Nginx/Apache)",
-            "Límite configurado en el proxy/load balancer",
-            "Límite configurado en el servidor WSGI (Gunicorn/uWSGI)"
-        ],
-        "suggestions": [
-            "Reduzca el tamaño del archivo adjunto",
-            "Divida los datos en múltiples requests más pequeños",
-            "Contacte al administrador para revisar la configuración del servidor"
-        ],
-        **debug_info
+        "message": "El archivo excede el límite permitido"
     }), 413
 
-# Health check endpoint
+# Health Check
 @app.route('/health')
-@limiter.exempt # Eximir health check del rate limiting
+@limiter.exempt
 def health_check():
-    # Podría expandirse para verificar conexión a BD, etc.
     return jsonify({"status": "ok"}), 200
 
-# Endpoint de diagnóstico para desarrollo
+# Config Info
 @app.route('/config')
 @limiter.exempt
 def config_info():
     if IS_PRODUCTION:
         return jsonify({"error": "Endpoint no disponible en producción"}), 404
-    
     return jsonify({
-        "env_file": env_file,
         "flask_env": FLASK_ENV,
         "is_production": IS_PRODUCTION,
         "database_type": "sqlite" if "sqlite" in app.config['SQLALCHEMY_DATABASE_URI'] else "postgresql",
-        "s3_configured": bool(app.config.get('S3_BUCKET')),
-        "upload_folder": app.config.get('UPLOAD_FOLDER', 'S3'),
-        "cors_origins": os.environ.get('ALLOWED_ORIGINS', '*'),
-        "jwt_expires": app.config.get('JWT_ACCESS_TOKEN_EXPIRES'),
-        "rate_limit": os.environ.get('DEFAULT_RATE_LIMIT', '200 per day;50 per hour')
+        "rate_limit": os.environ.get('DEFAULT_RATE_LIMIT')
     }), 200
 
-# Registrar recursos (aplicar rate limiting si es necesario)
-# Ejemplo de límite específico para login:
-# limiter.limit("5 per minute")(AuthResource)
-#api.add_resource(DepositoBancarioResource, '/depositos', '/depositos/<int:deposito_id>')
-
-init_resources(api)
-
+# Registrar Recursos con Contexto
+with app.app_context():
+    init_resources(api, limiter=limiter)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    # El modo debug ya no se controla aquí directamente, sino con FLASK_ENV
-    # Gunicorn manejará la ejecución en producción
     app.run(host='0.0.0.0', port=port, debug=not IS_PRODUCTION)

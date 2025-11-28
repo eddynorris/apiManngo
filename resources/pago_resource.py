@@ -45,6 +45,77 @@ class PagoService:
         """Valida que el monto de un pago no exceda el saldo pendiente de la venta."""
         pagos_anteriores = sum(p.monto for p in venta.pagos if p.id != pago_existente_id)
         saldo_pendiente = venta.total - pagos_anteriores
+# ARCHIVO: resources/pago_resource.py
+import json
+import logging
+import io
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+
+import pandas as pd
+from flask import request, send_file
+from flask_jwt_extended import jwt_required, get_jwt
+from flask_restful import Resource
+from sqlalchemy import asc, desc, func, case
+from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import BadRequest, NotFound, Forbidden
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, parse_iso_datetime
+from extensions import db
+from models import Almacen, Cliente, Pago, Users, Venta, Gasto
+from schemas import pago_schema, pagos_schema, gastos_schema
+from utils.file_handlers import delete_file, get_presigned_url, save_file
+
+# Configuración de Logging
+logger = logging.getLogger(__name__)
+
+# ARCHIVO: resources/pago_resource.py
+import json
+import logging
+import io
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+
+import pandas as pd
+from flask import request, send_file
+from flask_jwt_extended import jwt_required, get_jwt
+from flask_restful import Resource
+from sqlalchemy import asc, desc, func, case
+from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import BadRequest, NotFound, Forbidden
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, parse_iso_datetime
+from extensions import db
+from models import Almacen, Cliente, Pago, Users, Venta, Gasto
+from schemas import pago_schema, pagos_schema, gastos_schema
+from utils.file_handlers import delete_file, get_presigned_url, save_file
+
+# Configuración de Logging
+logger = logging.getLogger(__name__)
+
+# --- EXCEPCIONES PERSONALIZADAS ---
+class PagoValidationError(ValueError):
+    """Error de validación específico para la lógica de pagos."""
+    pass
+
+# --- CAPA DE SERVICIO ---
+class PagoService:
+    """Contiene toda la lógica de negocio para gestionar pagos."""
+
+    @staticmethod
+    def find_pago_by_id(pago_id):
+        """Encuentra un pago por su ID o lanza un error 404 si no se encuentra."""
+        # MEJORA: Usar db.session.get() y get_or_404 para consistencia y simplicidad.
+        pago = db.session.get(Pago, pago_id)
+        if not pago:
+            raise NotFound("Pago no encontrado.")
+        return pago
+
+    @staticmethod
+    def _validate_monto(venta, monto, pago_existente_id=None):
+        """Valida que el monto de un pago no exceda el saldo pendiente de la venta."""
+        pagos_anteriores = sum(p.monto for p in venta.pagos if p.id != pago_existente_id)
+        saldo_pendiente = venta.total - pagos_anteriores
         # Se usa una pequeña tolerancia para evitar errores de punto flotante con Decimal
         if monto > saldo_pendiente + Decimal("0.001"):
             raise PagoValidationError(
@@ -52,7 +123,7 @@ class PagoService:
             )
 
     @staticmethod
-    def get_pagos_query(filters):
+    def get_pagos_query(filters, current_user_id=None, rol=None):
         """Construye una consulta de pagos optimizada con filtros y carga ansiosa (eager loading)."""
         query = Pago.query.options(
             joinedload(Pago.venta).joinedload(Venta.cliente),
@@ -74,6 +145,12 @@ class PagoService:
              query = query.filter(Pago.fecha >= fecha_inicio)
         if fecha_fin := filters.get('fecha_fin'):
              query = query.filter(Pago.fecha <= fecha_fin)
+        
+        # --- FILTRO POR ROL ---
+        if rol and rol != 'admin' and current_user_id:
+            query = query.filter(Pago.usuario_id == current_user_id)
+        # ----------------------
+        
         return query
 
     @staticmethod
@@ -257,7 +334,9 @@ class PagoResource(Resource):
             pago_dump = pago_schema.dump(pago)
             return _get_presigned_url_for_item(pago_dump, pago.url_comprobante), 200
         
-        query = PagoService.get_pagos_query(request.args)
+        claims = get_jwt()
+        query = PagoService.get_pagos_query(request.args, claims.get('sub'), claims.get('rol'))
+        
         sort_by = request.args.get('sort_by', 'fecha')
         sort_order = request.args.get('sort_order', 'desc').lower()
         sort_column = getattr(Pago, sort_by, Pago.fecha)
@@ -471,7 +550,8 @@ class PagoExportResource(Resource):
     def get(self):
         """Exporta pagos a Excel de forma optimizada."""
         try:
-            query = PagoService.get_pagos_query(request.args.to_dict())
+            claims = get_jwt()
+            query = PagoService.get_pagos_query(request.args.to_dict(), claims.get('sub'), claims.get('rol'))
             pagos = query.order_by(desc(Pago.fecha)).all()
             if not pagos:
                 return {"message": "No hay pagos para exportar con los filtros seleccionados"}, 404

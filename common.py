@@ -8,6 +8,7 @@ import logging
 import re
 import werkzeug.exceptions
 from datetime import datetime, timezone
+from utils.date_utils import to_peru_time, get_peru_now
 
 # Configuración de logging
 logger = logging.getLogger(__name__)
@@ -41,52 +42,6 @@ def parse_iso_datetime(date_string, add_timezone=True):
         date_string = date_string.replace('Z', '+00:00')
     elif '+' not in date_string and '-' not in date_string[-6:]:
         # No tiene timezone, agregar UTC si se solicita
-        if add_timezone:
-            if 'T' in date_string:
-                date_string += '+00:00'
-            else:
-                # Solo fecha, agregar hora y timezone
-                date_string += 'T00:00:00+00:00'
-    
-    try:
-        # Intentar parsear con fromisoformat
-        dt = datetime.fromisoformat(date_string)
-        
-        # Si add_timezone es True y no tiene timezone, agregar UTC
-        if add_timezone and dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-            
-        return dt
-    except ValueError as e:
-        # Si falla, intentar otros formatos comunes
-        formats_to_try = [
-            '%Y-%m-%dT%H:%M:%S.%fZ',
-            '%Y-%m-%dT%H:%M:%SZ', 
-            '%Y-%m-%dT%H:%M:%S.%f',
-            '%Y-%m-%dT%H:%M:%S',
-            '%Y-%m-%d %H:%M:%S',
-            '%Y-%m-%d'
-        ]
-        
-        for fmt in formats_to_try:
-            try:
-                dt = datetime.strptime(date_string.replace('Z', ''), fmt)
-                if add_timezone:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except ValueError:
-                continue
-                
-        # Si ningún formato funciona, lanzar error descriptivo
-        raise ValueError(f"Formato de fecha inválido: '{date_string}'. Use formato ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)")
-
-def sanitize_input(value, allowed_pattern=None):
-    """Sanitiza entrada para prevenir inyección SQL y otros ataques"""
-    if value is None:
-        return None
-        
-    # Convertir a string si no lo es
-    if not isinstance(value, str):
         value = str(value)
         
     # Eliminar caracteres potencialmente peligrosos
