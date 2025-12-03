@@ -26,6 +26,17 @@ class TransaccionCompletaResource(Resource):
         if not almacen_id:
              return {"error": "Usuario no tiene almacén asignado."}, 403
 
+        # Obtener fecha personalizada o usar fecha actual
+        fecha_transaccion = data.get('fecha')
+        if fecha_transaccion:
+            try:
+                fecha_transaccion = parse_iso_datetime(fecha_transaccion)
+            except Exception as e:
+                logger.warning(f"Fecha inválida recibida: {fecha_transaccion}, usando datetime.now()")
+                fecha_transaccion = datetime.now()
+        else:
+            fecha_transaccion = datetime.now()
+
         # --- 1. Validaciones Básicas ---
         cliente_data = data.get('cliente')
         items = data.get('items', [])
@@ -74,7 +85,7 @@ class TransaccionCompletaResource(Resource):
                 vendedor_id=usuario_id,
                 total=total_venta,
                 tipo_pago='contado', # Se ajustará según los pagos
-                fecha=datetime.now(), # O usar la fecha del sistema si se pasara
+                fecha=fecha_transaccion,
                 detalles=detalles_venta
             )
             db.session.add(nueva_venta)
@@ -105,7 +116,7 @@ class TransaccionCompletaResource(Resource):
                         usuario_id=usuario_id,
                         monto=monto,
                         metodo_pago=metodo,
-                        fecha=datetime.now(),
+                        fecha=fecha_transaccion,
                         depositado=es_deposito,
                         referencia="Pago voz"
                     )
@@ -129,7 +140,7 @@ class TransaccionCompletaResource(Resource):
                     descripcion=gasto_data.get('descripcion'),
                     monto=Decimal(str(gasto_data.get('monto', 0))),
                     categoria=gasto_data.get('categoria'),
-                    fecha=datetime.now().date(),
+                    fecha=fecha_transaccion.date(),
                     usuario_id=usuario_id,
                     almacen_id=almacen_id
                 )

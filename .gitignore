@@ -39,6 +39,7 @@ MANIFEST
 # Flask specific
 instance/
 .flaskenv
+
 .env
 .env.local
 .env.production
@@ -84,3 +85,8 @@ uploads/comprobantes/
 database.sql
 migration_view.sql
 migrations/
+
+#supabase
+
+supabase/
+database/

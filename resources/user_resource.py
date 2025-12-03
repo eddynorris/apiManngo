@@ -1,14 +1,15 @@
 # Archivo: resources/user_resource.py
+from typing import Dict, Tuple, Union, Any, List
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
-from flask import request, current_app
+from flask import request
 from models import Users, Almacen
 from schemas import user_schema, users_schema
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido, validate_pagination_params, create_pagination_response
+from common import handle_db_errors, rol_requerido, validate_pagination_params, create_pagination_response, validate_password
 from werkzeug.security import generate_password_hash
-import re
 import logging
+import config
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -17,12 +18,7 @@ class UserResource(Resource):
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede listar usuarios
     @handle_db_errors
-    def get(self, user_id=None):
-        """
-        Obtiene usuario(s)
-        - Con ID: Detalles de un usuario específico
-        - Sin ID: Lista paginada con filtros (rol, almacén)
-        """
+    def get(self, user_id: int = None) -> Tuple[Union[Dict[str, Any], List[Dict[str, Any]]], int]:
         try:
             # Si se solicita un usuario específico
             if user_id:
@@ -60,14 +56,13 @@ class UserResource(Resource):
             return create_pagination_response(users_schema.dump(usuarios.items), usuarios), 200
             
         except Exception as e:
-            logger.error(f"Error al obtener usuarios: {str(e)}")
+            logger.error(f"[{self.__class__.__name__}] Error al obtener usuarios: {str(e)}", exc_info=True)
             return {"error": "Error al procesar la solicitud"}, 500
 
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede crear usuarios
     @handle_db_errors
-    def post(self):
-        """Crea un nuevo usuario con validación completa"""
+    def post(self) -> Tuple[Dict[str, Any], int]:
         try:
             # Validar formato de entrada
             if not request.is_json:
@@ -78,18 +73,14 @@ class UserResource(Resource):
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
             
             # Validaciones preliminares
-            if not data.get('username') or len(data.get('username', '')) < 3:
-                return {"error": "El nombre de usuario debe tener al menos 3 caracteres"}, 400
+            if not data.get('username') or len(data.get('username', '')) < config.MIN_USERNAME_LENGTH:
+                return {"error": f"El nombre de usuario debe tener al menos {config.MIN_USERNAME_LENGTH} caracteres"}, 400
                 
-            if not data.get('password') or len(data.get('password', '')) < 8:
-                return {"error": "La contraseña debe tener al menos 8 caracteres"}, 400
-            
             # Validar complejidad de contraseña
             password = data.get('password', '').strip()
-            # Convertir a minúsculas para la validación
-            lower_password = password.lower()
-            if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
-                return {"error": "La contraseña debe contener al menos una letra y un número"}, 400
+            is_valid, error_msg = validate_password(password)
+            if not is_valid:
+                return {"error": error_msg}, 400
             
             # Verificar que el username no exista (case insensitive)
             username = data.get('username').strip().lower()  # Convertir a minúsculas
@@ -130,14 +121,13 @@ class UserResource(Resource):
             
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error al crear usuario: {str(e)}")
+            logger.error(f"[{self.__class__.__name__}] Error al crear usuario: {str(e)}", exc_info=True)
             return {"error": "Error al procesar la solicitud"}, 500
 
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede actualizar usuarios
     @handle_db_errors
-    def put(self, user_id):
-        """Actualiza un usuario existente con validaciones"""
+    def put(self, user_id: int) -> Tuple[Dict[str, Any], int]:
         try:
             if not user_id:
                 return {"error": "Se requiere ID de usuario"}, 400
@@ -155,8 +145,8 @@ class UserResource(Resource):
             # Si se cambia el username, verificar que no exista (case insensitive)
             if 'username' in data and data['username'] != usuario.username:
                 username = data['username'].strip().lower()  # Convertir a minúsculas
-                if len(username) < 3:
-                    return {"error": "El nombre de usuario debe tener al menos 3 caracteres"}, 400
+                if len(username) < config.MIN_USERNAME_LENGTH:
+                    return {"error": f"El nombre de usuario debe tener al menos {config.MIN_USERNAME_LENGTH} caracteres"}, 400
                     
                 if Users.query.filter(Users.username.ilike(username)).first():
                     return {"error": "El nombre de usuario ya existe"}, 400
@@ -164,13 +154,9 @@ class UserResource(Resource):
             # Si se cambia la contraseña, verificar complejidad
             if 'password' in data:
                 password = data['password'].strip()
-                if len(password) < 8:
-                    return {"error": "La contraseña debe tener al menos 8 caracteres"}, 400
-                    
-                # Convertir a minúsculas para la validación
-                lower_password = password.lower()
-                if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
-                    return {"error": "La contraseña debe contener al menos una letra y un número"}, 400
+                is_valid, error_msg = validate_password(password)
+                if not is_valid:
+                    return {"error": error_msg}, 400
                     
                 # Hashear la contraseña
                 data['password'] = generate_password_hash(password, method='pbkdf2:sha256:150000')
@@ -207,14 +193,13 @@ class UserResource(Resource):
             
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error al actualizar usuario: {str(e)}")
+            logger.error(f"[{self.__class__.__name__}] Error al actualizar usuario: {str(e)}", exc_info=True)
             return {"error": "Error al procesar la solicitud"}, 500
 
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede eliminar usuarios
     @handle_db_errors
-    def delete(self, user_id):
-        """Elimina un usuario con validaciones de seguridad"""
+    def delete(self, user_id: int) -> Tuple[Dict[str, Any], int]:
         try:
             if not user_id:
                 return {"error": "Se requiere ID de usuario"}, 400
@@ -244,5 +229,5 @@ class UserResource(Resource):
             
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error al eliminar usuario: {str(e)}")
+            logger.error(f"[{self.__class__.__name__}] Error al eliminar usuario: {str(e)}", exc_info=True)
             return {"error": "Error al procesar la solicitud"}, 500

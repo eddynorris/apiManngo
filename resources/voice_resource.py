@@ -274,6 +274,15 @@ class VoiceCommandResource(Resource):
              enriched_data['pagos'] = []  # Vaciar pagos si es crédito
              enriched_data['warnings'].append("Venta al crédito (sin pagos iniciales).")
 
+        # 6. Agregar lista completa de clientes para selección manual
+        clientes_disponibles = Cliente.query.order_by(Cliente.nombre).all()
+        enriched_data['clientes_disponibles'] = [{
+            "id": c.id,
+            "nombre": c.nombre,
+            "telefono": c.telefono,
+            "ciudad": c.ciudad
+        } for c in clientes_disponibles]
+
         return {
             "status": "success",
             "processed_action": "confirmar_operacion",

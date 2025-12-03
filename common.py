@@ -1,34 +1,38 @@
 # common.py
-from flask import jsonify, request
-from marshmallow import ValidationError
-from extensions import db
-from functools import wraps
-from flask_jwt_extended import verify_jwt_in_request, get_jwt
 import logging
 import re
 import werkzeug.exceptions
+from functools import wraps
 from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+from flask import jsonify, request
+from flask_jwt_extended import verify_jwt_in_request, get_jwt
+from marshmallow import ValidationError
+
+from extensions import db
 from utils.date_utils import to_peru_time, get_peru_now
+import config
 
 # Configuración de logging
 logger = logging.getLogger(__name__)
 
-# Límite de paginación para evitar consultas pesadas
-MAX_ITEMS_PER_PAGE = 100
+# Re-exportar constante para compatibilidad
+MAX_ITEMS_PER_PAGE = config.MAX_ITEMS_PER_PAGE
 
-def parse_iso_datetime(date_string, add_timezone=True):
+def parse_iso_datetime(date_string: str, add_timezone: bool = True) -> datetime:
     """
     Parsea una fecha ISO 8601 de manera robusta, manejando diferentes formatos.
     
     Args:
-        date_string (str): Fecha en formato ISO 8601
-        add_timezone (bool): Si True, agrega timezone UTC si no está presente
+        date_string (str): Fecha en formato ISO 8601.
+        add_timezone (bool): Si True, agrega timezone UTC si no está presente.
         
     Returns:
-        datetime: Objeto datetime parseado
+        datetime: Objeto datetime parseado.
         
     Raises:
-        ValueError: Si el formato de fecha es inválido
+        ValueError: Si el formato de fecha es inválido.
     """
     if not date_string:
         raise ValueError("La fecha no puede estar vacía")
@@ -42,21 +46,37 @@ def parse_iso_datetime(date_string, add_timezone=True):
         date_string = date_string.replace('Z', '+00:00')
     elif '+' not in date_string and '-' not in date_string[-6:]:
         # No tiene timezone, agregar UTC si se solicita
-        value = str(value)
-        
-    # Eliminar caracteres potencialmente peligrosos
-    value = value.strip()
+        if add_timezone:
+            date_string += '+00:00'
     
-    # Si hay un patrón permitido, validar contra él
-    if allowed_pattern and not re.match(allowed_pattern, value):
-        return None
+    try:
+        # Intentar parsear con timezone
+        dt = datetime.fromisoformat(date_string)
         
-    return value
+        # Si no tiene timezone y no se solicitó agregar, retornar sin timezone
+        if not add_timezone and dt.tzinfo is None:
+            return dt
+            
+        # Si no tiene timezone pero se solicitó agregar, agregar UTC
+        if dt.tzinfo is None and add_timezone:
+            dt = dt.replace(tzinfo=timezone.utc)
+            
+        return dt
+    except ValueError as e:
+        raise ValueError(f"Formato de fecha inválido: {date_string}. Error: {str(e)}")
 
-def handle_db_errors(func):
-    """Decorator para manejo centralizado de errores"""
+def handle_db_errors(func: Callable) -> Callable:
+    """
+    Decorator para manejo centralizado de errores de base de datos y validación.
+    
+    Args:
+        func (Callable): La función a decorar.
+        
+    Returns:
+        Callable: La función decorada con manejo de errores.
+    """
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
         try:
             # Capturar y sanitizar parámetros de ID para prevenir inyección
             for key, value in kwargs.items():
@@ -75,18 +95,23 @@ def handle_db_errors(func):
             raise e
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error en {func.__name__}: {str(e)}")
+            logger.error(f"Error en {func.__name__}: {str(e)}", exc_info=True)
             return {"message": "Error interno del servidor"}, 500
     return wrapper
 
-def rol_requerido(*roles_permitidos):
+def rol_requerido(*roles_permitidos: str) -> Callable:
     """
-    Decorador para restringir acceso basado en roles
-    Ejemplo: @rol_requerido('admin', 'gerente')
+    Decorador para restringir acceso basado en roles.
+    
+    Args:
+        *roles_permitidos (str): Roles permitidos para acceder al recurso.
+        
+    Returns:
+        Callable: El decorador.
     """
-    def decorator(fn):
+    def decorator(fn: Callable) -> Callable:
         @wraps(fn)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
             try:
                 # Verificar token JWT
                 verify_jwt_in_request()
@@ -109,19 +134,25 @@ def rol_requerido(*roles_permitidos):
                 return fn(*args, **kwargs)
                 
             except Exception as e:
-                logger.error(f"Error en verificación de rol: {str(e)}")
+                logger.error(f"Error en verificación de rol: {str(e)}", exc_info=True)
                 return {"error": "Error en verificación de acceso"}, 401
         return wrapper
     return decorator
 
-def mismo_almacen_o_admin(fn):
+def mismo_almacen_o_admin(fn: Callable) -> Callable:
     """
-    Decorador para verificar si el usuario tiene acceso al almacén solicitado
-    - Si es admin, tiene acceso a todos los almacenes
-    - Si no es admin, solo tiene acceso a su propio almacén
+    Decorador para verificar si el usuario tiene acceso al almacén solicitado.
+    - Si es admin, tiene acceso a todos los almacenes.
+    - Si no es admin, solo tiene acceso a su propio almacén.
+    
+    Args:
+        fn (Callable): La función a decorar.
+        
+    Returns:
+        Callable: La función decorada.
     """
     @wraps(fn)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
         try:
             # Verificar token JWT
             verify_jwt_in_request()
@@ -184,26 +215,40 @@ def mismo_almacen_o_admin(fn):
             # Permitir que las excepciones HTTP se propaguen sin modificar
             raise e
         except Exception as e:
-            logger.error(f"Error en verificación de almacén: {str(e)}")
+            logger.error(f"Error en verificación de almacén: {str(e)}", exc_info=True)
             return {"error": "Error en verificación de acceso"}, 401
     return wrapper
 
-def validate_pagination_params():
-    """Extrae y valida parámetros de paginación"""
+def validate_pagination_params() -> Tuple[int, int]:
+    """
+    Extrae y valida parámetros de paginación de la request.
+    
+    Returns:
+        Tuple[int, int]: Una tupla con (page, per_page).
+    """
     try:
         page = max(1, int(request.args.get('page', 1)))
     except (ValueError, TypeError):
         page = 1
         
     try:
-        per_page = min(int(request.args.get('per_page', 10)), MAX_ITEMS_PER_PAGE)
+        per_page = min(int(request.args.get('per_page', config.DEFAULT_ITEMS_PER_PAGE)), config.MAX_ITEMS_PER_PAGE)
     except (ValueError, TypeError):
-        per_page = 10
+        per_page = config.DEFAULT_ITEMS_PER_PAGE
         
     return page, per_page
 
-def create_pagination_response(items, pagination):
-    """Crea respuesta estandarizada con paginación"""
+def create_pagination_response(items: List[Any], pagination: Any) -> Dict[str, Any]:
+    """
+    Crea respuesta estandarizada con paginación.
+    
+    Args:
+        items (List[Any]): Lista de items de la página actual.
+        pagination (Any): Objeto de paginación de SQLAlchemy.
+        
+    Returns:
+        Dict[str, Any]: Diccionario con datos y metadatos de paginación.
+    """
     return {
         "data": items,
         "pagination": {
@@ -213,3 +258,26 @@ def create_pagination_response(items, pagination):
             "pages": pagination.pages
         }
     }
+
+def validate_password(password: str) -> Tuple[bool, Optional[str]]:
+    """
+    Valida que la contraseña cumpla con los requisitos de seguridad:
+    - Mínimo 8 caracteres
+    - Al menos una letra
+    - Al menos un número
+    
+    Args:
+        password (str): La contraseña a validar.
+        
+    Returns:
+        Tuple[bool, Optional[str]]: (True, None) si es válida, (False, mensaje_error) si no.
+    """
+    if not password or len(password) < config.MIN_PASSWORD_LENGTH:
+        return False, f"La contraseña debe tener al menos {config.MIN_PASSWORD_LENGTH} caracteres"
+    
+    # Convertir a minúsculas para la validación
+    lower_password = password.lower()
+    if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
+        return False, "La contraseña debe contener al menos una letra y un número"
+        
+    return True, None

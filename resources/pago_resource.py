@@ -45,77 +45,6 @@ class PagoService:
         """Valida que el monto de un pago no exceda el saldo pendiente de la venta."""
         pagos_anteriores = sum(p.monto for p in venta.pagos if p.id != pago_existente_id)
         saldo_pendiente = venta.total - pagos_anteriores
-# ARCHIVO: resources/pago_resource.py
-import json
-import logging
-import io
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
-
-import pandas as pd
-from flask import request, send_file
-from flask_jwt_extended import jwt_required, get_jwt
-from flask_restful import Resource
-from sqlalchemy import asc, desc, func, case
-from sqlalchemy.orm import joinedload
-from werkzeug.exceptions import BadRequest, NotFound, Forbidden
-
-from common import MAX_ITEMS_PER_PAGE, handle_db_errors, parse_iso_datetime
-from extensions import db
-from models import Almacen, Cliente, Pago, Users, Venta, Gasto
-from schemas import pago_schema, pagos_schema, gastos_schema
-from utils.file_handlers import delete_file, get_presigned_url, save_file
-
-# Configuración de Logging
-logger = logging.getLogger(__name__)
-
-# ARCHIVO: resources/pago_resource.py
-import json
-import logging
-import io
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
-
-import pandas as pd
-from flask import request, send_file
-from flask_jwt_extended import jwt_required, get_jwt
-from flask_restful import Resource
-from sqlalchemy import asc, desc, func, case
-from sqlalchemy.orm import joinedload
-from werkzeug.exceptions import BadRequest, NotFound, Forbidden
-
-from common import MAX_ITEMS_PER_PAGE, handle_db_errors, parse_iso_datetime
-from extensions import db
-from models import Almacen, Cliente, Pago, Users, Venta, Gasto
-from schemas import pago_schema, pagos_schema, gastos_schema
-from utils.file_handlers import delete_file, get_presigned_url, save_file
-
-# Configuración de Logging
-logger = logging.getLogger(__name__)
-
-# --- EXCEPCIONES PERSONALIZADAS ---
-class PagoValidationError(ValueError):
-    """Error de validación específico para la lógica de pagos."""
-    pass
-
-# --- CAPA DE SERVICIO ---
-class PagoService:
-    """Contiene toda la lógica de negocio para gestionar pagos."""
-
-    @staticmethod
-    def find_pago_by_id(pago_id):
-        """Encuentra un pago por su ID o lanza un error 404 si no se encuentra."""
-        # MEJORA: Usar db.session.get() y get_or_404 para consistencia y simplicidad.
-        pago = db.session.get(Pago, pago_id)
-        if not pago:
-            raise NotFound("Pago no encontrado.")
-        return pago
-
-    @staticmethod
-    def _validate_monto(venta, monto, pago_existente_id=None):
-        """Valida que el monto de un pago no exceda el saldo pendiente de la venta."""
-        pagos_anteriores = sum(p.monto for p in venta.pagos if p.id != pago_existente_id)
-        saldo_pendiente = venta.total - pagos_anteriores
         # Se usa una pequeña tolerancia para evitar errores de punto flotante con Decimal
         if monto > saldo_pendiente + Decimal("0.001"):
             raise PagoValidationError(
@@ -241,8 +170,8 @@ class PagoService:
                 if not isinstance(pagos_data_list, list) or not pagos_data_list:
                     raise PagoValidationError("pagos_json_data debe ser una lista no vacía.")
                 fecha_pago = parse_iso_datetime(fecha_str, add_timezone=False)
-            except (json.JSONDecodeError, ValueError):
-                raise PagoValidationError("Formato JSON o de fecha inválido.")
+            except (json.JSONDecodeError, ValueError) as e:
+                raise PagoValidationError(f"Formato JSON o de fecha inválido: {str(e)}")
 
             venta_ids = {p.get('venta_id') for p in pagos_data_list if p.get('venta_id') is not None}
             if not venta_ids:
@@ -272,7 +201,11 @@ class PagoService:
                 if claims.get('rol') != 'admin' and venta.almacen_id != claims.get('almacen_id'):
                     raise Forbidden(f"No tiene permisos para pagos en el almacén de la venta {venta_id}.")
                 
-                monto = Decimal(str(monto_str))
+                try:
+                    monto = Decimal(str(monto_str))
+                except (ValueError, InvalidOperation) as e:
+                    raise PagoValidationError(f"Monto inválido '{monto_str}' para venta_id {venta_id}: {str(e)}")
+                
                 if monto <= 0:
                     raise PagoValidationError(f"El monto para venta_id {venta_id} debe ser positivo.")
 
@@ -458,10 +391,13 @@ class PagoBatchResource(Resource):
                 _get_presigned_url_for_item(created_pagos_dump[i], pago.url_comprobante)
             return {"message": "Pagos en lote registrados exitosamente.", "pagos_creados": created_pagos_dump}, 201
         except (PagoValidationError, NotFound, BadRequest) as e:
+            db.session.rollback()
             return {"error": str(e)}, 400
         except Forbidden as e:
+            db.session.rollback()
             return {"error": str(e)}, 403
         except Exception as e:
+            db.session.rollback()
             logger.error(f"Error crítico en batch de pagos: {str(e)}")
             return {"error": "Ocurrió un error interno, la operación fue revertida."}, 500
 

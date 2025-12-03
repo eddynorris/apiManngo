@@ -1,18 +1,19 @@
+from typing import Dict, Tuple, Union, Any
 from flask_restful import Resource, reqparse
 from flask_jwt_extended import create_access_token
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash
 from models import Users, Almacen
-from extensions import db
-from flask import request, jsonify, abort, current_app
-from datetime import datetime, timezone, timedelta
-import re
+from flask import request
+from common import validate_password
+from datetime import timedelta
 import logging
+import config
 
 # Configurar logging
 logger = logging.getLogger(__name__)
 
 class AuthResource(Resource):
-    def post(self):
+    def post(self) -> Tuple[Dict[str, Any], int]:
         try:
             parser = reqparse.RequestParser()
             parser.add_argument('username', type=str, required=True, help='El nombre de usuario es requerido')
@@ -25,11 +26,13 @@ class AuthResource(Resource):
             password = data['password']
             
             # Validaciones básicas para prevenir ataques simples
-            if not username or len(username) < 3:
-                return {'message': 'El nombre de usuario debe tener al menos 3 caracteres'}, 400
+            if not username or len(username) < config.MIN_USERNAME_LENGTH:
+                return {'message': f'El nombre de usuario debe tener al menos {config.MIN_USERNAME_LENGTH} caracteres'}, 400
                 
-            if not password or len(password) < 8:
-                return {'message': 'La contraseña debe tener al menos 8 caracteres'}, 400
+            # Validaciones de contraseña
+            is_valid, error_msg = validate_password(password)
+            if not is_valid:
+                return {'message': error_msg}, 400
             
             # Find user by username (case insensitive)
             usuario = Users.query.filter(Users.username.ilike(username)).first()
@@ -42,9 +45,9 @@ class AuthResource(Resource):
             
             # Determinar expiración del token basado en el rol
             if usuario.rol == 'admin':
-                expires = timedelta(hours=12)  # Los admins tienen más tiempo
+                expires = timedelta(hours=config.JWT_EXPIRES_HOURS_ADMIN)
             else:
-                expires = timedelta(hours=8)   # Usuarios normales, menos tiempo
+                expires = timedelta(hours=config.JWT_EXPIRES_HOURS_USER)
                 
             # Crear token con datos mínimos necesarios
             access_token = create_access_token(
@@ -81,5 +84,5 @@ class AuthResource(Resource):
             }, 200
             
         except Exception as e:
-            logger.error(f"Error en login: {str(e)}")
+            logger.error(f"[{self.__class__.__name__}] Error en login: {str(e)}", exc_info=True)
             return {'message': 'Error en el servidor'}, 500

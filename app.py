@@ -1,12 +1,17 @@
 import os
 import logging
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_restful import Api
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_talisman import Talisman
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 from dotenv import load_dotenv
+# Importar extensiones y recursos
+from extensions import db, jwt, swagger
+from scripts.sync_supabase import sync_supabase_command
+from resources import init_resources
 
 # Cargar variables de entorno
 env_file = '.env.production' if os.environ.get('FLASK_ENV') == 'production' else '.env'
@@ -25,10 +30,7 @@ IS_PRODUCTION = FLASK_ENV == 'production'
 logger.info(f"🔧 Entorno: {FLASK_ENV}")
 logger.info(f"🚀 Modo producción: {IS_PRODUCTION}")
 
-# Importar extensiones y recursos
-from extensions import db, jwt
-from scripts.sync_supabase import sync_supabase_command
-from resources import init_resources
+
 
 app = Flask(__name__)
 
@@ -75,14 +77,31 @@ if app.config['JWT_SECRET_KEY'] == 'insecure-dev-key' and IS_PRODUCTION:
 app.config['RATELIMIT_STORAGE_URL'] = os.environ.get('LIMITER_STORAGE_URI', 'memory://')
 app.config['RATELIMIT_STRATEGY'] = 'fixed-window'
 
+# Configuración Swagger
+app.config['SWAGGER'] = {
+    'title': 'API Manngo',
+    'uiversion': 3
+}
+
 # Inicializar extensiones
 db.init_app(app)
 jwt.init_app(app)
+swagger.init_app(app)
 api = Api(app)
 
 # Inicializar Limiter
+def get_key_func():
+    try:
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+        if identity:
+            return str(identity)
+    except Exception:
+        pass
+    return get_remote_address()
+
 limiter = Limiter(
-    get_remote_address,
+    key_func=get_key_func,
     app=app,
     default_limits=[os.environ.get('DEFAULT_RATE_LIMIT', '200 per day;50 per hour')],
 )
