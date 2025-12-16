@@ -8,14 +8,17 @@ from flask_limiter.util import get_remote_address
 from flask_talisman import Talisman
 from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 from dotenv import load_dotenv
+import os
+
+# Cargar variables de entorno ANTES de importar extensiones
+# Esto es crítico para que extensiones.py pueda leer las variables
+env_file = '.env.production' if os.environ.get('FLASK_ENV') == 'production' else '.env'
+load_dotenv(env_file)
+
 # Importar extensiones y recursos
 from extensions import db, jwt, swagger
 from scripts.sync_supabase import sync_supabase_command
 from resources import init_resources
-
-# Cargar variables de entorno
-env_file = '.env.production' if os.environ.get('FLASK_ENV') == 'production' else '.env'
-load_dotenv(env_file)
 
 # Configuración de Logging
 logging.basicConfig(

@@ -96,7 +96,8 @@ def handle_db_errors(func: Callable) -> Callable:
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error en {func.__name__}: {str(e)}", exc_info=True)
-            return {"message": "Error interno del servidor"}, 500
+            # Retornar el mensaje de error real para debugging
+            return {"message": f"Error interno del servidor: {str(e)}"}, 500
     return wrapper
 
 def rol_requerido(*roles_permitidos: str) -> Callable:
@@ -280,4 +281,25 @@ def validate_password(password: str) -> Tuple[bool, Optional[str]]:
     if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
         return False, "La contraseña debe contener al menos una letra y un número"
         
+    lower_password = password.lower()
+    if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
+        return False, "La contraseña debe contener al menos una letra y un número"
+        
     return True, None
+
+def make_json_serializable(data: Any) -> Any:
+    """
+    Recursively converts data to JSON-serializable format.
+    Handles Decimal -> float, etc.
+    """
+    import decimal
+    
+    if isinstance(data, dict):
+        return {k: make_json_serializable(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [make_json_serializable(v) for v in data]
+    elif isinstance(data, decimal.Decimal):
+        return float(data)
+    elif isinstance(data, (datetime, date)):
+        return data.isoformat()
+    return data

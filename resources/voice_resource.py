@@ -48,20 +48,25 @@ class VoiceCommandResource(Resource):
         result = gemini_service.process_command(command_text)
         
         # Auditoría: Guardar log independientemente del resultado
-        duration_ms = int((time.time() - start_time) * 1000)
-        log_entry = ComandoVozLog(
-            usuario_id=current_user_id,
-            almacen_id=almacen_id,
-            texto_original=command_text[:500],  # Truncar por seguridad
-            interpretacion=result,
-            accion_detectada=result.get('action'),
-            exito=(result.get('action') not in ['error', 'security_block', 'none']),
-            latencia_ms=duration_ms
-        )
-        db.session.add(log_entry)
-        # Usar flush() en lugar de commit() para minimizar latencia
-        # El commit se hará al final del request o con la venta
-        db.session.flush()
+        try:
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_entry = ComandoVozLog(
+                usuario_id=current_user_id,
+                almacen_id=almacen_id,
+                texto_original=command_text[:500],  # Truncar por seguridad
+                interpretacion=result,
+                accion_detectada=result.get('action'),
+                exito=(result.get('action') not in ['error', 'security_block', 'none']),
+                latencia_ms=duration_ms
+            )
+            db.session.add(log_entry)
+            # Usar flush() en lugar de commit() para minimizar latencia
+            # El commit se hará al final del request o con la venta
+            db.session.flush()
+        except Exception as e:
+            logger.error(f"Error al registrar log de auditoría (ComandoVozLog): {e}")
+            # No bloqueamos el flujo principal si falla el log, pero hacemos rollback de esa inserción fallida
+            db.session.rollback()
         
         if result['action'] != 'interpretar_operacion':
             return {
@@ -283,7 +288,8 @@ class VoiceCommandResource(Resource):
             "ciudad": c.ciudad
         } for c in clientes_disponibles]
 
-        return {
+        from common import make_json_serializable
+        response_data = {
             "status": "success",
             "processed_action": "confirmar_operacion",
             "data": enriched_data,
@@ -291,4 +297,6 @@ class VoiceCommandResource(Resource):
             "performance": {
                 "latency_ms": duration_ms
             }
-        }, 200
+        }
+        
+        return make_json_serializable(response_data), 200
