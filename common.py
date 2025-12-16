@@ -3,7 +3,7 @@ import logging
 import re
 import werkzeug.exceptions
 from functools import wraps
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from flask import jsonify, request
