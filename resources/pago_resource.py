@@ -2,6 +2,8 @@
 import json
 import logging
 import io
+import re
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -467,6 +469,19 @@ class DepositoBancarioResource(Resource):
                 # Asigna la URL del comprobante a cada pago
                 if s3_key_comprobante:
                     pago.url_comprobante = s3_key_comprobante
+                
+                # --- GENERAR REFERENCIA AUTOMATICA ---
+                # Formato: DEP-YYYYMMDD-CLI-MONTO-UUID
+                cliente_nombre = pago.venta.cliente.nombre if pago.venta and pago.venta.cliente else "GENERICO"
+                cli_corto = re.sub(r'[^a-zA-Z0-9]', '', cliente_nombre).upper()[:3]
+                if not cli_corto:
+                    cli_corto = "GEN"
+                fecha_str = fecha_deposito.strftime('%Y%m%d')
+                monto_str = str(int(monto_a_depositar))
+                codigo_unico = uuid.uuid4().hex[:4].upper()
+                
+                pago.referencia = f"DEP-{fecha_str}-{cli_corto}-{monto_str}-{codigo_unico}"
+                # ------------------------------------------
                 
                 pagos_actualizados.append(pago)
                 monto_total_depositado += monto_a_depositar

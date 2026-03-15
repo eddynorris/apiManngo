@@ -5,6 +5,7 @@ from .cliente_resource import ClienteExportResource, ClienteResource, ClientePro
 from .dashboard_resource import DashboardResource
 from .gasto_resource import GastoResource, GastoExportResource
 from .produccion_resource import ProduccionResource, ProduccionEnsamblajeResource
+from .compra_insumo_resource import InsumoAlertaResource, CompraInsumoResource
 from .inventario_resource import InventarioResource, InventarioGlobalResource
 from .transferencia_resource import TransferenciaInventarioResource # <-- Importado desde el nuevo archivo
 from .lote_resource import LoteResource
@@ -51,6 +52,8 @@ __all__ = [
     'PedidoFormDataResource',
     'PresentacionResource',
     'ProduccionEnsamblajeResource',
+    'InsumoAlertaResource',
+    'CompraInsumoResource',
     'ProduccionResource',
     'ProductoResource',
     'ProveedorResource',
@@ -93,6 +96,7 @@ def init_resources(api, limiter=None):
     api.add_resource(InventarioResource, '/inventarios', '/inventarios/<int:inventario_id>')
     api.add_resource(InventarioGlobalResource, '/inventario/reporte-global')
     api.add_resource(TransferenciaInventarioResource, '/inventario/transferir')
+    api.add_resource(InsumoAlertaResource, '/inventario/alertas-insumos')
 
     api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimiento_id>')
     
@@ -113,6 +117,7 @@ def init_resources(api, limiter=None):
     
     # Gastos
     api.add_resource(GastoResource, '/gastos', '/gastos/<int:gasto_id>')
+    api.add_resource(CompraInsumoResource, '/compras/insumos')
     api.add_resource(GastoExportResource, '/gastos/exportar')
     
     # Otros

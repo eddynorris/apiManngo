@@ -3,7 +3,7 @@ from marshmallow_sqlalchemy import SQLAlchemyAutoSchema
 from models import (
     Users, Producto, Almacen, Cliente, Gasto, Movimiento, 
     Venta, VentaDetalle, Proveedor, Pago, Inventario,
-    PresentacionProducto, Lote, Merma, PedidoDetalle, Pedido, DepositoBancario,
+    PresentacionProducto, Lote, Merma, PedidoDetalle, Pedido,
     Receta, ComponenteReceta, ComandoVozLog  # Added for voice command audit
 )
 from extensions import db
@@ -224,19 +224,6 @@ class PedidoSchema(SQLAlchemyAutoSchema):
         include_fk = True
         unknown = EXCLUDE
 
-class DepositoBancarioSchema(SQLAlchemyAutoSchema):
-    almacen = fields.Nested(AlmacenSchema, only=("id", "nombre"))
-    usuario = fields.Nested(UserSchema, only=("id", "username"))
-    monto_depositado = fields.Decimal(as_string=True)
-    comprobante_url = fields.String(dump_only=True)  # Para la URL pre-firmada
-    
-    class Meta:
-        model = DepositoBancario
-        load_instance = True
-        unknown = EXCLUDE
-        sqla_session = db.session
-        include_fk = True
-
 # ------------------- ESQUEMAS DE RECETAS -------------------
 
 class ComponenteRecetaSchema(SQLAlchemyAutoSchema):
@@ -315,9 +302,6 @@ pedidos_schema = PedidoSchema(many=True)
 
 pedido_detalle_schema = PedidoDetalleSchema()
 pedidos_detalle_schema = PedidoDetalleSchema(many=True)
-
-deposito_bancario_schema = DepositoBancarioSchema()
-depositos_bancarios_schema = DepositoBancarioSchema(many=True)
 
 # Esquemas de recetas
 receta_schema = RecetaSchema()

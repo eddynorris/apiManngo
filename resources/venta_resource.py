@@ -6,6 +6,7 @@ from schemas import venta_schema, ventas_schema, clientes_schema, almacenes_sche
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
 from utils.file_handlers import get_presigned_url
+from resources.pago_resource import PagoService
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
@@ -170,6 +171,7 @@ class VentaResource(Resource):
             vendedor_id=venta_data.vendedor_id,
             total=total,
             tipo_pago=venta_data.tipo_pago,
+            estado_pago=venta_data.estado_pago, # Asegurar que se asigna el estado
             fecha=venta_data.fecha,
             consumo_diario_kg=venta_data.consumo_diario_kg,
             detalles=detalles_para_venta
@@ -188,6 +190,24 @@ class VentaResource(Resource):
                 motivo=f"Venta ID: {nueva_venta.id} - Cliente: {cliente.nombre}"
             )
             db.session.add(movimiento)
+
+        # --- LÓGICA DE PAGO AUTOMÁTICO ---
+        if nueva_venta.estado_pago == 'pagado':
+            metodo_pago = data_from_request.get('metodo_pago', 'efectivo')
+            # Validar que el metodo de pago sea valido (aunque el modelo lo valida, es bueno tener control)
+            
+            pago_data = {
+                "venta_id": nueva_venta.id,
+                "monto": nueva_venta.total,
+                "metodo_pago": metodo_pago,
+                "fecha": venta_data.fecha
+            }
+            try:
+                PagoService.create_pago(pago_data, None, claims['sub'])
+            except Exception as e:
+                # Si falla el pago, hacemos rollback de toda la venta
+                db.session.rollback()
+                return {"error": f"Error al registrar el pago automático: {str(e)}"}, 400
 
         db.session.commit()
         return venta_schema.dump(nueva_venta), 201
@@ -252,6 +272,21 @@ class VentaResource(Resource):
 
         # --- 3. Actualizar la venta ---
         venta.cliente_id = data.get('cliente_id', venta.cliente_id)
+        venta.estado_pago = data.get('estado_pago', venta.estado_pago) # Asegurar actualización de estado
+        
+        if 'fecha' in data:
+            try:
+                venta.fecha = parse_iso_datetime(data['fecha'], add_timezone=True)
+            except ValueError:
+                db.session.rollback()
+                return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400
+                
+        if 'tipo_pago' in data:
+            venta.tipo_pago = data['tipo_pago']
+            
+        if 'consumo_diario_kg' in data:
+            venta.consumo_diario_kg = data['consumo_diario_kg']
+
         # (actualiza los otros campos de la venta como ya lo hacías)
         venta.total = nuevo_total
         venta.detalles = nuevos_detalles_obj
@@ -269,6 +304,25 @@ class VentaResource(Resource):
                 motivo=f"Venta ID: {venta.id} - Cliente: {cliente_nombre} (Actualizada)"
             )
             db.session.add(movimiento)
+
+        # --- LÓGICA DE PAGO AUTOMÁTICO EN ACTUALIZACIÓN ---
+        # Si la venta se actualiza a 'pagado', pagamos el saldo pendiente
+        # Nota: La venta ya se actualizó arriba, así que verificamos el estado *nuevo*
+        if venta.estado_pago == 'pagado':
+            saldo_pendiente = venta.saldo_pendiente
+            if saldo_pendiente > 0:
+                metodo_pago = data.get('metodo_pago', 'efectivo') # Por defecto efectivo si no se envia
+                pago_data = {
+                    "venta_id": venta.id,
+                    "monto": saldo_pendiente,
+                    "metodo_pago": metodo_pago,
+                    "fecha": datetime.now(timezone.utc)
+                }
+                try:
+                    PagoService.create_pago(pago_data, None, current_user_id)
+                except Exception as e:
+                    db.session.rollback()
+                    return {"error": f"Error al registrar el pago automático en la actualización: {str(e)}"}, 400
 
         db.session.commit()
         return venta_schema.dump(venta), 200

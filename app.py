@@ -72,6 +72,7 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(jwt_expires_str.split('#')[0].strip
 app.config['JWT_ALGORITHM'] = 'HS256'
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'insecure-dev-key')
 app.config['JWT_BLACKLIST_ENABLED'] = False
+app.config['PROPAGATE_EXCEPTIONS'] = True
 
 if app.config['JWT_SECRET_KEY'] == 'insecure-dev-key' and IS_PRODUCTION:
     raise ValueError("JWT_SECRET_KEY no configurada en producción!")

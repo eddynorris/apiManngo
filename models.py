@@ -335,7 +335,7 @@ class Movimiento(db.Model):
     __table_args__ = (
         CheckConstraint("tipo IN ('entrada', 'salida')"),
         CheckConstraint("cantidad > 0"),
-        CheckConstraint("tipo_operacion IN ('produccion', 'venta', 'ajuste', 'merma', 'transferencia', 'ensamblaje') OR tipo_operacion IS NULL"),
+        CheckConstraint("tipo_operacion IN ('produccion', 'venta', 'ajuste', 'merma', 'transferencia', 'ensamblaje', 'compra') OR tipo_operacion IS NULL"),
         CheckConstraint("turno_produccion IN ('mañana', 'tarde', 'noche') OR turno_produccion IS NULL"),
         CheckConstraint("eficiencia_conversion >= 0 AND eficiencia_conversion <= 100 OR eficiencia_conversion IS NULL"),
     )
@@ -358,7 +358,7 @@ class Gasto(db.Model):
     lote = db.relationship('Lote')
 
     __table_args__ = (
-        CheckConstraint("categoria IN ('logistica', 'personal', 'otros')"),
+        CheckConstraint("categoria IN ('logistica', 'personal', 'insumos', 'otros')"),
     )
 
 class Pedido(db.Model):
@@ -399,27 +399,6 @@ class PedidoDetalle(db.Model):
     
     # Relación
     presentacion = db.relationship('PresentacionProducto')
-
-class DepositoBancario(db.Model):
-    __tablename__ = 'depositos_bancarios'
-    id = db.Column(db.Integer, primary_key=True)
-    fecha_deposito = db.Column(db.DateTime(timezone=True), nullable=False)
-    monto_depositado = db.Column(db.Numeric(12, 2), nullable=False)
-    almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='SET NULL'))
-    usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
-    referencia_bancaria = db.Column(db.String(100))
-    url_comprobante_deposito = db.Column(db.String(255))
-    notas = db.Column(db.Text)
-    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    
-    # Relaciones
-    almacen = db.relationship('Almacen')
-    usuario = db.relationship('Users')
-    
-    __table_args__ = (
-        CheckConstraint("monto_depositado > 0"),
-    )
 
 class Receta(db.Model):
     __tablename__ = 'recetas'
