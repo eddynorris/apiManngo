@@ -91,14 +91,38 @@ class GastoResource(Resource):
     @jwt_required()
     @handle_db_errors
     def post(self):
-        """Registra nuevo gasto con validación de categoría"""
+        """Registra nuevo gasto con defaults inteligentes.
+        
+        Campos obligatorios: descripcion, monto
+        Campos opcionales con defaults:
+          - categoria: default 'logistica'
+          - almacen_id: default al almacen del usuario logueado
+          - fecha: default a hoy
+          - lote_id: opcional
+        """
         json_data = request.get_json()
+        claims = get_jwt()
+
+        # --- DEFAULTS INTELIGENTES ---
+        if not json_data.get('categoria'):
+            json_data['categoria'] = 'logistica'
+        
+        if not json_data.get('almacen_id'):
+            user_almacen = claims.get('almacen_id')
+            if not user_almacen:
+                return {"error": "No se proporcionó almacen_id y el usuario no tiene almacén asignado."}, 400
+            json_data['almacen_id'] = user_almacen
+        
+        if not json_data.get('fecha'):
+            json_data['fecha'] = datetime.now().strftime('%Y-%m-%d')
+        # --- FIN DEFAULTS ---
+
         if json_data.get('lote_id'):
             Lote.query.get_or_404(json_data['lote_id'])
 
         data = gasto_schema.load(json_data)
         Almacen.query.get_or_404(data.almacen_id)
-        data.usuario_id = get_jwt().get('sub')  # Asignar usuario actual
+        data.usuario_id = claims.get('sub')  # Asignar usuario actual
         
         db.session.add(data)
         db.session.commit()

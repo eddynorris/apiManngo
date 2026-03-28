@@ -85,14 +85,13 @@ class PagoService:
         return query
 
     @staticmethod
-    def create_pago(data, file, usuario_id):
+    def create_pago(nuevo_pago, file, usuario_id):
         """Crea un nuevo pago, valida y actualiza la venta."""
-        venta_id = data.get("venta_id")
-        if not venta_id:
+        if not nuevo_pago.venta_id:
             raise PagoValidationError("El campo 'venta_id' es requerido.")
         
-        venta = Venta.query.get_or_404(venta_id)
-        monto = data.get("monto", Decimal("0"))
+        venta = Venta.query.get_or_404(nuevo_pago.venta_id)
+        monto = nuevo_pago.monto or Decimal("0")
         
         PagoService._validate_monto(venta, monto)
         
@@ -102,7 +101,6 @@ class PagoService:
             if not s3_key:
                 raise Exception("Ocurrió un error interno al guardar el comprobante.")
         
-        nuevo_pago = Pago(**data)
         nuevo_pago.usuario_id = usuario_id
         nuevo_pago.url_comprobante = s3_key
         
@@ -111,23 +109,28 @@ class PagoService:
         return nuevo_pago
 
     @staticmethod
-    def update_pago(pago_id, data, file, eliminar_comprobante):
+    def update_pago(pago, file, eliminar_comprobante):
         """Actualiza un pago existente, valida y gestiona el comprobante."""
-        pago = PagoService.find_pago_by_id(pago_id)
         venta = pago.venta
         
-        if "monto" in data:
-            PagoService._validate_monto(venta, data["monto"], pago_existente_id=pago_id)
-        
-        for key, value in data.items():
-            setattr(pago, key, value)
+        PagoService._validate_monto(venta, pago.monto, pago_existente_id=pago.id)
             
         if eliminar_comprobante and pago.url_comprobante:
-            delete_file(pago.url_comprobante)
+            otros_pagos_con_mismo_comprobante = db.session.query(Pago.id).filter(
+                Pago.url_comprobante == pago.url_comprobante,
+                Pago.id != pago.id
+            ).count()
+            if otros_pagos_con_mismo_comprobante == 0:
+                delete_file(pago.url_comprobante)
             pago.url_comprobante = None
         elif file and file.filename:
             if pago.url_comprobante:
-                delete_file(pago.url_comprobante)
+                otros_pagos = db.session.query(Pago.id).filter(
+                    Pago.url_comprobante == pago.url_comprobante,
+                    Pago.id != pago.id
+                ).count()
+                if otros_pagos == 0:
+                    delete_file(pago.url_comprobante)
             s3_key = save_file(file, "comprobantes")
             if not s3_key:
                 raise Exception("Error al subir el nuevo comprobante.")
@@ -306,9 +309,9 @@ class PagoResource(Resource):
             if raw_data.get('metodo_pago'):
                 raw_data['metodo_pago'] = raw_data['metodo_pago'].lower()
                 
-            data = pago_schema.load(raw_data)
+            nuevo_pago_instancia = pago_schema.load(raw_data)
             usuario_id = get_jwt().get("sub")
-            nuevo_pago = PagoService.create_pago(data, file, usuario_id)
+            nuevo_pago = PagoService.create_pago(nuevo_pago_instancia, file, usuario_id)
             
             db.session.commit()
             
@@ -328,8 +331,9 @@ class PagoResource(Resource):
         """Actualiza un pago existente."""
         try:
             raw_data, file, eliminar_comprobante = _parse_request_data()
-            data = pago_schema.load(raw_data, partial=True)
-            pago_actualizado = PagoService.update_pago(pago_id, data, file, eliminar_comprobante)
+            pago_existente = PagoService.find_pago_by_id(pago_id)
+            pago_modificado = pago_schema.load(raw_data, instance=pago_existente, partial=True)
+            pago_actualizado = PagoService.update_pago(pago_modificado, file, eliminar_comprobante)
 
             db.session.commit()
             

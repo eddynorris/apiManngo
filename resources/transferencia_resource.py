@@ -89,31 +89,45 @@ class TransferenciaService:
 
     def _obtener_inventarios(self, almacen_id):
         """
-        OPTIMIZACIÓN: Obtiene todos los registros de inventario necesarios
-        para un almacén en una sola consulta y los devuelve en un diccionario
-        para acceso rápido.
+        Obtiene todos los registros de inventario necesarios de un almacén 
+        y los agrupa en una lista por presentacion_id para procesarlos en FIFO.
         """
+        from models import Lote
         ids_presentaciones = {t['presentacion_id'] for t in self.transferencias_validadas}
         
-        inventarios = Inventario.query.options(joinedload(Inventario.presentacion)).filter(
+        inventarios = Inventario.query.options(
+            joinedload(Inventario.presentacion),
+            joinedload(Inventario.lote)
+        ).join(
+            Lote, Inventario.lote_id == Lote.id, isouter=True
+        ).filter(
             Inventario.almacen_id == almacen_id,
             Inventario.presentacion_id.in_(ids_presentaciones)
+        ).order_by(
+            Inventario.presentacion_id, 
+            Lote.fecha_ingreso.asc(), # FIFO by lot date
+            Inventario.id.asc()       # Fallback FIFO
         ).all()
         
-        # Para almacén origen: usar solo presentacion_id (un inventario por presentación)
-        # Para almacén destino: usar solo presentacion_id (un inventario por presentación)
-        return {inv.presentacion_id: inv for inv in inventarios}
+        agrupados = {}
+        for inv in inventarios:
+            if inv.presentacion_id not in agrupados:
+                agrupados[inv.presentacion_id] = []
+            agrupados[inv.presentacion_id].append(inv)
+            
+        return agrupados
 
     def _validar_stock(self, inventarios_origen):
-        """Valida que haya stock suficiente para todas las transferencias."""
+        """Valida que haya stock suficiente para todas las transferencias sumarizando los lotes disponibles."""
         for transfer in self.transferencias_validadas:
-            inv_origen = inventarios_origen.get(transfer['presentacion_id'])
+            invs_origen = inventarios_origen.get(transfer['presentacion_id'], [])
+            
+            stock_disponible = sum(inv.cantidad for inv in invs_origen)
 
-            if not inv_origen or inv_origen.cantidad < transfer['cantidad']:
-                stock_disponible = inv_origen.cantidad if inv_origen else 0
+            if stock_disponible < transfer['cantidad']:
                 nombre_presentacion = f"ID {transfer['presentacion_id']}"
-                if inv_origen and inv_origen.presentacion:
-                     nombre_presentacion = inv_origen.presentacion.nombre
+                if invs_origen and invs_origen[0].presentacion:
+                     nombre_presentacion = invs_origen[0].presentacion.nombre
                 raise ValueError(
                     f"Stock insuficiente para '{nombre_presentacion}'. "
                     f"Requerido: {transfer['cantidad']}, Disponible: {stock_disponible}"
@@ -121,57 +135,71 @@ class TransferenciaService:
 
     def _actualizar_inventarios_y_crear_movimientos(self, inventarios_origen, inventarios_destino):
         """
-        Modifica los registros de inventario en la sesión de la base de datos
-        y crea los movimientos correspondientes.
+        Modifica los registros empleando lógica FIFO: descuenta de los lotes más antiguos primero
+        y transfiere esos mismos lotes al inventario de destino.
         """
         movimientos_a_crear = []
         transferencias_realizadas_info = []
 
         for transfer in self.transferencias_validadas:
-            inv_origen = inventarios_origen[transfer['presentacion_id']]
-            inv_destino = inventarios_destino.get(transfer['presentacion_id'])
+            cantidad_restante = transfer['cantidad']
+            invs_origen_disponibles = inventarios_origen.get(transfer['presentacion_id'], [])
+            invs_destino_existentes = inventarios_destino.get(transfer['presentacion_id'], [])
 
-            cantidad = transfer['cantidad']
+            for inv_orig in invs_origen_disponibles:
+                if cantidad_restante <= 0:
+                    break
+                
+                if inv_orig.cantidad <= 0:
+                    continue
+                    
+                cantidad_a_tomar = min(inv_orig.cantidad, cantidad_restante)
+                
+                # Descontar del origen
+                inv_orig.cantidad -= cantidad_a_tomar
+                cantidad_restante -= cantidad_a_tomar
+                
+                # Buscar o crear inventario destino CON EL MISMO LOTE
+                inv_dest = next((inv for inv in invs_destino_existentes if inv.lote_id == inv_orig.lote_id), None)
+                
+                if inv_dest:
+                    inv_dest.cantidad += cantidad_a_tomar
+                    inv_dest.ultima_actualizacion = self.fecha_operacion
+                else:
+                    inv_dest_nuevo = Inventario(
+                        presentacion_id=transfer['presentacion_id'],
+                        almacen_id=self.almacen_destino_id,
+                        lote_id=inv_orig.lote_id, # SE MANTIENE EL LOTE ORIGINAL
+                        cantidad=cantidad_a_tomar,
+                        stock_minimo=inv_orig.stock_minimo
+                    )
+                    db.session.add(inv_dest_nuevo)
+                    invs_destino_existentes.append(inv_dest_nuevo)
 
-            # Actualizar inventarios
-            inv_origen.cantidad -= cantidad
-            if inv_destino:
-                inv_destino.cantidad += cantidad
-                inv_destino.ultima_actualizacion = self.fecha_operacion
-            else:
-                inv_destino_nuevo = Inventario(
+                # Preparar movimientos manteniendo la trazabilidad
+                motivo_salida = f"Transferencia a {self.almacen_destino.nombre} (Op: {self.id_operacion})"
+                motivo_entrada = f"Transferencia desde {self.almacen_origen.nombre} (Op: {self.id_operacion})"
+
+                movimientos_a_crear.append(Movimiento(
+                    tipo='salida', motivo=motivo_salida, 
                     presentacion_id=transfer['presentacion_id'],
-                    almacen_id=self.almacen_destino_id,
-                    lote_id=None,  # Las transferencias no manejan lotes específicos
-                    cantidad=cantidad,
-                    stock_minimo=inv_origen.stock_minimo
-                )
-                db.session.add(inv_destino_nuevo)
-
-            # Preparar movimientos
-            motivo_salida = f"Transferencia a {self.almacen_destino.nombre} (Op: {self.id_operacion})"
-            motivo_entrada = f"Transferencia desde {self.almacen_origen.nombre} (Op: {self.id_operacion})"
-
-            movimientos_a_crear.append(Movimiento(
-                tipo='salida', motivo=motivo_salida, 
-                presentacion_id=transfer['presentacion_id'],
-                lote_id=None,  # Las transferencias no manejan lotes específicos
-                cantidad=cantidad,
-                usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
-            ))
-            movimientos_a_crear.append(Movimiento(
-                tipo='entrada', motivo=motivo_entrada, 
-                presentacion_id=transfer['presentacion_id'],
-                lote_id=None,  # Las transferencias no manejan lotes específicos
-                cantidad=cantidad,
-                usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
-            ))
-            
-            transferencias_realizadas_info.append({
-                "presentacion_nombre": inv_origen.presentacion.nombre,
-                "cantidad": str(cantidad),
-                "lote_id": None  # Las transferencias no manejan lotes específicos
-            })
+                    lote_id=inv_orig.lote_id,
+                    cantidad=cantidad_a_tomar,
+                    usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
+                ))
+                movimientos_a_crear.append(Movimiento(
+                    tipo='entrada', motivo=motivo_entrada, 
+                    presentacion_id=transfer['presentacion_id'],
+                    lote_id=inv_orig.lote_id,
+                    cantidad=cantidad_a_tomar,
+                    usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
+                ))
+                
+                transferencias_realizadas_info.append({
+                    "presentacion_nombre": inv_orig.presentacion.nombre,
+                    "cantidad": str(cantidad_a_tomar),
+                    "lote_id": inv_orig.lote_id
+                })
 
         db.session.add_all(movimientos_a_crear)
         return transferencias_realizadas_info

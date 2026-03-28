@@ -72,13 +72,20 @@ class ProduccionResource(Resource):
                     "cantidad_unidades": str(cantidad_total_necesaria)
                 })
 
+        # Obtener el lote de origen heredado (de la primera materia prima)
+        inherited_lote_id = None
+        for s in salidas:
+            if s["tipo_consumo"] == "materia_prima":
+                inherited_lote_id = s.get("lote_id")
+                break
+
         ensamblaje_payload = {
             "almacen_id": almacen_id,
             "descripcion": f"Fabricación por receta de {cantidad_a_producir} unidades de {receta.presentacion.nombre}",
             "entradas": [{
                 "presentacion_id": presentacion_final_id,
                 "cantidad_unidades": str(cantidad_a_producir),
-                "lote_destino_id": lote_destino_id
+                "lote_destino_id": inherited_lote_id
             }],
             "salidas": salidas
         }
@@ -159,26 +166,28 @@ class ProduccionEnsamblajeResource(Resource):
                 if lote_destino_id:
                     lote_destino = Lote.query.get(lote_destino_id)
                     if not lote_destino:
-                        return {"error": f"El lote de destino con ID {lote_destino_id} no existe."}, 400
-                    lote_destino.cantidad_disponible_kg += cantidad_kg_producida
+                        return {"error": f"El lote de origen con ID {lote_destino_id} no existe."}, 400
+                    
+                    # OJO: NO sumamos cantidad_kg_producida a lote_destino.cantidad_disponible_kg aquí,
+                    # porque ese valor pertenece estrictamente a la materia prima descontada en las 'salidas'.
+                    # El producto terminado se contabiliza puramente en la tabla Inventario.
+
                     lote_para_movimiento_id = lote_destino.id
                 else:
                     # Para productos sin lote específico, usar None en el lote
                     lote_para_movimiento_id = None
                 
-                # Buscar inventario existente por presentacion_id y almacen_id
+                # Buscar inventario existente por presentacion_id, almacen_id y exacto lote_id
                 inv_destino = Inventario.query.filter_by(
                     presentacion_id=presentacion_id, 
-                    almacen_id=almacen_id
+                    almacen_id=almacen_id,
+                    lote_id=lote_destino_id
                 ).first()
                 
                 if inv_destino:
                     # Actualizar inventario existente
                     inv_destino.cantidad += cantidad_unidades
                     inv_destino.ultima_actualizacion = fecha_operacion
-                    # Si hay un lote específico, actualizar el lote_id
-                    if lote_destino_id:
-                        inv_destino.lote_id = lote_destino_id
                 else:
                     # Crear nuevo registro de inventario
                     inv_destino = Inventario(

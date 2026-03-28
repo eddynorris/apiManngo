@@ -1,7 +1,7 @@
 from flask_restful import Resource, reqparse
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request, send_file
-from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Lote, Users
+from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Lote, Users, Gasto
 from schemas import venta_schema, ventas_schema, clientes_schema, almacenes_schema, presentacion_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
@@ -109,15 +109,20 @@ class VentaResource(Resource):
     @handle_db_errors
     def post(self):
         """
-        Crea una nueva venta. El lote_id se obtiene automáticamente del inventario.
-        El frontend solo necesita enviar presentacion_id y cantidad.
+        Crea una nueva venta con lógica FIFO de lotes.
+        El frontend solo envía: cliente_id, almacen_id, fecha, monto_pago (opcional),
+        metodo_pago (opcional, default 'efectivo') y detalles [{presentacion_id, cantidad, precio_unitario}].
+        El estado_pago se determina automáticamente según monto_pago vs total:
+          - monto_pago >= total  -> 'pagado'
+          - 0 < monto_pago < total -> 'parcial'
+          - sin monto_pago o = 0 -> 'pendiente'
         """
         data_from_request = request.get_json()
         detalles_data = data_from_request.get('detalles', [])
         if not detalles_data:
             return {"error": "La venta debe tener al menos un detalle"}, 400
         
-        venta_data = venta_schema.load(data_from_request, partial=("detalles",))
+        venta_data = venta_schema.load(data_from_request, partial=("detalles", "tipo_pago", "consumo_diario_kg", "total"))
         cliente = Cliente.query.get_or_404(venta_data.cliente_id)
         
         claims = get_jwt()
@@ -126,54 +131,82 @@ class VentaResource(Resource):
         total = Decimal('0')
         detalles_para_venta = []
 
-        # Optimización para obtener todos los datos necesarios en menos consultas
-        presentacion_ids = [d.get('presentacion_id') for d in detalles_data]
-        inventarios = Inventario.query.filter(
-            Inventario.presentacion_id.in_(presentacion_ids),
-            Inventario.almacen_id == venta_data.almacen_id
-        ).all()
-        inventarios_dict = {i.presentacion_id: i for i in inventarios}
+        # --- LÓGICA FIFO: Obtener todos los inventarios por presentación y almacén, ordenados por FIFO ---
+        from models import Lote as LoteModel
+        presentacion_ids = list({d.get('presentacion_id') for d in detalles_data})
+
+        inventarios_por_presentacion = {}
+        invs_raw = (
+            Inventario.query
+            .options(orm.joinedload(Inventario.presentacion), orm.joinedload(Inventario.lote))
+            .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
+            .filter(
+                Inventario.presentacion_id.in_(presentacion_ids),
+                Inventario.almacen_id == venta_data.almacen_id,
+                Inventario.cantidad > 0
+            )
+            .order_by(
+                Inventario.presentacion_id,
+                LoteModel.fecha_ingreso.asc(),  # FIFO: más antiguo primero
+                Inventario.id.asc()             # Desempate
+            )
+            .all()
+        )
+        for inv in invs_raw:
+            inventarios_por_presentacion.setdefault(inv.presentacion_id, []).append(inv)
         
         for detalle_data in detalles_data:
             presentacion_id = detalle_data.get('presentacion_id')
-            cantidad = detalle_data.get('cantidad')
+            cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
 
-            if not all([presentacion_id, cantidad]):
+            if not all([presentacion_id, cantidad_solicitada]):
                 return {"error": "Cada detalle debe incluir presentacion_id y cantidad"}, 400
 
-            inventario = inventarios_dict.get(presentacion_id)
-            if not inventario:
-                return {"error": f"No se encontró inventario para la presentación {presentacion_id} en este almacén."}, 404
-            
-            if inventario.cantidad < cantidad:
-                return {"error": f"Stock insuficiente para {inventario.presentacion.nombre} (Disponible: {inventario.cantidad})"}, 400
+            invs_disponibles = inventarios_por_presentacion.get(presentacion_id, [])
+            stock_total = sum(inv.cantidad for inv in invs_disponibles)
 
-            # --- LÓGICA ÓPTIMA: Obtener lote automáticamente ---
-            lote_id_obtenido = inventario.lote_id
-            if not lote_id_obtenido:
-                 return {"error": f"El inventario para {inventario.presentacion.nombre} no tiene un lote asignado."}, 400
+            if not invs_disponibles:
+                return {"error": f"No se encontró inventario para presentación ID {presentacion_id} en este almacén."}, 404
 
-            precio_unitario = detalle_data.get('precio_unitario') or inventario.presentacion.precio_venta
-            
-            nuevo_detalle = VentaDetalle(
-                presentacion_id=presentacion_id,
-                cantidad=cantidad,
-                precio_unitario=Decimal(precio_unitario),
-                lote_id=lote_id_obtenido # Se asigna el lote obtenido del inventario
-            )
-            detalles_para_venta.append(nuevo_detalle)
-            total += cantidad * Decimal(precio_unitario)
-            inventario.cantidad -= cantidad # Deducir stock
+            if stock_total < cantidad_solicitada:
+                nombre = invs_disponibles[0].presentacion.nombre if invs_disponibles else str(presentacion_id)
+                return {"error": f"Stock insuficiente para {nombre} (Disponible: {stock_total})"}, 400
+
+            # Precio por unidad para este ítem
+            precio_unitario = Decimal(str(
+                detalle_data.get('precio_unitario') or invs_disponibles[0].presentacion.precio_venta
+            ))
+
+            # Descontar de inventarios FIFO, creando un VentaDetalle por cada lote consumido
+            cantidad_restante = cantidad_solicitada
+            for inv in invs_disponibles:
+                if cantidad_restante <= 0:
+                    break
+                cantidad_a_tomar = min(inv.cantidad, cantidad_restante)
+                inv.cantidad -= cantidad_a_tomar
+                cantidad_restante -= cantidad_a_tomar
+
+                nuevo_detalle = VentaDetalle(
+                    presentacion_id=presentacion_id,
+                    cantidad=cantidad_a_tomar,
+                    precio_unitario=precio_unitario,
+                    lote_id=inv.lote_id  # Puede ser None para insumos, acepta ambos casos
+                )
+                detalles_para_venta.append(nuevo_detalle)
+                total += cantidad_a_tomar * precio_unitario
+
+        # tipo_pago se deriva automáticamente: si paga ahora es 'contado', si no es 'credito'
+        monto_pago = Decimal(str(data_from_request.get('monto_pago') or 0))
+        metodo_pago = (data_from_request.get('metodo_pago') or 'efectivo').lower()
+        tipo_pago_derivado = 'contado' if monto_pago > 0 else 'credito'
 
         nueva_venta = Venta(
             cliente_id=venta_data.cliente_id,
             almacen_id=venta_data.almacen_id,
             vendedor_id=venta_data.vendedor_id,
             total=total,
-            tipo_pago=venta_data.tipo_pago,
-            estado_pago=venta_data.estado_pago, # Asegurar que se asigna el estado
+            tipo_pago=tipo_pago_derivado,
             fecha=venta_data.fecha,
-            consumo_diario_kg=venta_data.consumo_diario_kg,
             detalles=detalles_para_venta
         )
 
@@ -191,23 +224,41 @@ class VentaResource(Resource):
             )
             db.session.add(movimiento)
 
-        # --- LÓGICA DE PAGO AUTOMÁTICO ---
-        if nueva_venta.estado_pago == 'pagado':
-            metodo_pago = data_from_request.get('metodo_pago', 'efectivo')
-            # Validar que el metodo de pago sea valido (aunque el modelo lo valida, es bueno tener control)
-            
+        # --- REGISTRAR PAGO Y DEJAR QUE actualizar_estado() CALCULE EL ESTADO ---
+        if monto_pago > 0:
+            monto_a_registrar = min(monto_pago, total)  # Evitar sobrepago
+            METODOS_VALIDOS = {'efectivo', 'deposito', 'transferencia', 'tarjeta', 'yape_plin', 'otro'}
+            if metodo_pago not in METODOS_VALIDOS:
+                return {"error": f"Método de pago inválido. Opciones: {', '.join(sorted(METODOS_VALIDOS))}"}, 400
+
             pago_data = {
                 "venta_id": nueva_venta.id,
-                "monto": nueva_venta.total,
+                "monto": monto_a_registrar,
                 "metodo_pago": metodo_pago,
                 "fecha": venta_data.fecha
             }
             try:
                 PagoService.create_pago(pago_data, None, claims['sub'])
+                # create_pago ya llama actualizar_estado() internamente
             except Exception as e:
-                # Si falla el pago, hacemos rollback de toda la venta
                 db.session.rollback()
-                return {"error": f"Error al registrar el pago automático: {str(e)}"}, 400
+                return {"error": f"Error al registrar el pago: {str(e)}"}, 400
+        else:
+            # Sin pago: el estado queda 'pendiente' (default del modelo)
+            nueva_venta.actualizar_estado()
+
+        # --- REGISTRO DE GASTO ASOCIADO (OPCIONAL) ---
+        monto_gasto = Decimal(str(data_from_request.get('monto_gasto') or 0))
+        if monto_gasto > 0:
+            nuevo_gasto = Gasto(
+                monto=monto_gasto,
+                descripcion=f"Gasto asociado a venta #{nueva_venta.id}",
+                almacen_id=nueva_venta.almacen_id,
+                usuario_id=claims['sub'],
+                fecha=nueva_venta.fecha.date() if hasattr(nueva_venta.fecha, 'date') else nueva_venta.fecha,
+                categoria='logistica'
+            )
+            db.session.add(nuevo_gasto)
 
         db.session.commit()
         return venta_schema.dump(nueva_venta), 201
