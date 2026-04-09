@@ -1,7 +1,7 @@
 from flask_restful import Resource, reqparse
 from flask_jwt_extended import jwt_required, get_jwt
 from flask import request, send_file
-from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Lote, Users, Gasto
+from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Lote, Users, Gasto, Pago
 from schemas import venta_schema, ventas_schema, clientes_schema, almacenes_schema, presentacion_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
@@ -231,14 +231,14 @@ class VentaResource(Resource):
             if metodo_pago not in METODOS_VALIDOS:
                 return {"error": f"Método de pago inválido. Opciones: {', '.join(sorted(METODOS_VALIDOS))}"}, 400
 
-            pago_data = {
-                "venta_id": nueva_venta.id,
-                "monto": monto_a_registrar,
-                "metodo_pago": metodo_pago,
-                "fecha": venta_data.fecha
-            }
+            pago_instancia = Pago(
+                venta_id=nueva_venta.id,
+                monto=monto_a_registrar,
+                metodo_pago=metodo_pago,
+                fecha=venta_data.fecha
+            )
             try:
-                PagoService.create_pago(pago_data, None, claims['sub'])
+                PagoService.create_pago(pago_instancia, None, claims['sub'])
                 # create_pago ya llama actualizar_estado() internamente
             except Exception as e:
                 db.session.rollback()
@@ -363,14 +363,14 @@ class VentaResource(Resource):
             saldo_pendiente = venta.saldo_pendiente
             if saldo_pendiente > 0:
                 metodo_pago = data.get('metodo_pago', 'efectivo') # Por defecto efectivo si no se envia
-                pago_data = {
-                    "venta_id": venta.id,
-                    "monto": saldo_pendiente,
-                    "metodo_pago": metodo_pago,
-                    "fecha": datetime.now(timezone.utc)
-                }
+                pago_instancia = Pago(
+                    venta_id=venta.id,
+                    monto=saldo_pendiente,
+                    metodo_pago=metodo_pago,
+                    fecha=datetime.now(timezone.utc)
+                )
                 try:
-                    PagoService.create_pago(pago_data, None, current_user_id)
+                    PagoService.create_pago(pago_instancia, None, current_user_id)
                 except Exception as e:
                     db.session.rollback()
                     return {"error": f"Error al registrar el pago automático en la actualización: {str(e)}"}, 400
