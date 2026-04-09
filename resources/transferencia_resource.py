@@ -240,7 +240,7 @@ class TransferenciaInventarioResource(Resource):
             
             inventario_disponible = query.all()
 
-            # 3. Procesar y agrupar los datos eficientemente en Python
+            # 3. Procesar y agrupar los datos eficientemente en Python sumando los stocks de diferentes lotes
             presentaciones_agrupadas = {}
             for inv in inventario_disponible:
                 pres_id = inv.presentacion.id
@@ -251,25 +251,25 @@ class TransferenciaInventarioResource(Resource):
                         "id": pres_id,
                         "nombre": inv.presentacion.nombre,
                         "url_foto": get_presigned_url(inv.presentacion.url_foto) if inv.presentacion.url_foto else None,
-                        "inventarios": []
+                        "inventarios_dict": {}
                     }
 
-                # Construimos la información del lote manualmente para evitar schemas en bucle
-                lote_info = None
-                if inv.lote:
-                    lote_info = {
-                        "id": inv.lote.id,
-                        "descripcion": inv.lote.descripcion
+                alm_id = inv.almacen_id
+                if alm_id not in presentaciones_agrupadas[pres_id]["inventarios_dict"]:
+                    presentaciones_agrupadas[pres_id]["inventarios_dict"][alm_id] = {
+                        "almacen_id": inv.almacen_id,
+                        "almacen_nombre": inv.almacen.nombre,
+                        "stock_disponible": 0.0,
+                        "lote_id": None,  # Mantenemos para compatibilidad con schemas viejos
+                        "lote_info": None # Mantenemos para compatibilidad
                     }
+                
+                # Sumamos el total de inventario (FIFO se encarga de los lotes internamente al transferir)
+                presentaciones_agrupadas[pres_id]["inventarios_dict"][alm_id]["stock_disponible"] += float(inv.cantidad)
 
-                # Agregamos la información de este inventario específico a su presentación
-                presentaciones_agrupadas[pres_id]['inventarios'].append({
-                    "almacen_id": inv.almacen_id,
-                    "almacen_nombre": inv.almacen.nombre,
-                    "stock_disponible": float(inv.cantidad),
-                    "lote_id": inv.lote_id,
-                    "lote_info": lote_info
-                })
+            # Extraemos la lista plana de inventarios para la respuesta
+            for pres_data in presentaciones_agrupadas.values():
+                pres_data["inventarios"] = list(pres_data.pop("inventarios_dict").values())
             
             return {
                 "almacenes": almacenes_schema.dump(almacenes),
