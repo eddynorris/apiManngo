@@ -117,7 +117,19 @@ class VentaResource(Resource):
           - 0 < monto_pago < total -> 'parcial'
           - sin monto_pago o = 0 -> 'pendiente'
         """
-        data_from_request = request.get_json()
+        import json
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            data_from_request = request.form.to_dict()
+            file_comprobante = request.files.get('comprobante')
+            if 'detalles' in data_from_request and isinstance(data_from_request['detalles'], str):
+                try:
+                    data_from_request['detalles'] = json.loads(data_from_request['detalles'])
+                except json.JSONDecodeError:
+                    return {"error": "Formato de detalles inválido"}, 400
+        else:
+            data_from_request = request.get_json()
+            file_comprobante = None
+
         detalles_data = data_from_request.get('detalles', [])
         if not detalles_data:
             return {"error": "La venta debe tener al menos un detalle"}, 400
@@ -238,7 +250,7 @@ class VentaResource(Resource):
                 fecha=venta_data.fecha
             )
             try:
-                PagoService.create_pago(pago_instancia, None, claims['sub'])
+                PagoService.create_pago(pago_instancia, file_comprobante, claims['sub'])
                 # create_pago ya llama actualizar_estado() internamente
             except Exception as e:
                 db.session.rollback()
@@ -272,7 +284,20 @@ class VentaResource(Resource):
         """
         # Carga la venta y sus detalles de una sola vez
         venta = Venta.query.options(orm.joinedload(Venta.detalles)).get_or_404(venta_id)
-        data = request.get_json()
+        
+        import json
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            data = request.form.to_dict()
+            file_comprobante = request.files.get('comprobante')
+            if 'detalles' in data and isinstance(data['detalles'], str):
+                try:
+                    data['detalles'] = json.loads(data['detalles'])
+                except json.JSONDecodeError:
+                    return {"error": "Formato de detalles inválido"}, 400
+        else:
+            data = request.get_json()
+            file_comprobante = None
+
         nuevos_detalles_data = data.get('detalles', [])
         
         # IDs de presentaciones de los detalles actuales y nuevos para una consulta única
@@ -370,7 +395,7 @@ class VentaResource(Resource):
                     fecha=datetime.now(timezone.utc)
                 )
                 try:
-                    PagoService.create_pago(pago_instancia, None, current_user_id)
+                    PagoService.create_pago(pago_instancia, file_comprobante, current_user_id)
                 except Exception as e:
                     db.session.rollback()
                     return {"error": f"Error al registrar el pago automático en la actualización: {str(e)}"}, 400
@@ -433,35 +458,41 @@ class VentaFormDataResource(Resource):
 
             # --- Consulta Principal Optimizada ---
             # Carga el inventario y sus relaciones (Presentacion, Lote) en una sola consulta.
-            inventario_disponible = db.session.query(Inventario).options(
+            # CORRECCIÓN: el join va ANTES del filter para que el filtro sobre
+            # PresentacionProducto no genere un cross-join implícito.
+            # También se agrega filtro cantidad > 0 para excluir lotes agotados
+            # y evitar que el agrupamiento posterior reciba duplicados vacíos.
+            inventario_disponible = db.session.query(Inventario).join(
+                PresentacionProducto, Inventario.presentacion_id == PresentacionProducto.id
+            ).options(
                 orm.joinedload(Inventario.presentacion),
                 orm.joinedload(Inventario.lote)
             ).filter(
                 Inventario.almacen_id == target_almacen_id,
-
+                Inventario.cantidad > 0,
                 PresentacionProducto.activo == True
-            ).join(
-                PresentacionProducto, Inventario.presentacion_id == PresentacionProducto.id
             ).order_by(PresentacionProducto.nombre).all()
 
-            presentaciones_data = []
+            # Agrupar inventario por presentacion_id, sumando stock de todos los lotes
+            presentaciones_agrupadas = {}
             for inventario in inventario_disponible:
                 presentacion = inventario.presentacion
-                lote = inventario.lote
+                pres_id = presentacion.id
                 
-                # Serializar la presentación a JSON
-                dumped_presentacion = presentacion_schema.dump(presentacion)
+                if pres_id not in presentaciones_agrupadas:
+                    dumped_presentacion = presentacion_schema.dump(presentacion)
+                    
+                    # Generar URL pre-firmada para la foto
+                    if presentacion.url_foto:
+                        dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
+                    
+                    dumped_presentacion['stock_disponible'] = 0.0
+                    presentaciones_agrupadas[pres_id] = dumped_presentacion
                 
-                # Añadir datos adicionales del inventario y lote
-                dumped_presentacion['stock_disponible'] = float(inventario.cantidad)
-                dumped_presentacion['lote_id'] = lote.id if lote else None
-                dumped_presentacion['lote_descripcion'] = lote.descripcion if lote else "Sin lote asignado"
-                
-                # Generar URL pre-firmada para la foto
-                if presentacion.url_foto:
-                    dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
-                
-                presentaciones_data.append(dumped_presentacion)
+                # Sumar el stock de este lote al total de la presentación
+                presentaciones_agrupadas[pres_id]['stock_disponible'] += float(inventario.cantidad)
+
+            presentaciones_data = list(presentaciones_agrupadas.values())
 
             return {
                 "clientes": clientes_schema.dump(clientes),

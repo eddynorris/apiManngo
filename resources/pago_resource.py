@@ -94,6 +94,15 @@ class PagoService:
         monto = nuevo_pago.monto or Decimal("0")
         
         PagoService._validate_monto(venta, monto)
+
+        # --- VALIDACIÓN PARA MÉTODO "DEPOSITO" ---
+        # Un depósito directo a cuenta corporativa REQUIERE comprobante obligatorio
+        # y se marca automáticamente como depositado.
+        es_deposito = (nuevo_pago.metodo_pago or '').lower() == 'deposito'
+        if es_deposito and not (file and file.filename):
+            raise PagoValidationError(
+                "El método de pago 'deposito' requiere un comprobante (foto del recibo) obligatorio."
+            )
         
         s3_key = None
         if file and file.filename:
@@ -103,9 +112,15 @@ class PagoService:
         
         nuevo_pago.usuario_id = usuario_id
         nuevo_pago.url_comprobante = s3_key
+
+        # Si es depósito directo, marcar como depositado automáticamente
+        if es_deposito:
+            nuevo_pago.depositado = True
+            nuevo_pago.monto_depositado = monto
+            nuevo_pago.fecha_deposito = nuevo_pago.fecha or datetime.now(timezone.utc)
         
         db.session.add(nuevo_pago)
-        venta.actualizar_estado() # La actualización ahora se basa en el estado de la sesión
+        venta.actualizar_estado()
         return nuevo_pago
 
     @staticmethod
