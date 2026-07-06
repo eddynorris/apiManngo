@@ -2,6 +2,9 @@ from flask import request
 from flask_restful import Resource
 import google.generativeai as genai
 from extensions import supabase # Importar cliente de Supabase centralizado
+import logging
+
+logger = logging.getLogger(__name__)
 
 # El cliente de genai se configura en extensions.py, solo lo usamos aquí
 
@@ -38,9 +41,7 @@ class ChatResource(Resource):
                 # Si no hay coincidencias, aún podemos intentar responder
                 context_text = "No se encontró información específica en la base de datos."
 
-            print("----- CONTEXTO RECUPERADO -----")
-            print(context_text)
-            print("-------------------------------")
+            logger.debug(f"Contexto recuperado: {context_text[:200]}...")
 
             # 3. Construir el prompt para Gemini
             prompt = f"""
@@ -56,9 +57,7 @@ class ChatResource(Resource):
             Respuesta:
             """
 
-            print("----- PROMPT PARA GEMINI -----")
-            print(prompt)
-            print("-----------------------------")
+            logger.debug(f"Prompt enviado a Gemini (pregunta: {user_question})")
 
             # 4. Llamar al modelo Gemini para generar la respuesta
             model = genai.GenerativeModel(GENERATION_MODEL)
@@ -67,5 +66,5 @@ class ChatResource(Resource):
             return {"answer": response.text}, 200
 
         except Exception as e:
-            print(f"Error en el endpoint /chat: {e}")
+            logger.error(f"Error en el endpoint /chat: {e}", exc_info=True)
             return {"error": "Ocurrió un error interno en el servidor."}, 500

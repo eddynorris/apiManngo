@@ -85,7 +85,7 @@ class ProduccionResource(Resource):
             "entradas": [{
                 "presentacion_id": presentacion_final_id,
                 "cantidad_unidades": str(cantidad_a_producir),
-                "lote_destino_id": inherited_lote_id
+                "lote_destino_id": lote_destino_id if lote_destino_id is not None else inherited_lote_id
             }],
             "salidas": salidas
         }
@@ -167,6 +167,8 @@ class ProduccionEnsamblajeResource(Resource):
                     lote_destino = Lote.query.get(lote_destino_id)
                     if not lote_destino:
                         return {"error": f"El lote de origen con ID {lote_destino_id} no existe."}, 400
+                    if lote_destino.producto_id != presentacion_final.producto_id:
+                        return {"error": "El lote de destino es para una presentación diferente"}, 400
                     
                     # OJO: NO sumamos cantidad_kg_producida a lote_destino.cantidad_disponible_kg aquí,
                     # porque ese valor pertenece estrictamente a la materia prima descontada en las 'salidas'.

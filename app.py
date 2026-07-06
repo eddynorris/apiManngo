@@ -6,9 +6,9 @@ from flask_restful import Api
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_talisman import Talisman
+from flask_compress import Compress
 from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 from dotenv import load_dotenv
-import os
 
 # Cargar variables de entorno ANTES de importar extensiones
 # Esto es crítico para que extensiones.py pueda leer las variables
@@ -52,6 +52,19 @@ else:
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'postgresql://postgres:123456@localhost/manngo_db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Configurar options del engine de forma condicional (evitar pooling en SQLite de pruebas)
+if "sqlite" in app.config['SQLALCHEMY_DATABASE_URI']:
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True
+    }
+else:
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_size': int(os.environ.get('DB_POOL_SIZE', 5)),
+        'max_overflow': int(os.environ.get('DB_MAX_OVERFLOW', 10)),
+        'pool_recycle': int(os.environ.get('DB_POOL_RECYCLE', 300)),
+        'pool_pre_ping': True,
+    }
+
 # Configuración S3
 app.config['S3_BUCKET'] = os.environ.get('S3_BUCKET')
 app.config['S3_REGION'] = os.environ.get('AWS_REGION')
@@ -90,7 +103,7 @@ app.config['SWAGGER'] = {
 # Inicializar extensiones
 db.init_app(app)
 jwt.init_app(app)
-swagger.init_app(app)
+Compress(app)  # Compresión gzip automática para respuestas
 api = Api(app)
 
 # Inicializar Limiter
@@ -172,7 +185,12 @@ def handle_request_entity_too_large(e):
 @app.route('/health')
 @limiter.exempt
 def health_check():
-    return jsonify({"status": "ok"}), 200
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        return jsonify({"status": "ok", "database": "connected"}), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({"status": "unhealthy", "database": "disconnected"}), 503
 
 # Config Info
 @app.route('/config')
@@ -190,6 +208,7 @@ def config_info():
 # Registrar Recursos con Contexto
 with app.app_context():
     init_resources(api, limiter=limiter)
+    swagger.init_app(app)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

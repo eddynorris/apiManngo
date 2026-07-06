@@ -200,15 +200,17 @@ class VentaResource(Resource):
 
                 nuevo_detalle = VentaDetalle(
                     presentacion_id=presentacion_id,
-                    cantidad=cantidad_a_tomar,
+                    cantidad=int(cantidad_a_tomar),
                     precio_unitario=precio_unitario,
                     lote_id=inv.lote_id  # Puede ser None para insumos, acepta ambos casos
                 )
                 detalles_para_venta.append(nuevo_detalle)
-                total += cantidad_a_tomar * precio_unitario
+                total += Decimal(str(cantidad_a_tomar)) * Decimal(str(precio_unitario))
 
         # tipo_pago se deriva automáticamente: si paga ahora es 'contado', si no es 'credito'
         monto_pago = Decimal(str(data_from_request.get('monto_pago') or 0))
+        if monto_pago == 0 and data_from_request.get('estado_pago') == 'pagado':
+            monto_pago = total
         metodo_pago = (data_from_request.get('metodo_pago') or 'efectivo').lower()
         tipo_pago_derivado = 'contado' if monto_pago > 0 else 'credito'
 

@@ -29,11 +29,6 @@ class AuthResource(Resource):
             if not username or len(username) < config.MIN_USERNAME_LENGTH:
                 return {'message': f'El nombre de usuario debe tener al menos {config.MIN_USERNAME_LENGTH} caracteres'}, 400
                 
-            # Validaciones de contraseña
-            is_valid, error_msg = validate_password(password)
-            if not is_valid:
-                return {'message': error_msg}, 400
-            
             # Find user by username (case insensitive)
             usuario = Users.query.filter(Users.username.ilike(username)).first()
             

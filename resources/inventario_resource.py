@@ -216,7 +216,7 @@ class InventarioResource(Resource):
                     if stock_minimo < 0:
                         return None, ({"error": "El stock mínimo no puede ser negativo en un item", "item": item_data}, 400)
                         
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, InvalidOperation):
                 return None, ({"error": "Valores numéricos inválidos en un item", "item": item_data}, 400)
             
             # Validar permisos por almacén

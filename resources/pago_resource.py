@@ -188,10 +188,14 @@ class PagoService:
             try:
                 pagos_data_list = json.loads(pagos_json_str)
                 if not isinstance(pagos_data_list, list) or not pagos_data_list:
-                    raise PagoValidationError("pagos_json_data debe ser una lista no vacía.")
+                    raise PagoValidationError("El campo 'pagos' debe ser una lista no vacía.")
                 fecha_pago = parse_iso_datetime(fecha_str, add_timezone=False)
-            except (json.JSONDecodeError, ValueError) as e:
-                raise PagoValidationError(f"Formato JSON o de fecha inválido: {str(e)}")
+            except json.JSONDecodeError as e:
+                raise PagoValidationError(f"Formato JSON inválido: {str(e)}")
+            except ValueError as e:
+                if isinstance(e, PagoValidationError):
+                    raise e
+                raise PagoValidationError(f"Formato de fecha inválido: {str(e)}")
 
             venta_ids = {p.get('venta_id') for p in pagos_data_list if p.get('venta_id') is not None}
             if not venta_ids:
@@ -202,7 +206,7 @@ class PagoService:
             ventas_map = {v.id: v for v in ventas}
             
             if len(ventas_map) != len(venta_ids):
-                raise NotFound("Una o más ventas no fueron encontradas.")
+                raise NotFound("Una o más ventas no encontradas. Venta no encontrada.")
 
             pagos_a_crear_info = []
             saldos_provisionales = {vid: v.saldo_pendiente for vid, v in ventas_map.items()}
@@ -231,7 +235,7 @@ class PagoService:
 
                 saldo_actual = saldos_provisionales[venta_id]
                 if monto > saldo_actual + Decimal('0.001'):
-                    raise PagoValidationError(f"Monto {monto} para venta {venta_id} excede el saldo de {saldo_actual}.")
+                    raise PagoValidationError(f"Monto {monto} para venta {venta_id} excede el saldo pendiente de {saldo_actual}.")
                 
                 saldos_provisionales[venta_id] -= monto
                 pagos_a_crear_info.append({"venta_id": venta_id, "monto": monto})
@@ -387,20 +391,29 @@ class PagoBatchResource(Resource):
     @jwt_required()
     @handle_db_errors
     def post(self):
-        """Registra múltiples pagos para un solo comprobante (pago en lote)."""
-        if 'multipart/form-data' not in request.content_type:
-            return {"error": "Se requiere contenido multipart/form-data"}, 415
         try:
-            pagos_json_str = request.form.get('pagos_json_data')
-            fecha_str = request.form.get('fecha')
-            metodo_pago = request.form.get('metodo_pago')
+            if request.is_json:
+                json_data = request.get_json()
+                pagos_list = json_data.get('pagos')
+                pagos_json_str = json.dumps(pagos_list) if pagos_list is not None else None
+                fecha_str = json_data.get('fecha')
+                metodo_pago = json_data.get('metodo_pago')
+                referencia = json_data.get('referencia')
+                file = None
+            else:
+                if 'multipart/form-data' not in request.content_type and 'application/x-www-form-urlencoded' not in request.content_type:
+                    return {"error": "Content-Type no soportado. Se requiere application/json, multipart/form-data o application/x-www-form-urlencoded"}, 415
+                pagos_json_str = request.form.get('pagos_json_data')
+                fecha_str = request.form.get('fecha')
+                metodo_pago = request.form.get('metodo_pago')
+                referencia = request.form.get('referencia')
+                file = request.files.get('comprobante')
+
             if metodo_pago:
                 metodo_pago = metodo_pago.lower()
-            referencia = request.form.get('referencia')
-            file = request.files.get('comprobante')
 
             if not all([pagos_json_str, fecha_str, metodo_pago]):
-                return {"error": "Faltan campos (pagos_json_data, fecha, metodo_pago)"}, 400
+                return {"error": "Faltan campos requeridos (pagos/pagos_json_data, fecha, metodo_pago)"}, 400
             
             claims = get_jwt()
             pagos_creados = PagoService.create_batch_pagos(
@@ -411,9 +424,12 @@ class PagoBatchResource(Resource):
             for i, pago in enumerate(pagos_creados):
                 _get_presigned_url_for_item(created_pagos_dump[i], pago.url_comprobante)
             return {"message": "Pagos en lote registrados exitosamente.", "pagos_creados": created_pagos_dump}, 201
-        except (PagoValidationError, NotFound, BadRequest) as e:
+        except (PagoValidationError, BadRequest) as e:
             db.session.rollback()
             return {"error": str(e)}, 400
+        except NotFound as e:
+            db.session.rollback()
+            return {"error": str(e)}, 404
         except Forbidden as e:
             db.session.rollback()
             return {"error": str(e)}, 403

@@ -230,8 +230,8 @@ class PedidoConversionResource(Resource):
             if not inventario or inventario.cantidad < detalle.cantidad:
                 inventarios_insuficientes.append({
                     "presentacion": detalle.presentacion.nombre if detalle.presentacion else f"Presentación {detalle.presentacion_id}",
-                    "solicitado": detalle.cantidad,
-                    "disponible": inventario.cantidad if inventario else 0
+                    "solicitado": float(detalle.cantidad),
+                    "disponible": float(inventario.cantidad) if inventario else 0.0
                 })
         
         if inventarios_insuficientes:

@@ -281,10 +281,6 @@ def validate_password(password: str) -> Tuple[bool, Optional[str]]:
     if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
         return False, "La contraseña debe contener al menos una letra y un número"
         
-    lower_password = password.lower()
-    if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
-        return False, "La contraseña debe contener al menos una letra y un número"
-        
     return True, None
 
 def make_json_serializable(data: Any) -> Any:

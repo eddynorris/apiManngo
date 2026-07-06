@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class DashboardResource(Resource):
     @jwt_required()
-    @rol_requerido('admin')
+    @rol_requerido('admin', 'gerente', 'usuario')
     @handle_db_errors
     def get(self):
         """

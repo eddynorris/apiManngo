@@ -1,4 +1,4 @@
-from flask_sqlalchemy import SQLAlchemy
+# SQLAlchemy instance is imported from extensions.py via `db`
 from sqlalchemy import CheckConstraint, UniqueConstraint, Index, func
 from datetime import datetime, timezone
 from extensions import db
@@ -11,7 +11,7 @@ class Users(db.Model):
     rol = db.Column(db.String(20), nullable=False, default='usuario')
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
     
     movimientos = db.relationship('Movimiento', back_populates='usuario')
     almacen = db.relationship('Almacen', backref=db.backref('usuarios', lazy=True))
@@ -27,7 +27,7 @@ class Producto(db.Model):
     precio_compra = db.Column(db.Numeric(12, 2), nullable=False)  # Precio por tonelada al proveedor
     activo = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     def __repr__(self):
         return f'<Producto {self.nombre}>'
@@ -43,7 +43,7 @@ class PresentacionProducto(db.Model):
     activo = db.Column(db.Boolean, default=True)
     url_foto = db.Column(db.String(255))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     # Relaciones
     producto = db.relationship('Producto', backref=db.backref('presentaciones', lazy=True))
@@ -75,7 +75,7 @@ class Lote(db.Model):
 
 
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     # Relaciones
     producto = db.relationship('Producto', backref=db.backref('lotes', lazy=True))
@@ -90,7 +90,7 @@ class Almacen(db.Model):
     direccion = db.Column(db.Text)
     ciudad = db.Column(db.String(100))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
     
     # Relaciones existentes (se mantienen)
     inventario = db.relationship('Inventario', backref='almacen', lazy=True)
@@ -135,7 +135,7 @@ class Venta(db.Model):
     estado_pago = db.Column(db.String(15), default='pendiente')
     consumo_diario_kg = db.Column(db.Numeric(10, 2))  # Estimación global para proyecciones
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     # Relaciones
     vendedor = db.relationship('Users')
@@ -187,7 +187,7 @@ class VentaDetalle(db.Model):
     cantidad = db.Column(db.Integer, nullable=False)
     precio_unitario = db.Column(db.Numeric(12, 2), nullable=False)  # Precio en el momento de la venta
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     # Relación
     presentacion = db.relationship('PresentacionProducto')
@@ -206,7 +206,7 @@ class Merma(db.Model):
     fecha_registro = db.Column(db.DateTime(timezone=True))
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     lote = db.relationship('Lote', backref='mermas')
 
@@ -217,7 +217,7 @@ class Proveedor(db.Model):
     telefono = db.Column(db.String(20))
     direccion = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
 class Cliente(db.Model):
     __tablename__ = 'clientes'
@@ -231,7 +231,7 @@ class Cliente(db.Model):
     proxima_compra_manual = db.Column(db.Date, nullable=True)  # Fecha manual de próxima compra
     ultimo_contacto = db.Column(db.DateTime(timezone=True), nullable=True)  # Fecha del último contacto (llamada, etc.)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     ventas = db.relationship('Venta', back_populates='cliente', lazy=True)
 
@@ -264,7 +264,7 @@ class Pago(db.Model):
     fecha_deposito = db.Column(db.DateTime(timezone=True), nullable=True)  # Fecha del depósito bancario
 
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     usuario = db.relationship('Users')
 
@@ -315,7 +315,7 @@ class Movimiento(db.Model):
     turno_produccion = db.Column(db.String(10))  # "mañana", "tarde", "noche"
     
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     @property
     def total_kg(self):
@@ -351,7 +351,7 @@ class Gasto(db.Model):
     lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id'), nullable=True)
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     usuario = db.relationship('Users')
     almacen = db.relationship('Almacen')
@@ -371,7 +371,7 @@ class Pedido(db.Model):
     fecha_entrega = db.Column(db.DateTime(timezone=True), nullable=False)
     estado = db.Column(db.String(20), default='programado')  # programado, confirmado, entregado, cancelado
     notas = db.Column(db.Text)
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
     
     # Relaciones
     cliente = db.relationship('Cliente', backref=db.backref('pedidos', lazy=True))
@@ -395,7 +395,7 @@ class PedidoDetalle(db.Model):
     cantidad = db.Column(db.Integer, nullable=False)
     precio_estimado = db.Column(db.Numeric(12, 2), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
     
     # Relación
     presentacion = db.relationship('PresentacionProducto')
@@ -408,7 +408,7 @@ class Receta(db.Model):
     nombre = db.Column(db.String(255), nullable=False)
     descripcion = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     presentacion = db.relationship('PresentacionProducto', backref=db.backref('receta', uselist=False, lazy=True))
     componentes = db.relationship('ComponenteReceta', backref='receta', lazy=True, cascade="all, delete-orphan")

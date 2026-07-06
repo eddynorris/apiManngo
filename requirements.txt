@@ -2,12 +2,13 @@
 Flask==2.3.2
 Flask-Cors==5.0.0
 Flask-JWT-Extended==4.5.2
-Flask-Limiter==3.12
+Flask-Limiter==3.1.2
 flask-marshmallow==1.3.0
 Flask-Migrate==4.1.0
 Flask-RESTful==0.3.10
 Flask-SQLAlchemy==3.0.5
 flask-talisman==1.1.0
+flask-compress==1.17
 Werkzeug==2.3.6
 
 # Database
@@ -22,7 +23,6 @@ marshmallow-sqlalchemy==1.4.1
 # AWS and S3
 boto3==1.37.37
 botocore==1.37.37
-watchtower==3.4.0
 
 # Image processing
 Pillow==11.3.0
@@ -57,3 +57,6 @@ openpyxl==3.1.2
 gunicorn==21.2.0
 pytz==2025.1
 flasgger==0.9.7.1
+
+# Caching and Rate Limiting backend
+redis>=5.0.0

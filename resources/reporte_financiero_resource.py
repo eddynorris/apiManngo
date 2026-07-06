@@ -355,6 +355,8 @@ class DepositosHistorialResource(Resource):
             try:
                 fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
                 fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+                if fecha_inicio > fecha_fin:
+                    return {'error': 'La fecha de inicio no puede ser mayor a la fecha fin.'}, 400
                 
                 # Filtrar por rango de fecha de depósito
                 query = query.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))

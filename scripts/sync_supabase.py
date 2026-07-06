@@ -288,7 +288,3 @@ def sync_supabase_command(models):
                 print(f"Error al insertar datos en Supabase para {model_name}: {e}")
         else:
             print(f"No hay documentos para sincronizar para el modelo {model_name}.")
-
-
-def add_commands(app):
-    app.cli.add_command(sync_supabase_command)

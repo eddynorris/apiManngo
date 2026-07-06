@@ -2,7 +2,6 @@ import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
 from supabase import create_client, Client
-import google.generativeai as genai
 from flasgger import Swagger
 
 # Crear instancias de extensiones
@@ -18,7 +17,5 @@ if supabase_url and supabase_key:
 else:
     supabase = None
 
-# Inicializar cliente de Google AI
-google_api_key = os.getenv("GOOGLE_API_KEY")
-if google_api_key:
-    genai.configure(api_key=google_api_key)
+# Nota: Google Generative AI (genai) se configura en services/gemini_service.py
+# para evitar configuración duplicada

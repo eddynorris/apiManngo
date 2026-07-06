@@ -442,7 +442,7 @@ Tu output DEBE ser SOLO el function call, sin texto adicional."""
             logger.error(f"Error en GeminiService: {e}", exc_info=True)
             return {
                 "action": "error",
-                "message": "Error interno al procesar comando de voz."
+                "message": f"Error interno al procesar comando de voz: {str(e)}"
             }
 
 # Instancia global
