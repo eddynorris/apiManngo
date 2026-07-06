@@ -1,5 +1,5 @@
 # --- Build Stage ---
-FROM python:3.9-slim as builder
+FROM python:3.11-slim as builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 # --- Final Stage ---
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 # Crear grupo y usuario no root
 RUN groupadd -r appgroup && useradd --no-log-init -r -g appgroup appuser

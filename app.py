@@ -93,6 +93,8 @@ if app.config['JWT_SECRET_KEY'] == 'insecure-dev-key' and IS_PRODUCTION:
 # Configuración Limiter
 app.config['RATELIMIT_STORAGE_URL'] = os.environ.get('LIMITER_STORAGE_URI', 'memory://')
 app.config['RATELIMIT_STRATEGY'] = 'fixed-window'
+if os.environ.get('FLASK_ENV') == 'testing':
+    app.config['RATELIMIT_ENABLED'] = False
 
 # Configuración Swagger
 app.config['SWAGGER'] = {
