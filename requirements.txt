@@ -13,7 +13,7 @@ Werkzeug==2.3.6
 
 # Database
 SQLAlchemy==2.0.38
-psycopg2==2.9.10
+psycopg2-binary==2.9.10
 alembic==1.15.2
 
 # Serialization
