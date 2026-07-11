@@ -16,7 +16,6 @@ class GeminiService:
         else:
             genai.configure(api_key=api_key)
             
-        # Usamos gemini-1.5-flash por ser estable, rápido y económico para function calling
         self.model_name = "gemini-flash-lite-latest"
         
         # Definición de herramientas
@@ -25,7 +24,7 @@ class GeminiService:
                 "function_declarations": [
                     {
                         "name": "interpretar_operacion",
-                        "description": "Interpreta una operación comercial compleja que puede incluir ventas, pagos y gastos.",
+                        "description": "Interpreta una venta comercial compleja que puede incluir cliente, items, pagos y gastos asociados.",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
@@ -41,7 +40,7 @@ class GeminiService:
                                         "properties": {
                                             "producto_nombre": {
                                                 "type": "STRING",
-                                                "description": "Nombre del producto o presentación."
+                                                "description": "Nombre del producto o presentacion."
                                             },
                                             "cantidad": {
                                                 "type": "INTEGER",
@@ -49,7 +48,7 @@ class GeminiService:
                                             },
                                             "precio": {
                                                 "type": "NUMBER",
-                                                "description": "Precio unitario explícito si se menciona (ej: 'a 50 soles'). Si no, null."
+                                                "description": "Precio unitario explicito si se menciona (ej: 'a 50 soles'). Si no, null."
                                             }
                                         },
                                         "required": ["producto_nombre", "cantidad"]
@@ -57,7 +56,7 @@ class GeminiService:
                                 },
                                 "pagos": {
                                     "type": "ARRAY",
-                                    "description": "Lista de pagos explícitos (si se mencionan montos específicos).",
+                                    "description": "Lista de pagos explicitos.",
                                     "items": {
                                         "type": "OBJECT",
                                         "properties": {
@@ -67,12 +66,12 @@ class GeminiService:
                                             },
                                             "metodo_pago": {
                                                 "type": "STRING",
-                                                "description": "Método de pago.",
+                                                "description": "Metodo de pago.",
                                                 "enum": ["efectivo", "yape_plin", "transferencia", "tarjeta", "deposito", "otro"]
                                             },
                                             "es_deposito": {
                                                 "type": "BOOLEAN",
-                                                "description": "True si es depósito directo."
+                                                "description": "True si es deposito directo."
                                             }
                                         },
                                         "required": ["monto"]
@@ -80,12 +79,12 @@ class GeminiService:
                                 },
                                 "condicion_pago": {
                                     "type": "STRING",
-                                    "description": "Indica si el pago es total, al crédito o parcial manual.",
+                                    "description": "Indica si el pago es total, al credito o parcial.",
                                     "enum": ["completo", "credito", "parcial"]
                                 },
                                 "porcentaje_abono": {
                                     "type": "INTEGER",
-                                    "description": "Porcentaje del total a pagar (ej: 50 para 'la mitad'). Null si no aplica."
+                                    "description": "Porcentaje del total a pagar (ej: 50 para 'la mitad')."
                                 },
                                 "gasto_asociado": {
                                     "type": "OBJECT",
@@ -95,13 +94,99 @@ class GeminiService:
                                         "monto": { "type": "NUMBER" },
                                         "categoria": {
                                             "type": "STRING",
-                                            "enum": ["logistica", "personal", "otros"]
+                                            "enum": ["logistica", "personal", "insumos", "otros"]
                                         }
                                     },
                                     "required": ["descripcion", "monto", "categoria"]
                                 }
                             },
                             "required": ["cliente_nombre", "items"]
+                        }
+                    },
+                    {
+                        "name": "registrar_gasto",
+                        "description": "Registra un gasto operativo independiente del negocio.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "descripcion": {
+                                    "type": "STRING",
+                                    "description": "Descripcion o concepto del gasto."
+                                },
+                                "monto": {
+                                    "type": "NUMBER",
+                                    "description": "Monto total del gasto."
+                                },
+                                "categoria": {
+                                    "type": "STRING",
+                                    "description": "Categoria del gasto.",
+                                    "enum": ["logistica", "personal", "insumos", "otros"]
+                                }
+                            },
+                            "required": ["descripcion", "monto", "categoria"]
+                        }
+                    },
+                    {
+                        "name": "registrar_pago",
+                        "description": "Registra un abono/pago de deuda para una venta existente o de un cliente.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "cliente_nombre": {
+                                    "type": "STRING",
+                                    "description": "Nombre del cliente que abona o paga."
+                                },
+                                "monto": {
+                                    "type": "NUMBER",
+                                    "description": "Monto del abono."
+                                },
+                                "metodo_pago": {
+                                    "type": "STRING",
+                                    "description": "Metodo de pago utilizado.",
+                                    "enum": ["efectivo", "yape_plin", "transferencia", "tarjeta", "deposito", "otro"]
+                                },
+                                "referencia": {
+                                    "type": "STRING",
+                                    "description": "Codigo o numero de referencia del comprobante."
+                                }
+                            },
+                            "required": ["monto", "metodo_pago"]
+                        }
+                    },
+                    {
+                        "name": "registrar_deposito",
+                        "description": "Registra el deposito en banco de un pago o saldo recibido en efectivo/gerencia.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "monto_depositado": {
+                                    "type": "NUMBER",
+                                    "description": "Monto depositado en la cuenta corporativa."
+                                },
+                                "referencia": {
+                                    "type": "STRING",
+                                    "description": "Numero de operacion del deposito."
+                                }
+                            },
+                            "required": ["monto_depositado"]
+                        }
+                    },
+                    {
+                        "name": "registrar_produccion",
+                        "description": "Registra la produccion de un producto terminado (anadiendo inventario final).",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "producto_nombre": {
+                                    "type": "STRING",
+                                    "description": "Nombre de la presentacion final producida (ej: 'saco 20kg', 'briquetas 5kg')."
+                                },
+                                "cantidad_a_producir": {
+                                    "type": "NUMBER",
+                                    "description": "Cantidad de unidades producidas."
+                                }
+                            },
+                            "required": ["producto_nombre", "cantidad_a_producir"]
                         }
                     }
                 ]
@@ -110,35 +195,35 @@ class GeminiService:
     
     def _sanitize_input(self, text):
         """
-        Sanitización robusta contra prompt injection y malformed input.
+        Sanitizacion robusta contra prompt injection and malformed input.
         """
         if not text or not isinstance(text, str):
-            raise ValueError("Input inválido")
+            raise ValueError("Input invalido")
         
-        # 1. Límite de longitud
+        # 1. Limite de longitud
         MAX_LENGTH = 500
         if len(text) > MAX_LENGTH:
             logger.warning(f"Input truncado: {len(text)} -> {MAX_LENGTH}")
             text = text[:MAX_LENGTH]
         
-        # 2. Normalización de espacios
+        # 2. Normalizacion de espacios
         text = " ".join(text.split())
         
-        # 3. Detección de patrones de jailbreak (mejorado)
+        # 3. Deteccion de patrones de jailbreak (mejorado)
         jailbreak_patterns = [
-            # Patrones en español
+            # Patrones en espanol
             r"(?i)(ignora|olvida|borra).{0,15}(instrucciones|reglas|sistema)",
-            r"(?i)(actúa|comportate|responde).{0,15}como.{0,15}(si|un)",
-            r"(?i)tu.{0,10}(nuevo|verdadero).{0,10}(rol|trabajo|propósito)",
+            r"(?i)(actua|comportate|responde).{0,15}como.{0,15}(si|un)",
+            r"(?i)tu.{0,10}(nuevo|verdadero).{0,10}(rol|trabajo|proposito)",
             r"(?i)(desactiva|deshabilita|apaga).{0,15}(filtros|restricciones)",
             
-            # Patrones en inglés
+            # Patrones en ingles
             r"(?i)(ignore|forget|disregard).{0,15}(previous|above|instructions)",
             r"(?i)(act|pretend|behave).{0,15}as.{0,15}(if|a|an)",
             r"(?i)your.{0,10}(new|real).{0,10}(role|purpose|job)",
             r"(?i)(disable|turn off).{0,15}(safety|filters)",
             
-            # Patrones de inyección de comandos
+            # Patrones de inyeccion de comandos
             r"(?i)(system|admin|root).{0,10}(prompt|instruction|mode)",
             r"(?i)(ahora|now).{0,15}(eres|you are).{0,15}(un|a)",
             
@@ -149,79 +234,88 @@ class GeminiService:
         
         for pattern in jailbreak_patterns:
             if re.search(pattern, text):
-                logger.warning(f"⚠️ Prompt injection detectado: {text[:100]}")
+                logger.warning(f"Prompt injection detectado: {text[:100]}")
                 raise ValueError("Comando rechazado por seguridad. Evita instrucciones al sistema.")
         
         # 4. Validar que no sea solo caracteres especiales
-        if len(re.sub(r'[^a-zA-Z0-9áéíóúñÁÉÍÓÚÑ]', '', text)) < 3:
-            raise ValueError("Comando demasiado corto o inválido")
+        if len(re.sub(r'[^a-zA-Z0-9]', '', text)) < 3:
+            raise ValueError("Comando demasiado corto o invalido")
         
         return text
-    
+
     def _validate_output(self, args):
         """
-        Validación mejorada de la respuesta de Gemini.
+        Validacion mejorada de la respuesta de Gemini.
         """
-        # Validar estructura básica
+        # Validar estructura basica
         if not isinstance(args, dict):
             raise ValueError("Respuesta malformada de Gemini")
         
         # Validar cliente
         if 'cliente_nombre' in args:
             cliente = args['cliente_nombre']
-            if not cliente or len(cliente) < 2:
-                raise ValueError("Nombre de cliente inválido")
-            if len(cliente) > 100:
-                logger.warning(f"Nombre de cliente truncado: {cliente}")
-                args['cliente_nombre'] = cliente[:100]
+            if cliente:
+                if len(cliente) < 2:
+                    raise ValueError("Nombre de cliente invalido")
+                if len(cliente) > 100:
+                    logger.warning(f"Nombre de cliente truncado: {cliente}")
+                    args['cliente_nombre'] = cliente[:100]
         
         # Validar items
         if 'items' in args and isinstance(args['items'], list):
-            if len(args['items']) > 50:  # Límite razonable
+            if len(args['items']) > 50:
                 logger.warning("Demasiados items, truncando a 50")
                 args['items'] = args['items'][:50]
             
             for item in args['items']:
-                # Validar cantidad
                 cantidad = item.get('cantidad', 0)
                 if not isinstance(cantidad, (int, float)) or cantidad <= 0:
-                    logger.warning(f"Cantidad inválida corregida: {cantidad} -> 1")
+                    logger.warning(f"Cantidad invalida corregida: {cantidad} -> 1")
                     item['cantidad'] = 1
-                elif cantidad > 10000:  # Límite de cordura
+                elif cantidad > 10000:
                     logger.warning(f"Cantidad sospechosa: {cantidad}")
                     item['cantidad'] = 10000
                 
-                # Validar precio
                 precio = item.get('precio')
                 if precio is not None:
                     if not isinstance(precio, (int, float)) or precio < 0:
-                        logger.warning(f"Precio inválido ignorado: {precio}")
+                        logger.warning(f"Precio invalido ignorado: {precio}")
                         item['precio'] = None
-                    elif precio > 100000:  # Límite de cordura
+                    elif precio > 100000:
                         logger.warning(f"Precio sospechoso: {precio}")
                         item['precio'] = None
                 
-                # Validar nombre de producto
                 prod_nombre = item.get('producto_nombre', '')
                 if len(prod_nombre) < 2 or len(prod_nombre) > 200:
-                    raise ValueError(f"Nombre de producto inválido: {prod_nombre}")
+                    raise ValueError(f"Nombre de producto invalido: {prod_nombre}")
         
         # Validar pagos
         if 'pagos' in args and isinstance(args['pagos'], list):
             for pago in args['pagos']:
                 monto = pago.get('monto', 0)
                 if not isinstance(monto, (int, float)) or monto < 0:
-                    raise ValueError(f"Monto de pago negativo o inválido: {monto}")
-                if monto > 1000000:  # Límite de cordura
-                    logger.warning(f"Monto de pago sospechoso: {monto}")
+                    raise ValueError(f"Monto de pago negativo o invalido: {monto}")
         
-        # Validar gasto asociado
+        # Validar gasto asociado o standalone
         if 'gasto_asociado' in args and args['gasto_asociado']:
             gasto = args['gasto_asociado']
             if gasto.get('monto', 0) < 0:
                 raise ValueError("Monto de gasto negativo")
-            if gasto.get('monto', 0) > 100000:
-                logger.warning(f"Gasto sospechoso: {gasto.get('monto')}")
+        
+        if 'monto' in args and 'descripcion' in args: # Para registrar_gasto o registrar_pago
+            monto = args.get('monto')
+            if isinstance(monto, (int, float)) and monto < 0:
+                raise ValueError("Monto negativo no permitido")
+
+        if 'monto_depositado' in args: # Para registrar_deposito
+            monto_dep = args.get('monto_depositado')
+            if isinstance(monto_dep, (int, float)) and monto_dep < 0:
+                raise ValueError("Monto depositado negativo no permitido")
+                
+        if 'cantidad_a_producir' in args: # Para registrar_produccion
+            cant = args.get('cantidad_a_producir')
+            if isinstance(cant, (int, float)) and cant <= 0:
+                raise ValueError("La cantidad a producir debe ser mayor a cero")
         
         return args
     
@@ -231,151 +325,61 @@ class GeminiService:
         """
         fecha_actual = get_peru_now().strftime('%Y-%m-%d %H:%M')
         
-        return f"""Eres el asistente de voz de Manngo, un sistema de gestión de ventas de carbón/briquetas.
-Tu ÚNICA función es extraer datos estructurados de comandos de voz transcritos.
+        return f"""Eres el asistente comercial inteligente de Manngo, un sistema de gestion de ventas de carbon/briquetas.
+Tu funcion es extraer intenciones y datos estructurados a partir de comandos de usuarios.
+Deberas seleccionar la funcion/herramienta correcta en base al texto del usuario.
 
-════════════════════════════════════════════════════════════════
-📅 CONTEXTO ACTUAL
-════════════════════════════════════════════════════════════════
+=== CONTEXTO ACTUAL ===
 Fecha/Hora: {fecha_actual}
-Ubicación: Perú (moneda: Soles S/)
+Ubicacion: Peru (moneda: Soles S/)
 
-════════════════════════════════════════════════════════════════
-🎯 REGLAS DE INTERPRETACIÓN
-════════════════════════════════════════════════════════════════
+=== REGLAS DE SELECCION DE HERRAMIENTAS ===
 
-1️⃣ IDENTIFICACIÓN DE CLIENTE
-   • Extrae el nombre del cliente mencionado
-   • Si no se menciona cliente: usa "Cliente Genérico"
+1. Ventas (interpretar_operacion):
+   * Se activa cuando el usuario menciona vender o despachar productos a un cliente.
+   * REGLA DE KILOGRAMOS: Este negocio vende productos diferenciados por KILOGRAMOS.
+     Presentaciones comunes: 3kg, 4kg, 5kg, 10kg, 20kg, 30kg.
+     Mapeo: 'saco de 20' -> '20kg', 'bolsa de diez' -> '10kg', 'saco grande' -> '30kg', 'saco chico' -> '10kg'.
+   * Ejemplo: "vendi 3 sacos de 20 a juan perez pago completo"
+   * Ejemplo: "2 bolsas de 10 para maria al credito"
 
-2️⃣ PRODUCTOS POR PESO (CRÍTICO)
-   • Este negocio vende productos diferenciados por KILOGRAMOS
-   • Presentaciones comunes: 3kg, 4kg, 5kg, 10kg, 20kg, 30kg
-   • SIEMPRE incluye el peso en el nombre del producto
-   
-   Ejemplos de mapeo:
-   "saco de 20"           → "20kg" o "saco 20kg"
-   "bolsa de diez"        → "10kg" o "bolsa 10kg"  
-   "un saco grande"       → "30kg" (saco más grande típico)
-   "saco chico"           → "10kg" (saco más chico típico)
-   "tres de 20"           → cantidad=3, producto="20kg"
+2. Gastos (registrar_gasto):
+   * Se activa cuando se menciona un gasto, pago a ayudantes o flete independiente de una venta.
+   * Categorias validas: logistica, personal, insumos, otros.
+   * Ejemplo: "gaste 50 soles de flete"
+   * Ejemplo: "pagado 100 soles de combustible categoria logistica"
+   * Ejemplo: "le di 30 soles de almuerzo al ayudante" (Categoria: personal)
 
-3️⃣ PRECIOS EXPLÍCITOS
-   • Si dice "a 50 soles", "por 80", etc. → asigna precio al item
-   • Si NO menciona precio → deja en null
+3. Pagos / Abonos (registrar_pago):
+   * Se activa cuando un cliente realiza un abono o paga una deuda pendiente.
+   * Metodos: efectivo, yape_plin, transferencia, tarjeta, deposito, otro.
+   * Ejemplo: "juan perez pago 200 soles por yape"
+   * Ejemplo: "abono de maria de 150 soles en efectivo"
 
-4️⃣ CONDICIONES DE PAGO
-   ┌─────────────────────────────────────────────────────────┐
-   │ COMPLETO: "pago completo", "ya pagó todo", "canceló",  │
-   │           "al contado", "pagó en efectivo"              │
-   │           → condicion_pago = "completo"                 │
-   │           → NO agregues monto (se calcula automático)   │
-   ├─────────────────────────────────────────────────────────┤
-   │ CRÉDITO:  "al crédito", "fiado", "luego paga",         │
-   │           "anotado", "debe"                             │
-   │           → condicion_pago = "credito"                  │
-   │           → pagos = []                                  │
-   ├─────────────────────────────────────────────────────────┤
-   │ PARCIAL:  "pagó 500", "dejó 300", "dio 100"            │
-   │           → condicion_pago = "parcial"                  │
-   │           → agrega el monto específico a pagos[]        │
-   ├─────────────────────────────────────────────────────────┤
-   │ RELATIVO: "pagó la mitad", "dejó el 50%", "un tercio"   │
-   │           → condicion_pago = "parcial"                  │
-   │           → porcentaje_abono = 50 (para mitad), 33, etc.│
-   └─────────────────────────────────────────────────────────┘
+4. Depositos Bancarios (registrar_deposito):
+   * Se activa cuando se realiza el deposito bancario del efectivo que estaba en gerencia/caja.
+   * Ejemplo: "depositados 500 soles al banco con referencia 74829"
+   * Ejemplo: "se deposito 1000 soles del efectivo de ayer, op 12345"
 
-5️⃣ MÉTODOS DE PAGO
-   • "con yape" / "por yape" → "yape_plin"
-   • "en efectivo" / "cash"  → "efectivo"
-   • "transferencia"         → "transferencia"
-   • "con tarjeta"           → "tarjeta"
-   • Si dice "pago completo con yape":
-     → condicion_pago="completo", agrega pago con monto=0 y metodo="yape_plin"
+5. Produccion (registrar_produccion):
+   * Se activa cuando se reporta la produccion de briquetas o ensacado de productos terminados.
+   * Ejemplo: "se produjeron 50 sacos de briquetas de 5kg"
+   * Ejemplo: "ensacamos 20 sacos de 30kg"
 
-6️⃣ GASTOS OPERATIVOS
-   • "costó 30 el envío"     → gasto_asociado con categoría "logistica"
-   • "le pagué 50 al ayudante" → categoría "personal"
-   • Categorías: logistica, personal, otros
-
-════════════════════════════════════════════════════════════════
-📚 EJEMPLOS DE INTERPRETACIÓN
-════════════════════════════════════════════════════════════════
-
-Entrada: "vendí 3 sacos de 20 a juan pérez pago completo"
-Salida:
-{{
-  "cliente_nombre": "Juan Pérez",
-  "items": [
-    {{"producto_nombre": "20kg", "cantidad": 3, "precio": null}}
-  ],
-  "condicion_pago": "completo",
-  "pagos": []
-}}
-
-────────────────────────────────────────────────────────────────
-
-Entrada: "dos bolsas de diez para maría al crédito"
-Salida:
-{{
-  "cliente_nombre": "María",
-  "items": [
-    {{"producto_nombre": "10kg", "cantidad": 2, "precio": null}}
-  ],
-  "condicion_pago": "credito",
-  "pagos": []
-}}
-
-────────────────────────────────────────────────────────────────
-
-Entrada: "carlos compró 5 sacos de 30 a 150 soles pagó 500 con yape"
-Salida:
-{{
-  "cliente_nombre": "Carlos",
-  "items": [
-    {{"producto_nombre": "30kg", "cantidad": 5, "precio": 150}}
-  ],
-  "condicion_pago": "parcial",
-  "pagos": [
-    {{"monto": 500, "metodo_pago": "yape_plin", "es_deposito": false}}
-  ]
-}}
-
-────────────────────────────────────────────────────────────────
-
-Entrada: "vendí un saco grande a rosa pago completo con efectivo y costó 20 el delivery"
-Salida:
-{{
-  "cliente_nombre": "Rosa",
-  "items": [
-    {{"producto_nombre": "30kg", "cantidad": 1, "precio": null}}
-  ],
-  "condicion_pago": "completo",
-  "pagos": [],
-  "gasto_asociado": {{
-    "descripcion": "delivery",
-    "monto": 20,
-    "categoria": "logistica"
-  }}
-}}
-
-════════════════════════════════════════════════════════════════
-⚠️ RESTRICCIONES CRÍTICAS
-════════════════════════════════════════════════════════════════
-• NUNCA inventes información que no esté en el comando
-• NUNCA uses tu conocimiento del mundo para asumir precios
-• NUNCA cambies los nombres de personas mencionadas
-• SIEMPRE prioriza los KILOGRAMOS en nombres de productos
-• Si algo es ambiguo, extrae lo más literal posible
-
-Tu output DEBE ser SOLO el function call, sin texto adicional."""
+=== RESTRICCIONES CRITICAS ===
+* NUNCA inventes informacion que no este en el comando.
+* Si el texto coincide con una produccion, selecciona registrar_produccion.
+* Si coincide con un abono a deuda, selecciona registrar_pago.
+* Si coincide con depositar dinero en el banco, selecciona registrar_deposito.
+* Si es una venta compleja (productos + cliente), selecciona interpretar_operacion.
+* Tu output DEBE ser SOLO el function call correspondiente, sin texto adicional."""
 
     def process_command(self, text):
         """
         Procesa un comando de texto usando Gemini con prompt optimizado.
         """
         try:
-            # 1. Sanitización robusta
+            # 1. Sanitizacion robusta
             clean_text = self._sanitize_input(text)
             
             # 2. Crear modelo con system instruction optimizado
@@ -391,7 +395,7 @@ Tu output DEBE ser SOLO el function call, sin texto adicional."""
             # 4. Inicializar resultado por defecto
             result = {
                 "action": "none",
-                "message": "No entendí el comando. Intenta reformular."
+                "message": "No entendi el comando. Intenta reformular."
             }
             
             # 5. Procesar respuesta
@@ -411,14 +415,14 @@ Tu output DEBE ser SOLO el function call, sin texto adicional."""
                         
                         args_dict = recursive_to_dict(fn_call.args)
                         
-                        # 6. Validación de output
+                        # 6. Validacion de output
                         try:
                             args_dict = self._validate_output(args_dict)
                         except ValueError as ve:
                             logger.error(f"Validation error: {ve}")
                             return {
                                 "action": "error",
-                                "message": f"Error de validación: {str(ve)}"
+                                "message": f"Error de validacion: {str(ve)}"
                             }
                         
                         result = {

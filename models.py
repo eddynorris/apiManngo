@@ -13,6 +13,9 @@ class Users(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
     
+    telegram_chat_id = db.Column(db.BigInteger, unique=True, nullable=True)
+    telegram_context = db.Column(db.JSON, nullable=True)
+    
     movimientos = db.relationship('Movimiento', back_populates='usuario')
     almacen = db.relationship('Almacen', backref=db.backref('usuarios', lazy=True))
 

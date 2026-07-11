@@ -23,6 +23,7 @@ from .user_resource import UserResource
 from .venta_resource import VentaResource, VentaFormDataResource, VentaExportResource, VentaFilterDataResource
 from .ventadetalle_resource import VentaDetalleResource
 from .voice_resource import VoiceCommandResource
+from .telegram_webhook_resource import TelegramWebhookResource
 
 __all__ = [
     'AlmacenResource',
@@ -150,5 +151,7 @@ def init_resources(api, limiter=None):
     if limiter:
         # Aplicar rate limit de 20 comandos por minuto
         limiter.limit("20/minute", error_message="Demasiados comandos de voz. Espera un momento.")(VoiceCommandResource)
+        limiter.exempt(TelegramWebhookResource)
     
     api.add_resource(VoiceCommandResource, '/voice/command')
+    api.add_resource(TelegramWebhookResource, '/telegram/webhook/<string:webhook_token>')
