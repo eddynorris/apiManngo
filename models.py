@@ -92,6 +92,7 @@ class Almacen(db.Model):
     nombre = db.Column(db.String(255), nullable=False)
     direccion = db.Column(db.Text)
     ciudad = db.Column(db.String(100))
+    es_planta = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
     

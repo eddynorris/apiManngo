@@ -476,9 +476,19 @@ class TelegramWebhookResource(Resource):
             telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar el producto o la cantidad a producir.")
             return
 
-        almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+        # Toda la producción ocurre en la Planta de producción
+        planta = Almacen.query.filter_by(es_planta=True).first()
+        if not planta:
+            planta = Almacen.query.filter(Almacen.nombre.ilike("%planta%")).first()
+            
+        if planta:
+            almacen_id = planta.id
+            almacen_nombre = planta.nombre
+        else:
+            almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+            
         if not almacen_id:
-            telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje ya que no tienes uno por defecto asignado.")
+            telegram_service.send_message(chat_id, "❌ Error: No se pudo determinar el almacén de producción ('Planta').")
             return
 
         producciones_enriched = []
@@ -1008,9 +1018,19 @@ class TelegramWebhookResource(Resource):
             telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar la lista de insumos comprados.")
             return
 
-        almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+        # Los insumos únicamente existen y se compran en la Planta de producción
+        planta = Almacen.query.filter_by(es_planta=True).first()
+        if not planta:
+            planta = Almacen.query.filter(Almacen.nombre.ilike("%planta%")).first()
+            
+        if planta:
+            almacen_id = planta.id
+            almacen_nombre = planta.nombre
+        else:
+            almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+            
         if not almacen_id:
-            telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje ya que no tienes uno por defecto asignado.")
+            telegram_service.send_message(chat_id, "❌ Error: No se pudo determinar el almacén de producción ('Planta').")
             return
 
         items_enriched = []

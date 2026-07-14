@@ -20,6 +20,14 @@ def run_tests():
     client = app.test_client()
 
     with app.app_context():
+        # Asegurar la columna es_planta en la base de datos local de pruebas
+        try:
+            db.session.execute(db.text("ALTER TABLE almacenes ADD COLUMN IF NOT EXISTS es_planta BOOLEAN DEFAULT FALSE NOT NULL"))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"Nota: No se pudo agregar la columna es_planta: {e}")
+
         # 1. Asegurar que exista al menos un usuario en la BD para probar
         user = Users.query.first()
         if not user:
@@ -35,16 +43,20 @@ def run_tests():
         TEST_CHAT_ID = 987654321
         user.telegram_chat_id = TEST_CHAT_ID
         
-        # Si el usuario no tiene almacen, asignarle el primero
-        if not user.almacen_id:
+        # Asegurar un almacén asociado y configurarlo como Planta
+        almacen = Almacen.query.get(user.almacen_id) if user.almacen_id else None
+        if not almacen:
             almacen = Almacen.query.first()
             if not almacen:
-                # Crear almacén temporal
-                almacen = Almacen(nombre="Almacen Principal", direccion="Calle Falsa 123", ciudad="Lima")
+                almacen = Almacen(nombre="Planta de Produccion", direccion="Calle Falsa 123", ciudad="Lima", es_planta=True)
                 db.session.add(almacen)
                 db.session.flush()
             user.almacen_id = almacen.id
-            print(f"Almacen asignado al usuario de pruebas: {almacen.nombre} (ID: {almacen.id})")
+            
+        almacen.es_planta = True
+        almacen.nombre = "Planta de Produccion"
+        db.session.flush()
+        print(f"Almacen asignado al usuario de pruebas (como Planta): {almacen.nombre} (ID: {almacen.id})")
 
         # Asegurar cliente genérico
         cliente_gen = Cliente.query.filter(Cliente.nombre.ilike("%genérico%")).first()
