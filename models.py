@@ -15,6 +15,7 @@ class Users(db.Model):
     
     telegram_chat_id = db.Column(db.BigInteger, unique=True, nullable=True)
     telegram_context = db.Column(db.JSON, nullable=True)
+    telegram_history = db.Column(db.JSON, nullable=True)
     
     movimientos = db.relationship('Movimiento', back_populates='usuario')
     almacen = db.relationship('Almacen', backref=db.backref('usuarios', lazy=True))

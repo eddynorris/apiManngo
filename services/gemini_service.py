@@ -449,9 +449,9 @@ Ubicacion: Peru (moneda: Soles S/)
 * Si es una venta compleja (productos + cliente), selecciona interpretar_operacion.
 * Tu output DEBE ser SOLO el function call correspondiente, sin texto adicional."""
 
-    def process_command(self, text):
+    def process_command(self, text, history=None):
         """
-        Procesa un comando de texto usando Gemini con prompt optimizado.
+        Procesa un comando de texto usando Gemini con prompt optimizado y memoria de conversación.
         """
         try:
             # 1. Sanitizacion robusta
@@ -464,18 +464,49 @@ Ubicacion: Peru (moneda: Soles S/)
                 system_instruction=self._build_system_prompt()
             )
             
-            # 3. Generar respuesta
-            response = model.generate_content(clean_text)
+            # 3. Construir lista de contenidos (historial + mensaje actual)
+            contents = []
+            if history and isinstance(history, list):
+                for h in history:
+                    role = h.get("role")
+                    parts = h.get("parts")
+                    if role in ["user", "model"] and parts:
+                        contents.append({
+                            "role": role,
+                            "parts": parts if isinstance(parts, list) else [parts]
+                        })
             
-            # 4. Inicializar resultado por defecto
+            contents.append({
+                "role": "user",
+                "parts": [clean_text]
+            })
+            
+            # 4. Generar respuesta
+            response = model.generate_content(contents)
+            
+            # 5. Inicializar resultado por defecto
             result = {
                 "action": "none",
-                "message": "No entendi el comando. Intenta reformular."
+                "message": "No entendí el comando. Intenta reformular.",
+                "history_entry": {
+                    "user": clean_text,
+                    "model": "No entendí el comando. Intenta reformular."
+                }
             }
             
-            # 5. Procesar respuesta
+            # 6. Procesar respuesta
             if response.candidates:
-                for part in response.candidates[0].content.parts:
+                candidate = response.candidates[0]
+                text_response = None
+                
+                # Buscar si hay un text response normal primero
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            text_response = part.text
+                            break
+
+                for part in candidate.content.parts:
                     if hasattr(part, 'function_call') and part.function_call:
                         fn_call = part.function_call
                         
@@ -490,38 +521,63 @@ Ubicacion: Peru (moneda: Soles S/)
                         
                         args_dict = recursive_to_dict(fn_call.args)
                         
-                        # 6. Validacion de output
+                        # Validacion de output
                         try:
                             args_dict = self._validate_output(args_dict)
                         except ValueError as ve:
                             logger.error(f"Validation error: {ve}")
                             return {
                                 "action": "error",
-                                "message": f"Error de validacion: {str(ve)}"
+                                "message": f"Error de validacion: {str(ve)}",
+                                "history_entry": {
+                                    "user": clean_text,
+                                    "model": f"Error de validacion: {str(ve)}"
+                                }
                             }
                         
-                        result = {
+                        action_desc = f"Solicitó ejecutar la función {fn_call.name} con los datos: {json.dumps(args_dict, ensure_ascii=False)}"
+                        return {
                             "action": fn_call.name,
                             "args": args_dict,
-                            "message": f"Procesando: {fn_call.name}"
+                            "message": text_response if text_response else f"Procesando: {fn_call.name}",
+                            "history_entry": {
+                                "user": clean_text,
+                                "model": text_response if text_response else action_desc
+                            }
                         }
-                        break
-                    elif hasattr(part, 'text') and part.text:
-                        result["message"] = part.text
-            
+                
+                # Si no hubo function call, retornar la respuesta de texto normal
+                if text_response:
+                    result = {
+                        "action": "none",
+                        "message": text_response,
+                        "history_entry": {
+                            "user": clean_text,
+                            "model": text_response
+                        }
+                    }
+                    
             return result
         
         except ValueError as ve:
             logger.warning(f"Security/validation block: {ve}")
             return {
                 "action": "security_block",
-                "message": str(ve)
+                "message": str(ve),
+                "history_entry": {
+                    "user": text,
+                    "model": f"Bloqueado por seguridad: {str(ve)}"
+                }
             }
         except Exception as e:
             logger.error(f"Error en GeminiService: {e}", exc_info=True)
             return {
                 "action": "error",
-                "message": f"Error interno al procesar comando de voz: {str(e)}"
+                "message": f"Error interno al procesar comando: {str(e)}",
+                "history_entry": {
+                    "user": text,
+                    "model": f"Error interno: {str(e)}"
+                }
             }
 
 # Instancia global

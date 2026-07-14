@@ -28,6 +28,18 @@ def run_tests():
             db.session.rollback()
             print(f"Nota: No se pudo agregar la columna es_planta: {e}")
 
+        # Asegurar la columna telegram_history en la base de datos local de pruebas
+        try:
+            db.session.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_history JSONB"))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            try:
+                db.session.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_history JSON"))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
         # 1. Asegurar que exista al menos un usuario en la BD para probar
         user = Users.query.first()
         if not user:

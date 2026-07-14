@@ -77,9 +77,19 @@ class TelegramWebhookResource(Resource):
             telegram_service.send_message(chat_id, welcome_msg)
             return
 
-        # Procesar con Gemini
+        # Procesar con Gemini (incluyendo historial de conversación)
         telegram_service.send_message(chat_id, "🔄 <i>Procesando con Gemini...</i>")
-        result = gemini_service.process_command(text)
+        result = gemini_service.process_command(text, user.telegram_history)
+
+        # Actualizar historial de conversación en la sesión
+        history_entry = result.get("history_entry")
+        if history_entry:
+            if not user.telegram_history:
+                user.telegram_history = []
+            new_history = list(user.telegram_history)
+            new_history.append({"role": "user", "parts": [history_entry["user"]]})
+            new_history.append({"role": "model", "parts": [history_entry["model"]]})
+            user.telegram_history = new_history[-10:] # Limitar a los últimos 10 mensajes
 
         action = result.get("action")
         args = result.get("args", {})
@@ -100,6 +110,7 @@ class TelegramWebhookResource(Resource):
             # Error o mensaje conversacional
             msg = result.get("message", "No entendí la operación. Intenta reformular.")
             telegram_service.send_message(chat_id, f"ℹ️ {msg}")
+            db.session.commit()
 
     def _resolver_almacen(self, user, text):
         if user.rol == 'admin':
@@ -120,6 +131,67 @@ class TelegramWebhookResource(Resource):
                 al = Almacen.query.get(user.almacen_id)
                 return user.almacen_id, al.nombre if al else "Desconocido"
             return None, None
+
+    def _buscar_presentacion(self, prod_name, tipos_validos=['procesado', 'briqueta']):
+        prod_name_safe = prod_name.replace('%', '').replace('_', '')
+        
+        # 1. Intentar extraer peso
+        import re
+        weight = None
+        match = re.search(r'(\d+(?:\.\d+)?)\s*(?:kg|k\b)', prod_name.lower())
+        if match:
+            weight = Decimal(match.group(1))
+        else:
+            match_number = re.search(r'\b(\d+(?:\.\d+)?)\b', prod_name.lower())
+            if match_number:
+                weight = Decimal(match_number.group(1))
+                
+        # 2. Si hay peso, filtrar por capacidad_kg primero
+        if weight is not None:
+            candidatos = PresentacionProducto.query.filter(
+                PresentacionProducto.capacidad_kg == weight,
+                PresentacionProducto.tipo.in_(tipos_validos)
+            ).all()
+            
+            if candidatos:
+                if len(candidatos) == 1:
+                    return candidatos[0]
+                else:
+                    # Usar similitud de trigramas para elegir la mejor
+                    best_match = None
+                    best_score = -1.0
+                    for c in candidatos:
+                        try:
+                            score = db.session.query(func.similarity(c.nombre, prod_name_safe)).scalar() or 0.0
+                        except Exception:
+                            score = 1.0 if prod_name_safe.lower() in c.nombre.lower() else 0.0
+                        if score > best_score:
+                            best_score = score
+                            best_match = c
+                    return best_match
+
+        # 3. Fallback a búsqueda difusa estándar si no hay peso o no hay coincidencia por peso
+        presentacion = PresentacionProducto.query.filter(
+            PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%"),
+            PresentacionProducto.tipo.in_(tipos_validos)
+        ).first()
+
+        if not presentacion:
+            try:
+                presentacion = PresentacionProducto.query.filter(
+                    func.similarity(PresentacionProducto.nombre, prod_name_safe) > 0.3,
+                    PresentacionProducto.tipo.in_(tipos_validos)
+                ).order_by(func.similarity(PresentacionProducto.nombre, prod_name_safe).desc()).first()
+            except Exception:
+                pass
+
+        if not presentacion:
+            # Buscar en todo el catálogo
+            presentacion = PresentacionProducto.query.filter(
+                PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%")
+            ).first()
+
+        return presentacion
 
     def _prepare_venta(self, chat_id, user, args, original_text):
         almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
@@ -171,24 +243,8 @@ class TelegramWebhookResource(Resource):
             cantidad = item.get("cantidad", 1)
             precio_explicito = item.get("precio")
 
-            # Buscar por trigrams o LIKE (excluyendo insumos)
-            prod_name_safe = prod_name.replace('%', '').replace('_', '')
-            presentacion = PresentacionProducto.query.filter(
-                PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%"),
-                PresentacionProducto.tipo == 'procesado'
-            ).first()
-
-            if not presentacion:
-                try:
-                    presentacion = PresentacionProducto.query.filter(
-                        func.similarity(PresentacionProducto.nombre, prod_name_safe) > 0.3,
-                        PresentacionProducto.tipo == 'procesado'
-                    ).order_by(func.similarity(PresentacionProducto.nombre, prod_name_safe).desc()).first()
-                except Exception:
-                    pass
-
-            if not presentacion:
-                presentacion = PresentacionProducto.query.filter(PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%")).first()
+            # Buscar por peso / capacidad primero, luego difuso (solo procesados)
+            presentacion = self._buscar_presentacion(prod_name, ['procesado'])
 
             if not presentacion:
                 telegram_service.send_message(chat_id, f"❌ Error: No se encontró el producto '{prod_name}' en el catálogo.")
@@ -502,21 +558,8 @@ class TelegramWebhookResource(Resource):
             if cantidad_a_producir <= 0 or not producto_nombre:
                 continue
 
-            # Buscar presentacion (excluyendo tipo insumo)
-            prod_name_safe = producto_nombre.replace('%', '').replace('_', '')
-            presentacion = PresentacionProducto.query.filter(
-                PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%"),
-                PresentacionProducto.tipo.in_(['procesado', 'briqueta'])
-            ).first()
-
-            if not presentacion:
-                try:
-                    presentacion = PresentacionProducto.query.filter(
-                        func.similarity(PresentacionProducto.nombre, prod_name_safe) > 0.3,
-                        PresentacionProducto.tipo.in_(['procesado', 'briqueta'])
-                    ).order_by(func.similarity(PresentacionProducto.nombre, prod_name_safe).desc()).first()
-                except Exception:
-                    pass
+            # Buscar por peso / capacidad primero, luego difuso (solo procesados o briquetas)
+            presentacion = self._buscar_presentacion(producto_nombre, ['procesado', 'briqueta'])
 
             if not presentacion:
                 telegram_service.send_message(chat_id, f"❌ Error: No se encontró la presentación '{producto_nombre}' de tipo procesado o briqueta en el catálogo.")
@@ -601,7 +644,6 @@ class TelegramWebhookResource(Resource):
             f"📋 <b>Confirmar Registro de Producción</b>\n\n"
             f"🏪 <b>Almacén Destino:</b> {almacen_nombre}\n\n"
             f"📦 <b>Productos a Fabricar:</b>\n{prod_txt}\n\n"
-            f"⚙️ <b>Consumo Estimado de Ingredientes:</b>\n{consumo_txt}\n\n"
         )
         if warnings_txt:
             card += f"⚠️ <b>Alertas de Stock:</b>\n{warnings_txt}\n\n"
@@ -1044,25 +1086,8 @@ class TelegramWebhookResource(Resource):
             if not prod_name or cantidad <= 0:
                 continue
 
-            # Buscar presentacion (preferiblemente tipo insumo)
-            prod_name_safe = prod_name.replace('%', '').replace('_', '')
-            presentacion = PresentacionProducto.query.filter(
-                PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%"),
-                PresentacionProducto.tipo == 'insumo'
-            ).first()
-
-            if not presentacion:
-                try:
-                    presentacion = PresentacionProducto.query.filter(
-                        func.similarity(PresentacionProducto.nombre, prod_name_safe) > 0.3,
-                        PresentacionProducto.tipo == 'insumo'
-                    ).order_by(func.similarity(PresentacionProducto.nombre, prod_name_safe).desc()).first()
-                except Exception:
-                    pass
-
-            if not presentacion:
-                # Buscar cualquiera
-                presentacion = PresentacionProducto.query.filter(PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%")).first()
+            # Buscar por peso / capacidad primero, luego difuso (solo insumos)
+            presentacion = self._buscar_presentacion(prod_name, ['insumo'])
 
             if not presentacion:
                 telegram_service.send_message(chat_id, f"❌ Error: No se encontró el insumo '{prod_name}' en el catálogo.")
