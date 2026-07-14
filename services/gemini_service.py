@@ -105,25 +105,35 @@ class GeminiService:
                     },
                     {
                         "name": "registrar_gasto",
-                        "description": "Registra un gasto operativo independiente del negocio.",
+                        "description": "Registra uno o multiples gastos operativos independientes del negocio.",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
-                                "descripcion": {
-                                    "type": "STRING",
-                                    "description": "Descripcion o concepto del gasto."
-                                },
-                                "monto": {
-                                    "type": "NUMBER",
-                                    "description": "Monto total del gasto."
-                                },
-                                "categoria": {
-                                    "type": "STRING",
-                                    "description": "Categoria del gasto.",
-                                    "enum": ["logistica", "personal", "insumos", "otros"]
+                                "gastos": {
+                                    "type": "ARRAY",
+                                    "description": "Lista de gastos a registrar.",
+                                    "items": {
+                                        "type": "OBJECT",
+                                        "properties": {
+                                            "descripcion": {
+                                                "type": "STRING",
+                                                "description": "Descripcion o concepto del gasto."
+                                            },
+                                            "monto": {
+                                                "type": "NUMBER",
+                                                "description": "Monto total del gasto."
+                                            },
+                                            "categoria": {
+                                                "type": "STRING",
+                                                "description": "Categoria del gasto.",
+                                                "enum": ["logistica", "personal", "insumos", "otros"]
+                                            }
+                                        },
+                                        "required": ["descripcion", "monto", "categoria"]
+                                    }
                                 }
                             },
-                            "required": ["descripcion", "monto", "categoria"]
+                            "required": ["gastos"]
                         }
                     },
                     {
@@ -173,20 +183,62 @@ class GeminiService:
                     },
                     {
                         "name": "registrar_produccion",
-                        "description": "Registra la produccion de un producto terminado (anadiendo inventario final).",
+                        "description": "Registra la produccion de uno o multiples productos terminados (anadiendo inventario final).",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
-                                "producto_nombre": {
-                                    "type": "STRING",
-                                    "description": "Nombre de la presentacion final producida (ej: 'saco 20kg', 'briquetas 5kg')."
-                                },
-                                "cantidad_a_producir": {
-                                    "type": "NUMBER",
-                                    "description": "Cantidad de unidades producidas."
+                                "producciones": {
+                                    "type": "ARRAY",
+                                    "description": "Lista de productos a producir.",
+                                    "items": {
+                                        "type": "OBJECT",
+                                        "properties": {
+                                            "producto_nombre": {
+                                                "type": "STRING",
+                                                "description": "Nombre de la presentacion final producida (ej: 'saco 20kg', 'briquetas 5kg')."
+                                            },
+                                            "cantidad_a_producir": {
+                                                "type": "NUMBER",
+                                                "description": "Cantidad de unidades producidas."
+                                            }
+                                        },
+                                        "required": ["producto_nombre", "cantidad_a_producir"]
+                                    }
                                 }
                             },
-                            "required": ["producto_nombre", "cantidad_a_producir"]
+                            "required": ["producciones"]
+                        }
+                    },
+                    {
+                        "name": "registrar_compra_insumos",
+                        "description": "Registra la compra o ingreso de insumos/productos al inventario, asociando un gasto operativo.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "items": {
+                                    "type": "ARRAY",
+                                    "description": "Lista de insumos/productos comprados.",
+                                    "items": {
+                                        "type": "OBJECT",
+                                        "properties": {
+                                            "producto_nombre": {
+                                                "type": "STRING",
+                                                "description": "Nombre del insumo o producto (ej: 'sacos 20kg', 'hilo blanco')."
+                                            },
+                                            "cantidad": {
+                                                "type": "NUMBER",
+                                                "description": "Cantidad comprada o ingresada."
+                                            },
+                                            "monto_compra": {
+                                                "type": "NUMBER",
+                                                "description": "Monto total pagado por esta compra (costo del gasto). Si no se menciona, null."
+                                            }
+                                        },
+                                        "required": ["producto_nombre", "cantidad"]
+                                    }
+                                }
+                            },
+                            "required": ["items"]
                         }
                     }
                 ]
@@ -261,33 +313,59 @@ class GeminiService:
                     logger.warning(f"Nombre de cliente truncado: {cliente}")
                     args['cliente_nombre'] = cliente[:100]
         
-        # Validar items
-        if 'items' in args and isinstance(args['items'], list):
-            if len(args['items']) > 50:
-                logger.warning("Demasiados items, truncando a 50")
-                args['items'] = args['items'][:50]
-            
-            for item in args['items']:
-                cantidad = item.get('cantidad', 0)
-                if not isinstance(cantidad, (int, float)) or cantidad <= 0:
-                    logger.warning(f"Cantidad invalida corregida: {cantidad} -> 1")
-                    item['cantidad'] = 1
-                elif cantidad > 10000:
-                    logger.warning(f"Cantidad sospechosa: {cantidad}")
-                    item['cantidad'] = 10000
+        # Validar listas (para venta, producciones, compras o gastos)
+        for field in ['items', 'producciones', 'gastos']:
+            if field in args and isinstance(args[field], list):
+                if len(args[field]) > 50:
+                    logger.warning(f"Demasiados {field}, truncando a 50")
+                    args[field] = args[field][:50]
                 
-                precio = item.get('precio')
-                if precio is not None:
-                    if not isinstance(precio, (int, float)) or precio < 0:
-                        logger.warning(f"Precio invalido ignorado: {precio}")
-                        item['precio'] = None
-                    elif precio > 100000:
-                        logger.warning(f"Precio sospechoso: {precio}")
-                        item['precio'] = None
-                
-                prod_nombre = item.get('producto_nombre', '')
-                if len(prod_nombre) < 2 or len(prod_nombre) > 200:
-                    raise ValueError(f"Nombre de producto invalido: {prod_nombre}")
+                for item in args[field]:
+                    # Validar gastos
+                    if field == 'gastos':
+                        monto = item.get('monto', 0)
+                        if not isinstance(monto, (int, float)) or monto < 0:
+                            raise ValueError(f"Monto de gasto invalido: {monto}")
+                        desc = item.get('descripcion', '')
+                        if not desc or len(desc) < 2:
+                            raise ValueError("Descripcion de gasto invalida")
+                    
+                    # Validar producciones
+                    elif field == 'producciones':
+                        cant = item.get('cantidad_a_producir', 0)
+                        if not isinstance(cant, (int, float)) or cant <= 0:
+                            raise ValueError(f"Cantidad a producir invalida: {cant}")
+                        prod_nombre = item.get('producto_nombre', '')
+                        if len(prod_nombre) < 2:
+                            raise ValueError("Nombre de producto invalido")
+
+                    # Validar items (para venta y compras)
+                    elif field == 'items':
+                        cantidad = item.get('cantidad', 0)
+                        if not isinstance(cantidad, (int, float)) or cantidad <= 0:
+                            logger.warning(f"Cantidad invalida corregida: {cantidad} -> 1")
+                            item['cantidad'] = 1
+                        elif cantidad > 10000:
+                            logger.warning(f"Cantidad sospechosa: {cantidad}")
+                            item['cantidad'] = 10000
+                        
+                        precio = item.get('precio')
+                        if precio is not None:
+                            if not isinstance(precio, (int, float)) or precio < 0:
+                                logger.warning(f"Precio invalido ignorado: {precio}")
+                                item['precio'] = None
+                            elif precio > 100000:
+                                logger.warning(f"Precio sospechoso: {precio}")
+                                item['precio'] = None
+                        
+                        monto_compra = item.get('monto_compra')
+                        if monto_compra is not None:
+                            if not isinstance(monto_compra, (int, float)) or monto_compra < 0:
+                                item['monto_compra'] = None
+                        
+                        prod_nombre = item.get('producto_nombre', '')
+                        if len(prod_nombre) < 2 or len(prod_nombre) > 200:
+                            raise ValueError(f"Nombre de producto invalido: {prod_nombre}")
         
         # Validar pagos
         if 'pagos' in args and isinstance(args['pagos'], list):
@@ -296,27 +374,17 @@ class GeminiService:
                 if not isinstance(monto, (int, float)) or monto < 0:
                     raise ValueError(f"Monto de pago negativo o invalido: {monto}")
         
-        # Validar gasto asociado o standalone
+        # Validar gasto asociado (para venta completa)
         if 'gasto_asociado' in args and args['gasto_asociado']:
             gasto = args['gasto_asociado']
             if gasto.get('monto', 0) < 0:
                 raise ValueError("Monto de gasto negativo")
         
-        if 'monto' in args and 'descripcion' in args: # Para registrar_gasto o registrar_pago
-            monto = args.get('monto')
-            if isinstance(monto, (int, float)) and monto < 0:
-                raise ValueError("Monto negativo no permitido")
-
         if 'monto_depositado' in args: # Para registrar_deposito
             monto_dep = args.get('monto_depositado')
             if isinstance(monto_dep, (int, float)) and monto_dep < 0:
                 raise ValueError("Monto depositado negativo no permitido")
                 
-        if 'cantidad_a_producir' in args: # Para registrar_produccion
-            cant = args.get('cantidad_a_producir')
-            if isinstance(cant, (int, float)) and cant <= 0:
-                raise ValueError("La cantidad a producir debe ser mayor a cero")
-        
         return args
     
     def _build_system_prompt(self):
@@ -344,9 +412,10 @@ Ubicacion: Peru (moneda: Soles S/)
    * Ejemplo: "2 bolsas de 10 para maria al credito"
 
 2. Gastos (registrar_gasto):
-   * Se activa cuando se menciona un gasto, pago a ayudantes o flete independiente de una venta.
+   * Se activa cuando se mencionan uno o varios gastos, pagos a ayudantes o fletes independientes de una venta.
+   * Se puede recibir multiples gastos en una sola linea.
    * Categorias validas: logistica, personal, insumos, otros.
-   * Ejemplo: "gaste 50 soles de flete"
+   * Ejemplo: "Agrega los siguientes gastos: Willy pago por mes de junio 2000, 500 soles para el agua, 1800 compra de bateria panel solar y cable"
    * Ejemplo: "pagado 100 soles de combustible categoria logistica"
    * Ejemplo: "le di 30 soles de almuerzo al ayudante" (Categoria: personal)
 
@@ -362,13 +431,19 @@ Ubicacion: Peru (moneda: Soles S/)
    * Ejemplo: "se deposito 1000 soles del efectivo de ayer, op 12345"
 
 5. Produccion (registrar_produccion):
-   * Se activa cuando se reporta la produccion de briquetas o ensacado de productos terminados.
+   * Se activa cuando se reporta la produccion de briquetas o ensacado de productos terminados (pueden ser multiples).
+   * Ejemplo: "Hice 60 sacos de 20kg, 100 de 5kg y 70 de 10kg"
    * Ejemplo: "se produjeron 50 sacos de briquetas de 5kg"
-   * Ejemplo: "ensacamos 20 sacos de 30kg"
+
+6. Compras de Insumos (registrar_compra_insumos):
+   * Se activa cuando se reporta la compra o el ingreso al inventario de insumos (como sacos vacios, hilos, etc.).
+   * Ejemplo: "Compre 500 sacos de 20kg , 1000 de 10kg, y 30 hilos"
+   * Ejemplo: "Se compro 30 hilos a 150 soles"
 
 === RESTRICCIONES CRITICAS ===
 * NUNCA inventes informacion que no este en el comando.
 * Si el texto coincide con una produccion, selecciona registrar_produccion.
+* Si el texto coincide con compra de insumos de inventario, selecciona registrar_compra_insumos.
 * Si coincide con un abono a deuda, selecciona registrar_pago.
 * Si coincide con depositar dinero en el banco, selecciona registrar_deposito.
 * Si es una venta compleja (productos + cliente), selecciona interpretar_operacion.

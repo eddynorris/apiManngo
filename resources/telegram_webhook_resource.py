@@ -94,14 +94,37 @@ class TelegramWebhookResource(Resource):
             self._prepare_deposito(chat_id, user, args, text)
         elif action == "registrar_produccion":
             self._prepare_produccion(chat_id, user, args, text)
+        elif action == "registrar_compra_insumos":
+            self._prepare_compra_insumos(chat_id, user, args, text)
         else:
             # Error o mensaje conversacional
             msg = result.get("message", "No entendí la operación. Intenta reformular.")
             telegram_service.send_message(chat_id, f"ℹ️ {msg}")
 
+    def _resolver_almacen(self, user, text):
+        if user.rol == 'admin':
+            # Buscar coincidencia de almacén en el texto
+            almacenes = Almacen.query.all()
+            for al in almacenes:
+                if al.nombre.lower() in text.lower():
+                    return al.id, al.nombre
+            
+            # Si no se menciona, usar el del usuario administrador
+            if user.almacen_id:
+                al = Almacen.query.get(user.almacen_id)
+                return user.almacen_id, al.nombre if al else "Desconocido"
+            return None, None
+        else:
+            # Vendedores comunes solo usan su almacén asignado
+            if user.almacen_id:
+                al = Almacen.query.get(user.almacen_id)
+                return user.almacen_id, al.nombre if al else "Desconocido"
+            return None, None
+
     def _prepare_venta(self, chat_id, user, args, original_text):
-        if not user.almacen_id:
-            telegram_service.send_message(chat_id, "❌ Error: Tu usuario no tiene un almacén asignado.")
+        almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+        if not almacen_id:
+            telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje (ej: 'en Andahuaylas') ya que no tienes uno por defecto asignado.")
             return
 
         cliente_nombre = args.get("cliente_nombre")
@@ -111,23 +134,33 @@ class TelegramWebhookResource(Resource):
             telegram_service.send_message(chat_id, "❌ Error: No se pudo identificar el cliente o los productos de la venta.")
             return
 
-        # 1. Resolver Cliente
-        cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
+        # 1. Resolver Cliente (Por teléfono primero, luego por nombre)
+        import re
+        phone_match = re.search(r'\b(9\d{8})\b', original_text)
+        cliente = None
         warnings = []
-        if not cliente:
-            try:
-                cliente = Cliente.query.filter(func.similarity(Cliente.nombre, cliente_nombre) > 0.3).order_by(func.similarity(Cliente.nombre, cliente_nombre).desc()).first()
-                if cliente:
-                    warnings.append(f"No se encontró cliente '{cliente_nombre}', se asumió '{cliente.nombre}'.")
-            except Exception:
-                pass
+
+        if phone_match:
+            phone = phone_match.group(1)
+            cliente = Cliente.query.filter_by(telefono=phone).first()
+            if cliente:
+                warnings.append(f"Se identificó al cliente {cliente.nombre} por el número de teléfono {phone}.")
+
+        if not cliente and cliente_nombre:
+            cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
+            if not cliente:
+                try:
+                    cliente = Cliente.query.filter(func.similarity(Cliente.nombre, cliente_nombre) > 0.3).order_by(func.similarity(Cliente.nombre, cliente_nombre).desc()).first()
+                    if cliente:
+                        warnings.append(f"No se encontró cliente '{cliente_nombre}', se asumió '{cliente.nombre}'.")
+                except Exception:
+                    pass
 
         if not cliente:
-            # Crear un cliente genérico o advertir
             warnings.append(f"⚠️ Cliente '{cliente_nombre}' no encontrado. Se asociará al Cliente Genérico.")
             cliente = Cliente.query.filter(Cliente.nombre.ilike("%genérico%")).first()
             if not cliente:
-                cliente = Cliente.query.first() # Fallback al primero
+                cliente = Cliente.query.first()
 
         # 2. Resolver Productos y Verificar Stock
         items_enriched = []
@@ -138,7 +171,7 @@ class TelegramWebhookResource(Resource):
             cantidad = item.get("cantidad", 1)
             precio_explicito = item.get("precio")
 
-            # Buscar por trigrams o LIKE
+            # Buscar por trigrams o LIKE (excluyendo insumos)
             prod_name_safe = prod_name.replace('%', '').replace('_', '')
             presentacion = PresentacionProducto.query.filter(
                 PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%"),
@@ -155,7 +188,6 @@ class TelegramWebhookResource(Resource):
                     pass
 
             if not presentacion:
-                # Buscar cualquiera
                 presentacion = PresentacionProducto.query.filter(PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%")).first()
 
             if not presentacion:
@@ -166,8 +198,8 @@ class TelegramWebhookResource(Resource):
             subtotal = cantidad * precio_unitario
             total_estimado += Decimal(str(subtotal))
 
-            # Resolver Lote y Stock en almacén del usuario
-            inventario = Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).first()
+            # Resolver Lote y Stock en el almacén resuelto
+            inventario = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion.id).first()
             lote_id = inventario.lote_id if inventario else None
             stock_actual = float(inventario.cantidad) if inventario else 0.0
 
@@ -223,7 +255,9 @@ class TelegramWebhookResource(Resource):
             "items": items_enriched,
             "pagos": pagos,
             "gasto_asociado": gasto_asociado,
-            "total": float(total_estimado)
+            "total": float(total_estimado),
+            "almacen_id": almacen_id,
+            "almacen_nombre": almacen_nombre
         }
         user.telegram_context = context_data
         db.session.commit()
@@ -240,6 +274,7 @@ class TelegramWebhookResource(Resource):
         card = (
             f"📋 <b>Confirmar Venta</b>\n\n"
             f"👤 <b>Cliente:</b> {cliente.nombre}\n"
+            f"🏪 <b>Almacén:</b> {almacen_nombre}\n"
             f"📦 <b>Productos:</b>\n{items_txt}\n"
             f"💰 <b>Total Venta:</b> S/ {total_estimado:.2f}\n"
             f"💳 <b>Pagos:</b>\n{pagos_txt}"
@@ -261,36 +296,68 @@ class TelegramWebhookResource(Resource):
         telegram_service.send_message(chat_id, card, reply_markup)
 
     def _prepare_gasto(self, chat_id, user, args, original_text):
-        descripcion = args.get("descripcion")
-        monto = args.get("monto")
-        categoria = args.get("categoria", "logistica")
+        gastos_raw = args.get("gastos")
+        
+        # Fallback si no viene como array
+        if not gastos_raw:
+            descripcion = args.get("descripcion")
+            monto = args.get("monto")
+            categoria = args.get("categoria", "logistica")
+            if descripcion and monto:
+                gastos_raw = [{"descripcion": descripcion, "monto": monto, "categoria": categoria}]
+        
+        if not gastos_raw:
+            telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar la descripción o el monto de los gastos.")
+            return
 
-        if not descripcion or not monto:
-            telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar la descripción o el monto del gasto.")
+        almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+        if not almacen_id:
+            telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje ya que no tienes uno por defecto asignado.")
+            return
+
+        gastos_normalized = []
+        total_monto = Decimal("0")
+        
+        for g in gastos_raw:
+            desc = g.get("descripcion")
+            monto = Decimal(str(g.get("monto", 0)))
+            cat = g.get("categoria", "logistica")
+            if desc and monto > 0:
+                gastos_normalized.append({
+                    "descripcion": desc,
+                    "monto": float(monto),
+                    "categoria": cat
+                })
+                total_monto += monto
+
+        if not gastos_normalized:
+            telegram_service.send_message(chat_id, "❌ Error: No se encontraron gastos válidos con montos mayores a cero.")
             return
 
         context_data = {
             "action": "gasto",
-            "descripcion": descripcion,
-            "monto": monto,
-            "categoria": categoria,
-            "almacen_id": user.almacen_id
+            "gastos": gastos_normalized,
+            "almacen_id": almacen_id,
+            "almacen_nombre": almacen_nombre,
+            "total_monto": float(total_monto)
         }
         user.telegram_context = context_data
         db.session.commit()
 
+        gastos_txt = "\n".join([f"• {g['descripcion']}: S/ {g['monto']:.2f} ({g['categoria']})" for g in gastos_normalized])
+
         card = (
-            f"📋 <b>Confirmar Gasto</b>\n\n"
-            f" Concepto: {descripcion}\n"
-            f"💰 Monto: S/ {monto:.2f}\n"
-            f"🏷️ Categoría: {categoria}\n\n"
-            f"¿Confirmas el registro de este gasto?"
+            f"📋 <b>Confirmar Registro de Gastos</b>\n\n"
+            f"🏪 <b>Almacén:</b> {almacen_nombre}\n"
+            f"💵 <b>Detalle de Gastos:</b>\n{gastos_txt}\n\n"
+            f"💰 <b>Total Acumulado:</b> S/ {total_monto:.2f}\n\n"
+            f"¿Confirmas el registro de estos gastos?"
         )
 
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "✅ Confirmar Gasto", "callback_data": "confirm:gasto"},
+                    {"text": "✅ Confirmar Gastos", "callback_data": "confirm:gasto"},
                     {"text": "❌ Cancelar", "callback_data": "cancel"}
                 ]
             ]
@@ -396,105 +463,139 @@ class TelegramWebhookResource(Resource):
         telegram_service.send_message(chat_id, card, reply_markup)
 
     def _prepare_produccion(self, chat_id, user, args, original_text):
-        if not user.almacen_id:
-            telegram_service.send_message(chat_id, "❌ Error: Tu usuario no tiene un almacén asignado.")
+        producciones_raw = args.get("producciones")
+        
+        # Fallback si es unitario
+        if not producciones_raw:
+            prod_name = args.get("producto_nombre")
+            cant = args.get("cantidad_a_producir")
+            if prod_name and cant:
+                producciones_raw = [{"producto_nombre": prod_name, "cantidad_a_producir": cant}]
+                
+        if not producciones_raw:
+            telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar el producto o la cantidad a producir.")
             return
 
-        producto_nombre = args.get("producto_nombre")
-        cantidad_a_producir = args.get("cantidad_a_producir")
-
-        if not producto_nombre or not cantidad_a_producir:
-            telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar el nombre del producto o la cantidad producida.")
+        almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+        if not almacen_id:
+            telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje ya que no tienes uno por defecto asignado.")
             return
 
-        # 1. Buscar PresentacionProducto por similitud
-        prod_name_safe = producto_nombre.replace('%', '').replace('_', '')
-        presentacion = PresentacionProducto.query.filter(
-            PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%")
-        ).first()
-
-        if not presentacion:
-            try:
-                presentacion = PresentacionProducto.query.filter(
-                    func.similarity(PresentacionProducto.nombre, prod_name_safe) > 0.3
-                ).order_by(func.similarity(PresentacionProducto.nombre, prod_name_safe).desc()).first()
-            except Exception:
-                pass
-
-        if not presentacion:
-            telegram_service.send_message(chat_id, f"❌ Error: No se encontró el producto '{producto_nombre}' en el catálogo.")
-            return
-
-        # 2. Consultar Receta
-        receta = Receta.query.filter_by(presentacion_id=presentacion.id).first()
-        if not receta:
-            telegram_service.send_message(chat_id, f"❌ Error: No se encontró una receta de producción para '{presentacion.nombre}'.")
-            return
-
-        # 3. Validar ingredientes y auto-seleccionar lotes por FIFO (antigüedad)
-        lotes_seleccionados = []
-        detalles_consumo = []
+        producciones_enriched = []
         warnings = []
+        detalles_consumo = []
 
-        for componente in receta.componentes:
-            cantidad_req = Decimal(str(componente.cantidad_necesaria)) * Decimal(str(cantidad_a_producir))
-            if componente.tipo_consumo == 'materia_prima':
-                # Buscar lotes activos con stock disponible de ese producto en el almacén (o globalmente en lotes)
-                lotes_disponibles = Lote.query.filter(
-                    Lote.producto_id == componente.componente_presentacion.producto_id,
-                    Lote.cantidad_disponible_kg > 0,
-                    Lote.is_active == True
-                ).order_by(Lote.fecha_ingreso.asc()).all() # FIFO
+        for p_item in producciones_raw:
+            producto_nombre = p_item.get("producto_nombre")
+            cantidad_a_producir = Decimal(str(p_item.get("cantidad_a_producir", 0)))
+            
+            if cantidad_a_producir <= 0 or not producto_nombre:
+                continue
 
-                cantidad_acumulada = Decimal("0")
-                for lote in lotes_disponibles:
-                    lote_disponible = Decimal(str(lote.cantidad_disponible_kg))
-                    lotes_seleccionados.append({
-                        "componente_presentacion_id": componente.componente_presentacion_id,
-                        "lote_id": lote.id
-                    })
-                    cantidad_acumulada += lote_disponible
-                    detalles_consumo.append(f"• Consumir Lote #{lote.codigo_lote or lote.id} (Disp: {lote_disponible}kg)")
-                    if cantidad_acumulada >= cantidad_req:
-                        break
+            # Buscar presentacion (excluyendo tipo insumo)
+            prod_name_safe = producto_nombre.replace('%', '').replace('_', '')
+            presentacion = PresentacionProducto.query.filter(
+                PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%"),
+                PresentacionProducto.tipo.in_(['procesado', 'briqueta'])
+            ).first()
 
-                if cantidad_acumulada < cantidad_req:
-                    warnings.append(f"⚠️ Stock de materia prima '{componente.componente_presentacion.nombre}' es insuficiente. Requerido: {cantidad_req}kg, Disponible en lotes: {cantidad_acumulada}kg.")
-            elif componente.tipo_consumo == 'insumo':
-                inv_insumo = Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=componente.componente_presentacion_id).first()
-                insumo_disponible = Decimal(str(inv_insumo.cantidad)) if inv_insumo else Decimal("0")
-                detalles_consumo.append(f"• Insumo {componente.componente_presentacion.nombre}: {cantidad_req} unidades (Disp: {insumo_disponible})")
-                if insumo_disponible < cantidad_req:
-                    warnings.append(f"⚠️ Stock de insumo '{componente.componente_presentacion.nombre}' es insuficiente. Requerido: {cantidad_req}, Disponible: {insumo_disponible}.")
+            if not presentacion:
+                try:
+                    presentacion = PresentacionProducto.query.filter(
+                        func.similarity(PresentacionProducto.nombre, prod_name_safe) > 0.3,
+                        PresentacionProducto.tipo.in_(['procesado', 'briqueta'])
+                    ).order_by(func.similarity(PresentacionProducto.nombre, prod_name_safe).desc()).first()
+                except Exception:
+                    pass
 
-        # Guardar en contexto
+            if not presentacion:
+                telegram_service.send_message(chat_id, f"❌ Error: No se encontró la presentación '{producto_nombre}' de tipo procesado o briqueta en el catálogo.")
+                return
+
+            # Consultar receta
+            receta = Receta.query.filter_by(presentacion_id=presentacion.id).first()
+            if not receta:
+                telegram_service.send_message(chat_id, f"❌ Error: No se encontró una receta de producción para '{presentacion.nombre}'.")
+                return
+
+            lotes_seleccionados = []
+            inherited_lote_desc = "Ninguno"
+            inherited_lote_id = None
+            
+            for componente in receta.componentes:
+                cantidad_req = Decimal(str(componente.cantidad_necesaria)) * cantidad_a_producir
+                
+                if componente.tipo_consumo == 'materia_prima':
+                    # LIFO / Más reciente activo con stock
+                    lotes_disponibles = Lote.query.filter(
+                        Lote.producto_id == componente.componente_presentacion.producto_id,
+                        Lote.cantidad_disponible_kg > 0,
+                        Lote.is_active == True
+                    ).order_by(Lote.created_at.desc()).all() # Más reciente primero
+                    
+                    cantidad_acumulada = Decimal("0")
+                    for lote in lotes_disponibles:
+                        lote_disponible = Decimal(str(lote.cantidad_disponible_kg))
+                        lotes_seleccionados.append({
+                            "componente_presentacion_id": componente.componente_presentacion_id,
+                            "lote_id": lote.id,
+                            "cantidad_req_kg": float(cantidad_req)
+                        })
+                        
+                        if inherited_lote_id is None:
+                            inherited_lote_id = lote.id
+                            inherited_lote_desc = lote.descripcion or lote.codigo_lote or f"Lote #{lote.id}"
+                            
+                        cantidad_acumulada += lote_disponible
+                        detalles_consumo.append(f"• Consumir de '{componente.componente_presentacion.nombre}': Lote '{lote.descripcion or lote.codigo_lote or lote.id}' (Disp: {lote_disponible}kg)")
+                        if cantidad_acumulada >= cantidad_req:
+                            break
+                            
+                    if cantidad_acumulada < cantidad_req:
+                        warnings.append(f"⚠️ Stock de materia prima '{componente.componente_presentacion.nombre}' es insuficiente. Req: {cantidad_req}kg, Disp: {cantidad_acumulada}kg.")
+                
+                elif componente.tipo_consumo == 'insumo':
+                    inv_insumo = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=componente.componente_presentacion_id).first()
+                    insumo_disponible = Decimal(str(inv_insumo.cantidad)) if inv_insumo else Decimal("0")
+                    detalles_consumo.append(f"• Consumir insumo '{componente.componente_presentacion.nombre}': {cantidad_req} unidades (Disp: {insumo_disponible})")
+                    if insumo_disponible < cantidad_req:
+                        warnings.append(f"⚠️ Stock de insumo '{componente.componente_presentacion.nombre}' es insuficiente. Req: {cantidad_req}, Disp: {insumo_disponible}.")
+            
+            producciones_enriched.append({
+                "presentacion_id": presentacion.id,
+                "presentacion_nombre": presentacion.nombre,
+                "cantidad_a_producir": float(cantidad_a_producir),
+                "lotes_seleccionados": lotes_seleccionados,
+                "lote_destino_id": inherited_lote_id,
+                "lote_destino_desc": inherited_lote_desc
+            })
+
+        if not producciones_enriched:
+            telegram_service.send_message(chat_id, "❌ Error: No se interpretó ninguna producción válida.")
+            return
+
         context_data = {
             "action": "produccion",
-            "presentacion_id": presentacion.id,
-            "presentacion_nombre": presentacion.nombre,
-            "cantidad_a_producir": float(cantidad_a_producir),
-            "lotes_seleccionados": lotes_seleccionados,
-            "almacen_id": user.almacen_id
+            "producciones": producciones_enriched,
+            "almacen_id": almacen_id,
+            "almacen_nombre": almacen_nombre
         }
         user.telegram_context = context_data
         db.session.commit()
 
+        prod_txt = "\n".join([f"• {p['cantidad_a_producir']}x {p['presentacion_nombre']} (Asociado a lote: '{p['lote_destino_desc']}')" for p in producciones_enriched])
         consumo_txt = "\n".join(detalles_consumo) if detalles_consumo else "Ninguno"
         warnings_txt = "\n".join(warnings) if warnings else ""
 
-        almacen = Almacen.query.get(user.almacen_id)
-        almacen_nombre = almacen.nombre if almacen else "Desconocido"
-
         card = (
             f"📋 <b>Confirmar Registro de Producción</b>\n\n"
-            f"📦 Producto: {presentacion.nombre}\n"
-            f"🔢 Cantidad a Producir: {cantidad_a_producir}\n"
-            f"🏪 Almacén Destino: {almacen_nombre}\n\n"
+            f"🏪 <b>Almacén Destino:</b> {almacen_nombre}\n\n"
+            f"📦 <b>Productos a Fabricar:</b>\n{prod_txt}\n\n"
             f"⚙️ <b>Consumo Estimado de Ingredientes:</b>\n{consumo_txt}\n\n"
         )
         if warnings_txt:
             card += f"⚠️ <b>Alertas de Stock:</b>\n{warnings_txt}\n\n"
-        card += "¿Confirmas la fabricación de este lote?"
+        card += "¿Confirmas la fabricación de estos productos?"
 
         reply_markup = {
             "inline_keyboard": [
@@ -541,6 +642,8 @@ class TelegramWebhookResource(Resource):
                 self._execute_deposito(chat_id, user, context, message_id)
             elif data == "confirm:produccion":
                 self._execute_produccion(chat_id, user, context, message_id)
+            elif data == "confirm:compra_insumos":
+                self._execute_compra_insumos(chat_id, user, context, message_id)
 
             # Limpiar contexto tras el éxito
             user.telegram_context = None
@@ -559,7 +662,8 @@ class TelegramWebhookResource(Resource):
         items = context["items"]
         pagos = context["pagos"]
         gasto_data = context["gasto_asociado"]
-        almacen_id = user.almacen_id
+        almacen_id = context.get("almacen_id", user.almacen_id)
+        almacen_nombre = context.get("almacen_nombre", "Desconocido")
         fecha_transaccion = datetime.now()
 
         total_venta = Decimal("0")
@@ -657,21 +761,41 @@ class TelegramWebhookResource(Resource):
             ))
 
         db.session.commit()
-        telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {total_pagado:.2f}")
+        telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {total_pagado:.2f}")
 
     def _execute_gasto(self, chat_id, user, context, message_id):
-        nuevo_gasto = Gasto(
-            descripcion=context["descripcion"],
-            monto=Decimal(str(context["monto"])),
-            categoria=context["categoria"],
-            fecha=datetime.now().date(),
-            usuario_id=user.id,
-            almacen_id=context["almacen_id"]
-        )
-        db.session.add(nuevo_gasto)
-        db.session.commit()
+        gastos_list = context.get("gastos")
+        
+        # Fallback para gastos individuales del formato anterior
+        if not gastos_list:
+            gastos_list = [{
+                "descripcion": context["descripcion"],
+                "monto": context["monto"],
+                "categoria": context["categoria"]
+            }]
+            
+        almacen_id = context.get("almacen_id", user.almacen_id)
+        almacen_nombre = context.get("almacen_nombre", "Desconocido")
+        fecha_gasto = datetime.now().date()
+        
+        registros_creados = []
+        for g in gastos_list:
+            nuevo_gasto = Gasto(
+                descripcion=g["descripcion"],
+                monto=Decimal(str(g["monto"])),
+                categoria=g["categoria"],
+                fecha=fecha_gasto,
+                usuario_id=user.id,
+                almacen_id=almacen_id
+            )
+            db.session.add(nuevo_gasto)
+            db.session.flush() # para obtener el ID de base de datos
+            registros_creados.append(f"• #{nuevo_gasto.id} - {g['descripcion']}: S/ {g['monto']:.2f}")
 
-        telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Gasto registrado con éxito!</b>\n\n<b>Gasto ID:</b> #{nuevo_gasto.id}\n<b>Concepto:</b> {nuevo_gasto.descripcion}\n<b>Monto:</b> S/ {nuevo_gasto.monto:.2f}")
+        db.session.commit()
+        
+        detalles = "\n".join(registros_creados)
+        telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Gastos registrados con éxito!</b>\n\n<b>Almacén:</b> {almacen_nombre}\n\n<b>Detalle:</b>\n{detalles}\n\n<b>Total:</b> S/ {context.get('total_monto', 0):.2f}")
 
     def _execute_pago(self, chat_id, user, context, message_id):
         cliente_id = context["cliente_id"]
@@ -763,96 +887,278 @@ class TelegramWebhookResource(Resource):
         telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Depósito registrado con éxito!</b>\n\n<b>Monto Depositado:</b> S/ {monto_depositado:.2f}\n<b>Referencia OP:</b> {referencia if referencia else 'Ninguna'}\n\n<b>Pagos liquidados:</b>\n{detalles_dep}")
 
     def _execute_produccion(self, chat_id, user, context, message_id):
-        almacen_id = context["almacen_id"]
-        presentacion_final_id = context["presentacion_id"]
-        cantidad_a_producir = Decimal(str(context["cantidad_a_producir"]))
-        lotes_seleccionados = context["lotes_seleccionados"]
+        producciones_list = context.get("producciones")
+        
+        # Fallback si no viene como array
+        if not producciones_list:
+            producciones_list = [{
+                "presentacion_id": context["presentacion_id"],
+                "presentacion_nombre": context.get("presentacion_nombre"),
+                "cantidad_a_producir": context["cantidad_a_producir"],
+                "lotes_seleccionados": context["lotes_seleccionados"],
+                "lote_destino_id": context["lotes_seleccionados"][0]["lote_id"] if context["lotes_seleccionados"] else None,
+                "lote_destino_desc": f"Lote #{context['lotes_seleccionados'][0]['lote_id']}" if context["lotes_seleccionados"] else "Ninguno"
+            }]
 
-        receta = Receta.query.filter_by(presentacion_id=presentacion_final_id).first()
-        if not receta:
-            raise ValueError(f"No se encontró una receta para la presentación ID {presentacion_final_id}")
-
+        almacen_id = context.get("almacen_id", user.almacen_id)
+        almacen_nombre = context.get("almacen_nombre", "Desconocido")
         fecha_operacion = datetime.now(timezone.utc)
-        motivo_base = f"Ensamblaje Telegram: Fabricación de {cantidad_a_producir} unidades de {receta.presentacion.nombre}"
+        
+        fabricados = []
+        
+        for p in producciones_list:
+            final_id = p["presentacion_id"]
+            cant = Decimal(str(p["cantidad_a_producir"]))
+            lotes_sel = p["lotes_seleccionados"]
+            lote_dest_id = p["lote_destino_id"]
+            lote_dest_desc = p["lote_destino_desc"]
 
-        # 1. Registrar Salidas de materia prima y descontar stock de Lotes
-        for item in lotes_seleccionados:
-            componente_pres_id = item["componente_presentacion_id"]
-            lote_id = item["lote_id"]
-            
-            # Buscar el componente en la receta para saber cuánta cantidad descontar
-            comp = next(c for c in receta.componentes if c.componente_presentacion_id == componente_pres_id)
-            cantidad_req_kg = comp.cantidad_necesaria * cantidad_a_producir
+            receta = Receta.query.filter_by(presentacion_id=final_id).first()
+            if not receta:
+                raise ValueError(f"No se encontró una receta para la presentación ID {final_id}")
 
-            lote = Lote.query.get(lote_id)
-            if not lote or lote.cantidad_disponible_kg < cantidad_req_kg:
-                raise ValueError(f"Stock insuficiente en Lote ID {lote_id} para materia prima ID {componente_pres_id}")
+            motivo_base = f"Ensamblaje Telegram: Fabricación de {cant} unidades de {receta.presentacion.nombre}"
 
-            lote.cantidad_disponible_kg -= cantidad_req_kg
-            db.session.add(Movimiento(
-                tipo='salida',
-                presentacion_id=None,
-                lote_id=lote_id,
-                cantidad=cantidad_req_kg,
-                fecha=fecha_operacion,
-                motivo=motivo_base,
-                usuario_id=user.id,
-                tipo_operacion='ensamblaje'
-            ))
+            # 1. Registrar Salidas de materia prima y descontar stock de Lotes
+            for item in lotes_sel:
+                componente_pres_id = item["componente_presentacion_id"]
+                lote_id = item["lote_id"]
+                cantidad_req_kg = Decimal(str(item.get("cantidad_req_kg", 0)))
+                
+                if cantidad_req_kg <= 0:
+                    comp = next(c for c in receta.componentes if c.componente_presentacion_id == componente_pres_id)
+                    cantidad_req_kg = comp.cantidad_necesaria * cant
 
-        # Descontar insumos sin lote si aplica
-        for comp in receta.componentes:
-            if comp.tipo_consumo == 'insumo':
-                cantidad_req_insumo = comp.cantidad_necesaria * cantidad_a_producir
-                inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=comp.componente_presentacion_id, lote_id=None).first()
-                if not inv or inv.cantidad < cantidad_req_insumo:
-                    raise ValueError(f"Stock de insumo {comp.componente_presentacion.nombre} es insuficiente.")
-                inv.cantidad -= cantidad_req_insumo
+                lote = Lote.query.get(lote_id)
+                if not lote or lote.cantidad_disponible_kg < cantidad_req_kg:
+                    raise ValueError(f"Stock insuficiente en Lote ID {lote_id} para materia prima ID {componente_pres_id}")
+
+                lote.cantidad_disponible_kg -= cantidad_req_kg
                 db.session.add(Movimiento(
                     tipo='salida',
-                    presentacion_id=comp.componente_presentacion_id,
-                    lote_id=None,
-                    cantidad=cantidad_req_insumo,
+                    presentacion_id=None,
+                    lote_id=lote_id,
+                    cantidad=cantidad_req_kg,
                     fecha=fecha_operacion,
                     motivo=motivo_base,
                     usuario_id=user.id,
                     tipo_operacion='ensamblaje'
                 ))
 
-        # 2. Registrar Entrada del Producto Final (Añadir inventario final)
-        # Obtenemos el lote de origen (usamos el primer lote de materia prima seleccionado)
-        lote_destino_id = lotes_seleccionados[0]["lote_id"] if lotes_seleccionados else None
+            # Descontar insumos sin lote si aplica
+            for comp in receta.componentes:
+                if comp.tipo_consumo == 'insumo':
+                    cantidad_req_insumo = comp.cantidad_necesaria * cant
+                    inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=comp.componente_presentacion_id, lote_id=None).first()
+                    if not inv or inv.cantidad < cantidad_req_insumo:
+                        raise ValueError(f"Stock de insumo {comp.componente_presentacion.nombre} es insuficiente.")
+                    inv.cantidad -= cantidad_req_insumo
+                    db.session.add(Movimiento(
+                        tipo='salida',
+                        presentacion_id=comp.componente_presentacion_id,
+                        lote_id=None,
+                        cantidad=cantidad_req_insumo,
+                        fecha=fecha_operacion,
+                        motivo=motivo_base,
+                        usuario_id=user.id,
+                        tipo_operacion='ensamblaje'
+                    ))
 
-        inv_destino = Inventario.query.filter_by(
-            presentacion_id=presentacion_final_id,
-            almacen_id=almacen_id,
-            lote_id=lote_destino_id
-        ).first()
-
-        if inv_destino:
-            inv_destino.cantidad += cantidad_a_producir
-            inv_destino.ultima_actualizacion = fecha_operacion
-        else:
-            inv_destino = Inventario(
-                presentacion_id=presentacion_final_id,
+            # 2. Registrar Entrada del Producto Final (Añadir inventario final)
+            inv_destino = Inventario.query.filter_by(
+                presentacion_id=final_id,
                 almacen_id=almacen_id,
-                lote_id=lote_destino_id,
-                cantidad=cantidad_a_producir
-            )
-            db.session.add(inv_destino)
+                lote_id=lote_dest_id
+            ).first()
 
-        # Movimiento de entrada
-        db.session.add(Movimiento(
-            tipo='entrada',
-            presentacion_id=presentacion_final_id,
-            lote_id=lote_destino_id,
-            cantidad=cantidad_a_producir,
-            fecha=fecha_operacion,
-            motivo=motivo_base,
-            usuario_id=user.id,
-            tipo_operacion='ensamblaje'
-        ))
+            if inv_destino:
+                inv_destino.cantidad += cant
+                inv_destino.ultima_actualizacion = fecha_operacion
+            else:
+                inv_destino = Inventario(
+                    presentacion_id=final_id,
+                    almacen_id=almacen_id,
+                    lote_id=lote_dest_id,
+                    cantidad=cant
+                )
+                db.session.add(inv_destino)
+
+            # Movimiento de entrada
+            db.session.add(Movimiento(
+                tipo='entrada',
+                presentacion_id=final_id,
+                lote_id=lote_dest_id,
+                cantidad=cant,
+                fecha=fecha_operacion,
+                motivo=motivo_base,
+                usuario_id=user.id,
+                tipo_operacion='ensamblaje'
+            ))
+            
+            fabricados.append(f"• {cant}x {p['presentacion_nombre']} (Asociado a lote '{lote_dest_desc}')")
+
+        db.session.commit()
+        
+        detalles_txt = "\n".join(fabricados)
+        telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Producción registrada con éxito!</b>\n\n<b>Almacén:</b> {almacen_nombre}\n\n<b>Productos fabricados:</b>\n{detalles_txt}")
+
+    def _prepare_compra_insumos(self, chat_id, user, args, original_text):
+        items_raw = args.get("items", [])
+        if not items_raw:
+            telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar la lista de insumos comprados.")
+            return
+
+        almacen_id, almacen_nombre = self._resolver_almacen(user, original_text)
+        if not almacen_id:
+            telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje ya que no tienes uno por defecto asignado.")
+            return
+
+        items_enriched = []
+        total_gasto = Decimal("0")
+
+        for item in items_raw:
+            prod_name = item.get("producto_nombre")
+            cantidad = Decimal(str(item.get("cantidad", 1)))
+            monto_compra = item.get("monto_compra")
+
+            if not prod_name or cantidad <= 0:
+                continue
+
+            # Buscar presentacion (preferiblemente tipo insumo)
+            prod_name_safe = prod_name.replace('%', '').replace('_', '')
+            presentacion = PresentacionProducto.query.filter(
+                PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%"),
+                PresentacionProducto.tipo == 'insumo'
+            ).first()
+
+            if not presentacion:
+                try:
+                    presentacion = PresentacionProducto.query.filter(
+                        func.similarity(PresentacionProducto.nombre, prod_name_safe) > 0.3,
+                        PresentacionProducto.tipo == 'insumo'
+                    ).order_by(func.similarity(PresentacionProducto.nombre, prod_name_safe).desc()).first()
+                except Exception:
+                    pass
+
+            if not presentacion:
+                # Buscar cualquiera
+                presentacion = PresentacionProducto.query.filter(PresentacionProducto.nombre.ilike(f"%{prod_name_safe}%")).first()
+
+            if not presentacion:
+                telegram_service.send_message(chat_id, f"❌ Error: No se encontró el insumo '{prod_name}' en el catálogo.")
+                return
+
+            monto_item = Decimal(str(monto_compra)) if monto_compra is not None else Decimal("0")
+            total_gasto += monto_item
+
+            items_enriched.append({
+                "producto_id": presentacion.id,
+                "producto_nombre": presentacion.nombre,
+                "cantidad": float(cantidad),
+                "monto_compra": float(monto_item)
+            })
+
+        if not items_enriched:
+            telegram_service.send_message(chat_id, "❌ Error: No se encontraron insumos válidos en el mensaje.")
+            return
+
+        context_data = {
+            "action": "compra_insumos",
+            "items": items_enriched,
+            "almacen_id": almacen_id,
+            "almacen_nombre": almacen_nombre,
+            "total_gasto": float(total_gasto)
+        }
+        user.telegram_context = context_data
+        db.session.commit()
+
+        items_txt = "\n".join([f"• {item['cantidad']}x {item['producto_nombre']}" + (f" (Costo: S/ {item['monto_compra']:.2f})" if item['monto_compra'] > 0 else "") for item in items_enriched])
+
+        card = (
+            f"📋 <b>Confirmar Compra de Insumos</b>\n\n"
+            f"🏪 <b>Almacén:</b> {almacen_nombre}\n"
+            f"📦 <b>Insumos a Ingresar:</b>\n{items_txt}\n\n"
+            f"💸 <b>Gasto Total (Insumos):</b> S/ {total_gasto:.2f}\n\n"
+            f"¿Confirmas el ingreso al stock y el registro del gasto?"
+        )
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Confirmar Compra", "callback_data": "confirm:compra_insumos"},
+                    {"text": "❌ Cancelar", "callback_data": "cancel"}
+                ]
+            ]
+        }
+        telegram_service.send_message(chat_id, card, reply_markup)
+
+    def _execute_compra_insumos(self, chat_id, user, context, message_id):
+        items = context["items"]
+        almacen_id = context.get("almacen_id", user.almacen_id)
+        almacen_nombre = context.get("almacen_nombre", "Desconocido")
+        total_gasto = Decimal(str(context.get("total_gasto", 0)))
+        fecha_operacion = datetime.now()
+
+        # 1. Registrar el Gasto si el monto total es mayor a cero
+        gasto_id = None
+        if total_gasto > 0:
+            nuevo_gasto = Gasto(
+                descripcion=f"Compra de insumos: " + ", ".join([f"{item['cantidad']} {item['producto_nombre']}" for item in items]),
+                monto=total_gasto,
+                categoria="insumos",
+                fecha=fecha_operacion.date(),
+                usuario_id=user.id,
+                almacen_id=almacen_id
+            )
+            db.session.add(nuevo_gasto)
+            db.session.flush() # para obtener el ID del gasto
+            gasto_id = nuevo_gasto.id
+
+        # 2. Registrar en Inventario y Movimientos
+        insumos_ingresados = []
+        for item in items:
+            prod_id = item["producto_id"]
+            cantidad = Decimal(str(item["cantidad"]))
+
+            # Los insumos no tienen lote (lote_id = None)
+            inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id, lote_id=None).first()
+            if inv:
+                inv.cantidad += cantidad
+                inv.ultima_actualizacion = fecha_operacion
+            else:
+                inv = Inventario(
+                    presentacion_id=prod_id,
+                    almacen_id=almacen_id,
+                    lote_id=None,
+                    cantidad=cantidad,
+                    ultima_actualizacion=fecha_operacion
+                )
+                db.session.add(inv)
+
+            # Registrar Movimiento (entrada)
+            db.session.add(Movimiento(
+                tipo='entrada',
+                presentacion_id=prod_id,
+                lote_id=None,
+                cantidad=cantidad,
+                fecha=fecha_operacion,
+                motivo=f"Compra de insumos (Telegram)" + (f" | Gasto #{gasto_id}" if gasto_id else ""),
+                usuario_id=user.id,
+                tipo_operacion='compra'
+            ))
+
+            insumos_ingresados.append(f"• {cantidad}x {item['producto_nombre']}")
 
         db.session.commit()
 
-        telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Producción registrada con éxito!</b>\n\n<b>Producto:</b> {context['presentacion_name'] if 'presentacion_name' in context else context.get('presentacion_nombre')}\n<b>Cantidad Producida:</b> {cantidad_a_producir}\n<b>Lote Destino Asociado:</b> Lote #{lote_destino_id if lote_destino_id else 'Ninguno'}")
+        detalles_txt = "\n".join(insumos_ingresados)
+        gasto_info = f"\n💸 <b>Gasto Registrado:</b> S/ {total_gasto:.2f} (Gasto ID: #{gasto_id})" if gasto_id else ""
+        
+        telegram_service.edit_message(
+            chat_id, 
+            message_id, 
+            f"✅ <b>¡Compra de insumos registrada con éxito!</b>\n\n"
+            f"🏪 <b>Almacén:</b> {almacen_nombre}\n\n"
+            f"📦 <b>Insumos ingresados al stock:</b>\n{detalles_txt}\n"
+            f"{gasto_info}"
+        )

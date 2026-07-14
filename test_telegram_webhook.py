@@ -203,9 +203,9 @@ def run_tests():
                 print("Ok Test 1.2: Confirmacion de Venta exitosa (Venta registrada en BD).")
 
             # ----------------------------------------------------
-            # PRUEBA 2: Flujo de Gasto
+            # PRUEBA 2: Flujo de Gasto Batch
             # ----------------------------------------------------
-            print("\nTest 2: Flujo de Gasto...")
+            print("\nTest 2: Flujo de Gasto en Lote (Batch)...")
             with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
                  patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
                 
@@ -215,7 +215,7 @@ def run_tests():
                         "message_id": 1000,
                         "from": {"id": TEST_CHAT_ID},
                         "chat": {"id": TEST_CHAT_ID},
-                        "text": "gaste 50 soles en flete de delivery categoria logistica"
+                        "text": "Agrega los siguientes gastos: Willy pago por mes de junio 2000, 500 soles para el agua"
                     }
                 }
                 
@@ -224,9 +224,10 @@ def run_tests():
                         mock_gemini.return_value = {
                             "action": "registrar_gasto",
                             "args": {
-                                "descripcion": "flete de delivery",
-                                "monto": 50.0,
-                                "categoria": "logistica"
+                                "gastos": [
+                                    {"descripcion": "Willy pago por mes de junio", "monto": 2000.0, "categoria": "personal"},
+                                    {"descripcion": "500 soles para el agua", "monto": 500.0, "categoria": "otros"}
+                                ]
                             }
                         }
                         res = client.post(webhook_url, json=message_payload)
@@ -236,7 +237,8 @@ def run_tests():
                 assert res.status_code == 200
                 db.session.refresh(user)
                 assert user.telegram_context["action"] == "gasto"
-                print("Ok Test 2.1: Interpretacion de Gasto exitosa.")
+                assert len(user.telegram_context["gastos"]) == 2
+                print("Ok Test 2.1: Interpretacion de Gasto Batch exitosa.")
 
                 callback_payload = {
                     "update_id": 10004,
@@ -251,13 +253,13 @@ def run_tests():
                 gastos_before = Gasto.query.count()
                 res_cb = client.post(webhook_url, json=callback_payload)
                 assert res_cb.status_code == 200
-                assert Gasto.query.count() == gastos_before + 1
-                print("Ok Test 2.2: Confirmacion de Gasto exitosa (Gasto registrado en BD).")
+                assert Gasto.query.count() == gastos_before + 2
+                print("Ok Test 2.2: Confirmacion de Gasto Batch exitosa (Gastos registrados en BD).")
 
             # ----------------------------------------------------
-            # PRUEBA 3: Flujo de Producción
+            # PRUEBA 3: Flujo de Producción Multiproducto y LIFO
             # ----------------------------------------------------
-            print("\nTest 3: Flujo de Produccion...")
+            print("\nTest 3: Flujo de Produccion Multiproducto...")
             with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
                  patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
                 
@@ -267,7 +269,7 @@ def run_tests():
                         "message_id": 1001,
                         "from": {"id": TEST_CHAT_ID},
                         "chat": {"id": TEST_CHAT_ID},
-                        "text": f"produje 5 sacos de {presentacion.nombre}"
+                        "text": f"hice 5 de {presentacion.nombre} y 10 de {presentacion.nombre}"
                     }
                 }
                 
@@ -276,8 +278,10 @@ def run_tests():
                         mock_gemini.return_value = {
                             "action": "registrar_produccion",
                             "args": {
-                                "producto_nombre": presentacion.nombre,
-                                "cantidad_a_producir": 5
+                                "producciones": [
+                                    {"producto_nombre": presentacion.nombre, "cantidad_a_producir": 5},
+                                    {"producto_nombre": presentacion.nombre, "cantidad_a_producir": 10}
+                                ]
                             }
                         }
                         res = client.post(webhook_url, json=message_payload)
@@ -287,7 +291,8 @@ def run_tests():
                 assert res.status_code == 200
                 db.session.refresh(user)
                 assert user.telegram_context["action"] == "produccion"
-                print("Ok Test 3.1: Interpretacion de Produccion exitosa.")
+                assert len(user.telegram_context["producciones"]) == 2
+                print("Ok Test 3.1: Interpretacion de Produccion Multiproducto exitosa.")
 
                 # Ejecutar producción
                 callback_payload = {
@@ -300,13 +305,95 @@ def run_tests():
                     }
                 }
                 
-                # Contar stock del producto antes y después de producir
-                inv_before = float(Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).first().cantidad)
+                # Contar stock del producto antes y después de producir (sumado de todos los lotes)
+                inv_before = float(db.session.query(db.func.sum(Inventario.cantidad)).filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).scalar() or 0)
                 res_cb = client.post(webhook_url, json=callback_payload)
                 assert res_cb.status_code == 200
-                inv_after = float(Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).first().cantidad)
-                assert inv_after == inv_before + 5, f"No se incremento el stock. Antes: {inv_before}, Despues: {inv_after}"
-                print("Ok Test 3.2: Confirmacion de Produccion exitosa (Stock incrementado).")
+                inv_after = float(db.session.query(db.func.sum(Inventario.cantidad)).filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).scalar() or 0)
+                assert inv_after == inv_before + 15, f"No se incremento el stock. Antes: {inv_before}, Despues: {inv_after}"
+                print("Ok Test 3.2: Confirmacion de Produccion Multiproducto exitosa (Stock incrementado).")
+
+            # ----------------------------------------------------
+            # PRUEBA 4: Flujo de Compra de Insumos (Gasto + Stock)
+            # ----------------------------------------------------
+            print("\nTest 4: Flujo de Compra de Insumos (Gasto + Stock)...")
+            
+            # Obtener una presentacion de tipo insumo (crear una si no existe)
+            pres_mp = PresentacionProducto.query.filter_by(tipo="insumo").first()
+            if not pres_mp:
+                from models import Producto
+                prod_insumo = Producto.query.filter_by(nombre="Insumo de Prueba Hilos").first()
+                if not prod_insumo:
+                    prod_insumo = Producto(nombre="Insumo de Prueba Hilos", descripcion="Hilos de embalaje de prueba", precio_compra=Decimal("5.00"))
+                    db.session.add(prod_insumo)
+                    db.session.flush()
+                pres_mp = PresentacionProducto(producto_id=prod_insumo.id, nombre="Hilos de Prueba", capacidad_kg=Decimal("0.1"), tipo="insumo", precio_venta=Decimal("0.00"))
+                db.session.add(pres_mp)
+                db.session.flush()
+            
+            # Asegurar inventario inicial a cero para el test si no existe
+            inv_insumo_init = Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=pres_mp.id, lote_id=None).first()
+            if not inv_insumo_init:
+                inv_insumo_init = Inventario(almacen_id=user.almacen_id, presentacion_id=pres_mp.id, lote_id=None, cantidad=Decimal("0"))
+                db.session.add(inv_insumo_init)
+                db.session.flush()
+            
+            with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                 patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+                 
+                message_payload = {
+                    "update_id": 10007,
+                    "message": {
+                        "message_id": 1002,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"Compre 500 sacos de {pres_mp.nombre} a 1000 soles"
+                    }
+                }
+                
+                if not use_real_gemini:
+                    with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                        mock_gemini.return_value = {
+                            "action": "registrar_compra_insumos",
+                            "args": {
+                                "items": [
+                                    {"producto_nombre": pres_mp.nombre, "cantidad": 500.0, "monto_compra": 1000.0}
+                                ]
+                            }
+                        }
+                        res = client.post(webhook_url, json=message_payload)
+                else:
+                    res = client.post(webhook_url, json=message_payload)
+
+                assert res.status_code == 200
+                db.session.refresh(user)
+                assert user.telegram_context["action"] == "compra_insumos"
+                assert len(user.telegram_context["items"]) == 1
+                assert user.telegram_context["total_gasto"] == 1000.0
+                print("Ok Test 4.1: Interpretacion de Compra de Insumos exitosa.")
+
+                callback_payload = {
+                    "update_id": 10008,
+                    "callback_query": {
+                        "id": "cb_4",
+                        "from": {"id": TEST_CHAT_ID},
+                        "message": {"message_id": 1002, "chat": {"id": TEST_CHAT_ID}},
+                        "data": "confirm:compra_insumos"
+                    }
+                }
+                
+                gastos_before = Gasto.query.filter_by(categoria="insumos").count()
+                inv_insumo_before = float(Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=pres_mp.id, lote_id=None).first().cantidad)
+                
+                res_cb = client.post(webhook_url, json=callback_payload)
+                assert res_cb.status_code == 200
+                
+                gastos_after = Gasto.query.filter_by(categoria="insumos").count()
+                inv_insumo_after = float(Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=pres_mp.id, lote_id=None).first().cantidad)
+                
+                assert gastos_after == gastos_before + 1, "No se registro el gasto de insumos"
+                assert inv_insumo_after == inv_insumo_before + 500.0, "No se incremento el stock de insumos"
+                print("Ok Test 4.2: Confirmacion de Compra de Insumos exitosa (Gasto y Stock registrados).")
 
             print("\n[OK] Todas las pruebas de integracion del bot de Telegram se completaron exitosamente!")
 
