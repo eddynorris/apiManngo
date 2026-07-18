@@ -59,6 +59,16 @@ class SunatService:
         try:
             logger.info(f"Solicitando token de acceso SUNAT en ambiente: {self.ambiente}")
             response = requests.post(self.token_url, data=payload, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                try:
+                    err_json = response.json()
+                    err_desc = err_json.get("error_description") or err_json.get("error") or response.text
+                except Exception:
+                    err_desc = response.text
+                logger.error(f"Error de autenticación con SUNAT ({response.status_code}): {err_desc}")
+                raise RuntimeError(f"SUNAT rechazó la autenticación ({response.status_code}): {err_desc}")
+                
             response.raise_for_status()
             
             data = response.json()
@@ -70,7 +80,7 @@ class SunatService:
             return self._token
         except Exception as e:
             logger.error(f"Error al obtener token de acceso SUNAT: {e}")
-            raise RuntimeError(f"Error de autenticación con SUNAT: {e}")
+            raise RuntimeError(str(e))
 
     def emitir_guia_remision(self, datos_guia):
         """

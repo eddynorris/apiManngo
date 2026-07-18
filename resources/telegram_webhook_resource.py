@@ -749,6 +749,10 @@ class TelegramWebhookResource(Resource):
             telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta operación ya expiró o fue procesada.</i>")
             return
 
+        # Enviar feedback de carga inmediato y remover los botones para evitar clics repetidos
+        telegram_service.answer_callback_query(callback_id, "Procesando...")
+        telegram_service.edit_message(chat_id, message_id, "⏳ <i>Procesando y registrando operación, por favor espera...</i>")
+
         try:
             if data == "confirm:venta":
                 self._execute_venta(chat_id, user, context, message_id)
@@ -770,13 +774,11 @@ class TelegramWebhookResource(Resource):
             # Limpiar contexto tras el éxito
             user.telegram_context = None
             db.session.commit()
-            telegram_service.answer_callback_query(callback_id, "Operación registrada con éxito.")
 
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error executing callback action: {e}", exc_info=True)
-            telegram_service.answer_callback_query(callback_id, f"Error: {str(e)}")
-            telegram_service.send_message(chat_id, f"❌ Ocurrió un error al registrar la operación: {str(e)}")
+            telegram_service.edit_message(chat_id, message_id, f"❌ <b>Error al registrar la operación:</b> {str(e)}")
 
     def _execute_venta(self, chat_id, user, context, message_id):
         # Desempaquetar datos
