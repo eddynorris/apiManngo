@@ -10,7 +10,11 @@ from extensions import db
 from models import Users, Cliente, PresentacionProducto, Inventario, Lote, Venta, VentaDetalle, Pago, Gasto, Movimiento, Receta, ComponenteReceta, Almacen
 from services.gemini_service import gemini_service
 from services.telegram_service import telegram_service
+from services.sunat_service import sunat_service
 from common import handle_db_errors, parse_iso_datetime
+from flask_jwt_extended import jwt_required, get_jwt_identity
+import random
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,43 @@ class TelegramWebhookResource(Resource):
 
         return {"status": "ignored"}, 200
 
+    def _intentar_vinculacion(self, chat_id, text):
+        import re
+        # Buscar un código o comando /start codigo o /vincular codigo, o simplemente 6 dígitos numéricos
+        code_match = re.search(r'\b(\d{6})\b', text)
+        if not code_match:
+            return False
+            
+        code = code_match.group(1)
+        # Buscar el usuario con ese código y que no haya expirado
+        now = datetime.now(timezone.utc)
+        user = Users.query.filter(
+            Users.telegram_linking_code == code,
+            Users.telegram_linking_expires > now
+        ).first()
+        
+        if not user:
+            # Buscar el código sin validar expiración para avisar si ya venció
+            expired_user = Users.query.filter_by(telegram_linking_code=code).first()
+            if expired_user:
+                telegram_service.send_message(chat_id, "❌ El código de vinculación ha expirado. Por favor, genera uno nuevo en tu perfil de Manngo.")
+                return True
+            return False
+            
+        # Vincular cuenta
+        user.telegram_chat_id = chat_id
+        user.telegram_linking_code = None
+        user.telegram_linking_expires = None
+        db.session.commit()
+        
+        telegram_service.send_message(
+            chat_id, 
+            f"✅ <b>¡Vinculación Exitosa!</b>\n\n"
+            f"Tu cuenta de Telegram ha sido asociada al usuario <b>{user.username}</b>.\n"
+            f"Ya puedes empezar a registrar operaciones usando lenguaje natural."
+        )
+        return True
+
     def _handle_message(self, message):
         chat_id = message["chat"]["id"]
         text = message.get("text", "").strip()
@@ -53,11 +94,15 @@ class TelegramWebhookResource(Resource):
         # Buscar usuario asociado al chat id
         user = Users.query.filter_by(telegram_chat_id=chat_id).first()
         if not user:
+            # Intentar vincular por código primero
+            if self._intentar_vinculacion(chat_id, text):
+                return
+                
             msg = (
                 f"❌ <b>Acceso Denegado</b>\n\n"
                 f"Tu Telegram Chat ID no está vinculado a ningún usuario en el sistema.\n"
                 f"<b>Chat ID:</b> <code>{chat_id}</code>\n\n"
-                f"Por favor, solicita a un administrador que registre este Chat ID en tu perfil de usuario en Supabase."
+                f"Para vincular tu cuenta, ingresa a tu perfil en Manngo, genera tu código de vinculación de 6 dígitos e ingrésalo aquí (ejemplo: <code>/vincular 123456</code>)."
             )
             telegram_service.send_message(chat_id, msg)
             return
@@ -106,6 +151,10 @@ class TelegramWebhookResource(Resource):
             self._prepare_produccion(chat_id, user, args, text)
         elif action == "registrar_compra_insumos":
             self._prepare_compra_insumos(chat_id, user, args, text)
+        elif action == "solicitar_guia_remision":
+            self._prepare_guia_remision(chat_id, user, args, text)
+        elif action == "registrar_cliente":
+            self._prepare_cliente(chat_id, user, args, text)
         else:
             # Error o mensaje conversacional
             msg = result.get("message", "No entendí la operación. Intenta reformular.")
@@ -217,6 +266,18 @@ class TelegramWebhookResource(Resource):
             cliente = Cliente.query.filter_by(telefono=phone).first()
             if cliente:
                 warnings.append(f"Se identificó al cliente {cliente.nombre} por el número de teléfono {phone}.")
+            else:
+                # Auto-crear cliente si tiene teléfono pero no existe en BD
+                nombre_nuevo = cliente_nombre if cliente_nombre and cliente_nombre.strip() else f"Cliente {phone}"
+                cliente = Cliente(
+                    nombre=nombre_nuevo,
+                    telefono=phone,
+                    direccion="Dirección no especificada",
+                    ciudad="Lima"
+                )
+                db.session.add(cliente)
+                db.session.flush()
+                warnings.append(f"👤 <b>Cliente Nuevo Creado</b>: Se registró automáticamente a '{nombre_nuevo}' con teléfono {phone}.")
 
         if not cliente and cliente_nombre:
             cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
@@ -302,6 +363,7 @@ class TelegramWebhookResource(Resource):
                 })
 
         gasto_asociado = args.get("gasto_asociado")
+        estado = args.get("estado", "completado").lower()
 
         # Guardar en contexto del usuario
         context_data = {
@@ -313,7 +375,8 @@ class TelegramWebhookResource(Resource):
             "gasto_asociado": gasto_asociado,
             "total": float(total_estimado),
             "almacen_id": almacen_id,
-            "almacen_nombre": almacen_nombre
+            "almacen_nombre": almacen_nombre,
+            "estado": estado
         }
         user.telegram_context = context_data
         db.session.commit()
@@ -327,24 +390,27 @@ class TelegramWebhookResource(Resource):
         if gasto_asociado:
             gasto_txt = f"\n💸 <b>Gasto Asociado:</b> S/ {gasto_asociado.get('monto')} ({gasto_asociado.get('descripcion')})"
 
+        card_title = "Pedido (Sin descuento de Stock)" if estado == 'pedido' else "Venta"
+        confirm_text = "pedido" if estado == 'pedido' else "venta"
+
         card = (
-            f"📋 <b>Confirmar Venta</b>\n\n"
+            f"📋 <b>Confirmar {card_title}</b>\n\n"
             f"👤 <b>Cliente:</b> {cliente.nombre}\n"
             f"🏪 <b>Almacén:</b> {almacen_nombre}\n"
             f"📦 <b>Productos:</b>\n{items_txt}\n"
-            f"💰 <b>Total Venta:</b> S/ {total_estimado:.2f}\n"
+            f"💰 <b>Total:</b> S/ {total_estimado:.2f}\n"
             f"💳 <b>Pagos:</b>\n{pagos_txt}"
             f"{gasto_txt}\n"
         )
-        if warnings_txt:
+        if warnings_txt and estado != 'pedido':
             card += f"\n⚠️ <b>Alertas:</b>\n{warnings_txt}\n"
 
-        card += "\n¿Confirmas el registro de esta venta?"
+        card += f"\n¿Confirmas el registro de este {confirm_text}?"
 
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "✅ Confirmar Venta", "callback_data": "confirm:venta"},
+                    {"text": f"✅ Confirmar {confirm_text.capitalize()}", "callback_data": "confirm:venta"},
                     {"text": "❌ Cancelar", "callback_data": "cancel"}
                 ]
             ]
@@ -696,6 +762,10 @@ class TelegramWebhookResource(Resource):
                 self._execute_produccion(chat_id, user, context, message_id)
             elif data == "confirm:compra_insumos":
                 self._execute_compra_insumos(chat_id, user, context, message_id)
+            elif data == "confirm:guia_remision":
+                self._execute_guia_remision(chat_id, user, context, message_id)
+            elif data == "confirm:cliente":
+                self._execute_cliente(chat_id, user, context, message_id)
 
             # Limpiar contexto tras el éxito
             user.telegram_context = None
@@ -717,6 +787,7 @@ class TelegramWebhookResource(Resource):
         almacen_id = context.get("almacen_id", user.almacen_id)
         almacen_nombre = context.get("almacen_nombre", "Desconocido")
         fecha_transaccion = datetime.now()
+        estado = context.get("estado", "completado")
 
         total_venta = Decimal("0")
         detalles_venta = []
@@ -727,18 +798,21 @@ class TelegramWebhookResource(Resource):
             precio = Decimal(str(item["precio_unitario"]))
             lote_id = item["lote_id"]
 
-            if not lote_id:
-                # Buscar el lote con inventario en el almacén
-                inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id).first()
-                if not inv or inv.cantidad < cantidad:
-                    raise ValueError(f"Stock insuficiente para producto ID {prod_id} durante la confirmación.")
-                lote_id = inv.lote_id
+            if estado == 'completado':
+                if not lote_id:
+                    # Buscar el lote con inventario en el almacén
+                    inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id).first()
+                    if not inv or inv.cantidad < cantidad:
+                        raise ValueError(f"Stock insuficiente para producto ID {prod_id} durante la confirmación.")
+                    lote_id = inv.lote_id
 
-            inventario = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id, lote_id=lote_id).with_for_update().first()
-            if not inventario or inventario.cantidad < cantidad:
-                raise ValueError(f"Stock insuficiente para producto ID {prod_id} (Lote: {lote_id})")
+                inventario = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id, lote_id=lote_id).with_for_update().first()
+                if not inventario or inventario.cantidad < cantidad:
+                    raise ValueError(f"Stock insuficiente para producto ID {prod_id} (Lote: {lote_id})")
 
-            inventario.cantidad -= Decimal(str(cantidad))
+                inventario.cantidad -= Decimal(str(cantidad))
+            else:
+                lote_id = None
 
             detalle = VentaDetalle(
                 presentacion_id=prod_id,
@@ -755,23 +829,27 @@ class TelegramWebhookResource(Resource):
             vendedor_id=user.id,
             total=total_venta,
             tipo_pago='contado' if pagos else 'credito',
-            fecha=fecha_transaccion,
+            fecha=fecha_transaccion if estado == 'completado' else None,
+            estado=estado,
+            fecha_pedido=fecha_transaccion if estado == 'pedido' else None,
+            fecha_entrega=fecha_transaccion if estado == 'pedido' else None,
             detalles=detalles_venta
         )
         db.session.add(nueva_venta)
         db.session.flush()
 
         # Registrar Movimientos
-        for detalle in nueva_venta.detalles:
-            db.session.add(Movimiento(
-                tipo='salida',
-                presentacion_id=detalle.presentacion_id,
-                lote_id=detalle.lote_id,
-                cantidad=detalle.cantidad,
-                usuario_id=user.id,
-                motivo=f"Venta ID: {nueva_venta.id} (Telegram)",
-                tipo_operacion='venta'
-            ))
+        if estado == 'completado':
+            for detalle in nueva_venta.detalles:
+                db.session.add(Movimiento(
+                    tipo='salida',
+                    presentacion_id=detalle.presentacion_id,
+                    lote_id=detalle.lote_id,
+                    cantidad=detalle.cantidad,
+                    usuario_id=user.id,
+                    motivo=f"Venta ID: {nueva_venta.id} (Telegram)",
+                    tipo_operacion='venta'
+                ))
 
         # Registrar Pagos
         total_pagado = Decimal("0")
@@ -813,7 +891,86 @@ class TelegramWebhookResource(Resource):
             ))
 
         db.session.commit()
-        telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {total_pagado:.2f}")
+        if estado == 'pedido':
+            telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Pedido registrado con éxito!</b>\n\n<b>Pedido ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Total Estimado:</b> S/ {total_venta:.2f}\n<b>Pagado/Abono:</b> S/ {total_pagado:.2f}")
+        else:
+            telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {total_pagado:.2f}")
+
+    def _prepare_cliente(self, chat_id, user, args, original_text):
+        nombre = args.get("nombre")
+        telefono = args.get("telefono")
+        documento = args.get("documento")
+        direccion = args.get("direccion") or "Dirección no especificada"
+
+        if not nombre or not telefono:
+            telegram_service.send_message(chat_id, "❌ Error: Para registrar un cliente debes proporcionar al menos el nombre y el celular de 9 dígitos.")
+            return
+
+        # Verificar si el teléfono ya existe
+        existente = Cliente.query.filter_by(telefono=telefono).first()
+        if existente:
+            telegram_service.send_message(chat_id, f"ℹ️ El cliente <b>{existente.nombre}</b> ya está registrado con el teléfono <code>{telefono}</code>.")
+            return
+
+        # Guardar en contexto de Telegram para confirmación
+        user.telegram_context = {
+            "action": "cliente",
+            "nombre": nombre,
+            "telefono": telefono,
+            "documento": documento,
+            "direccion": direccion
+        }
+        db.session.commit()
+
+        # Enviar tarjeta interactiva de confirmación
+        msg = (
+            f"👤 <b>Confirmar Registro de Cliente</b>\n\n"
+            f"<b>Nombre:</b> {nombre}\n"
+            f"<b>Teléfono:</b> {telefono}\n"
+            f"<b>Documento:</b> {documento or 'No especificado'}\n"
+            f"<b>Dirección:</b> {direccion}\n\n"
+            f"¿Confirmas el registro de este cliente?"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Confirmar", "callback_data": "confirm:cliente"},
+                    {"text": "❌ Cancelar", "callback_data": "cancel"}
+                ]
+            ]
+        }
+        telegram_service.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def _execute_cliente(self, chat_id, user, context, message_id):
+        nombre = context["nombre"]
+        telefono = context["telefono"]
+        documento = context.get("documento")
+        direccion = context.get("direccion")
+
+        # Al no haber una columna explícita 'documento_identidad', podemos guardar el documento en el campo 'direccion'
+        # o simplemente no registrarlo si no es crítico, o concatenarlo. Concatenarlo en la dirección es muy útil.
+        direccion_final = direccion
+        if documento:
+            direccion_final = f"{direccion} (Doc: {documento})"
+
+        nuevo_cliente = Cliente(
+            nombre=nombre,
+            telefono=telefono,
+            direccion=direccion_final,
+            ciudad="Lima"
+        )
+        db.session.add(nuevo_cliente)
+        db.session.commit()
+
+        telegram_service.edit_message(
+            chat_id, 
+            message_id, 
+            f"✅ <b>¡Cliente registrado con éxito!</b>\n\n"
+            f"<b>ID:</b> #{nuevo_cliente.id}\n"
+            f"<b>Nombre:</b> {nombre}\n"
+            f"<b>Teléfono:</b> {telefono}\n"
+            f"<b>Dirección:</b> {direccion_final}"
+        )
 
     def _execute_gasto(self, chat_id, user, context, message_id):
         gastos_list = context.get("gastos")
@@ -1207,3 +1364,296 @@ class TelegramWebhookResource(Resource):
             f"📦 <b>Insumos ingresados al stock:</b>\n{detalles_txt}\n"
             f"{gasto_info}"
         )
+
+    def _prepare_guia_remision(self, chat_id, user, args, text):
+        items_raw = args.get("items", [])
+        dest_doc = str(args.get("destinatario_documento", "")).strip()
+        motivo = args.get("motivo_traslado", "venta")
+        placa = args.get("placa_vehiculo")
+        chofer_dni = args.get("conductor_documento")
+
+        if not items_raw or not dest_doc:
+            telegram_service.send_message(chat_id, "❌ Error: Debes especificar al menos un producto y el RUC/DNI del destinatario.")
+            return
+
+        # Mapear productos
+        items_validados = []
+        warnings = []
+        for item in items_raw:
+            prod_name = item.get("producto_nombre")
+            cant = Decimal(str(item.get("cantidad", 1)))
+            
+            # Buscar presentación de tipo procesado o briqueta
+            presentacion = self._buscar_presentacion(prod_name, ['procesado', 'briqueta'])
+            if not presentacion:
+                warnings.append(f"⚠️ No se encontró la presentación '{prod_name}'. Se usará el nombre crudo.")
+                items_validados.append({
+                    "presentacion_id": None,
+                    "presentacion_nombre": prod_name,
+                    "cantidad": float(cant),
+                    "peso_total_kg": float(cant * 20.0) # Fallback 20kg
+                })
+            else:
+                items_validados.append({
+                    "presentacion_id": presentacion.id,
+                    "presentacion_nombre": presentacion.nombre,
+                    "cantidad": float(cant),
+                    "peso_total_kg": float(cant * presentacion.capacidad_kg)
+                })
+
+        # Intentar buscar cliente por RUC/DNI en la base de datos
+        cliente = Cliente.query.filter(
+            (Cliente.telefono.ilike(f"%{dest_doc}%")) | 
+            (Cliente.direccion.ilike(f"%{dest_doc}%"))
+        ).first()
+
+        # Si no se encuentra, buscar por nombre
+        if not cliente:
+            cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{dest_doc}%")).first()
+
+        # Establecer datos de llegada
+        dest_nombre = cliente.nombre if cliente else "Cliente Externo"
+        dest_direccion = cliente.direccion if (cliente and cliente.direccion) else os.environ.get("SUNAT_DEFAULT_LLEGADA_DIRECCION", "PSJE MANUEL ODRIA SN - TAMBURCO - ABANCAY - APURIMAC").strip()
+        dest_ciudad = cliente.ciudad if (cliente and cliente.ciudad) else "Tamburco"
+
+        # Establecer datos de partida (desde Planta/Entorno)
+        partida_direccion = os.environ.get("SUNAT_DEFAULT_PARTIDA_DIRECCION", "PANAMERICANA KM 384 - COLCABAMBA - AYMARAES - APURIMAC").strip()
+        if not partida_direccion:
+            planta = Almacen.query.filter_by(es_planta=True).first()
+            partida_direccion = planta.direccion if (planta and planta.direccion) else "PANAMERICANA KM 384 - COLCABAMBA - AYMARAES - APURIMAC"
+        partida_ciudad = "Colcabamba"
+
+        # Si faltan datos críticos de transporte privado, obtener valores por defecto desde el entorno o fallbacks
+        if not placa:
+            placa = os.environ.get("SUNAT_DEFAULT_PLACA", "D8M790").strip()
+        if not chofer_dni:
+            chofer_dni = os.environ.get("SUNAT_DEFAULT_CHOFER_DNI", "31033519").strip()
+
+        context_data = {
+            "action": "guia_remision",
+            "items": items_validados,
+            "destinatario_documento": dest_doc,
+            "destinatario_nombre": dest_nombre,
+            "direccion_llegada": dest_direccion,
+            "ciudad_llegada": dest_ciudad,
+            "direccion_partida": partida_direccion,
+            "ciudad_partida": partida_ciudad,
+            "ubigeo_partida": os.environ.get("SUNAT_DEFAULT_PARTIDA_UBIGEO", "030303").strip(),
+            "ubigeo_llegada": os.environ.get("SUNAT_DEFAULT_LLEGADA_UBIGEO", "030102").strip(),
+            "motivo_traslado": motivo,
+            "placa_vehiculo": placa,
+            "conductor_documento": chofer_dni
+        }
+
+        user.telegram_context = context_data
+        db.session.commit()
+
+        # Construir tarjeta de confirmación
+        prod_txt = "\n".join([f"• {item['cantidad']}x {item['presentacion_nombre']} (Peso tot: {item['peso_total_kg']} kg)" for item in items_validados])
+        warnings_txt = "\n".join(warnings) if warnings else ""
+
+        card = (
+            f"📋 <b>Confirmar Guía de Remisión (SUNAT)</b>\n\n"
+            f"🏢 <b>Destinatario Doc:</b> {dest_doc}\n"
+            f"👤 <b>Nombre:</b> {dest_nombre}\n"
+            f"📍 <b>Partida:</b> {partida_direccion}\n"
+            f"🏁 <b>Llegada:</b> {dest_direccion}\n"
+            f"🚛 <b>Placa:</b> {placa}\n"
+            f"🪪 <b>DNI Chofer:</b> {chofer_dni}\n"
+            f"📝 <b>Motivo:</b> {motivo.capitalize()}\n\n"
+            f"📦 <b>Bienes a Trasladar:</b>\n{prod_txt}\n\n"
+        )
+        if warnings_txt:
+            card += f"{warnings_txt}\n\n"
+        card += "¿Confirmas la emisión electrónica de la guía en SUNAT?"
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Emitir Guía", "callback_data": "confirm:guia_remision"},
+                    {"text": "❌ Cancelar", "callback_data": "cancel"}
+                ]
+            ]
+        }
+        telegram_service.send_message(chat_id, card, reply_markup)
+
+    def _execute_guia_remision(self, chat_id, user, context, message_id):
+        # 1. Recuperar datos del contexto
+        items = context["items"]
+        dest_doc = context["destinatario_documento"]
+        dest_nombre = context["destinatario_nombre"]
+        dir_llegada = context["direccion_llegada"]
+        ciudad_llegada = context["ciudad_llegada"]
+        dir_partida = context["direccion_partida"]
+        ciudad_partida = context["ciudad_partida"]
+        motivo = context["motivo_traslado"]
+        placa = context["placa_vehiculo"]
+        chofer_dni = context["conductor_documento"]
+
+        # 2. Obtener RUC de emisor del entorno
+        ruc_emisor = os.environ.get("SUNAT_RUC", "20601234567").strip()
+        razon_social_emisor = "EMPRESA DE CARBON SAC"
+
+        # Obtener valores por defecto del chofer
+        default_chofer_dni = os.environ.get("SUNAT_DEFAULT_CHOFER_DNI", "00000000").strip()
+        default_chofer_licencia = os.environ.get("SUNAT_DEFAULT_CHOFER_LICENCIA", f"Q{default_chofer_dni}").strip()
+        default_chofer_nombre = os.environ.get("SUNAT_DEFAULT_CHOFER_NOMBRE", "CHOFER TELEGRAM").strip()
+
+        if chofer_dni == default_chofer_dni:
+            chofer_licencia = default_chofer_licencia
+            chofer_nombre = default_chofer_nombre
+        else:
+            chofer_licencia = f"Q{chofer_dni}"
+            chofer_nombre = "CHOFER TELEGRAM"
+
+        # Mapear motivos según tabla SUNAT
+        motivo_map = {
+            "venta": "01",
+            "traslado": "04",
+            "compra": "02",
+            "devolucion": "06"
+        }
+        cod_motivo = motivo_map.get(motivo.lower(), "13")
+
+        # Generar número correlativo (timestamp para evitar duplicados en pruebas)
+        import time
+        numero_correlativo = int(time.time()) % 1000000
+
+        # Formatear fecha actual
+        fecha_emision = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Determinar tipo de documento destinatario: RUC (6) o DNI (1)
+        tipo_doc_dest = "6" if len(dest_doc) == 11 else "1"
+
+        # Calcular peso bruto total sumando los ítems
+        peso_bruto_total = sum(item["peso_total_kg"] for item in items)
+
+        # Construir detalles de la guía
+        detalles_sunat = []
+        for idx, item in enumerate(items):
+            detalles_sunat.append({
+                "codigo": f"P{idx+1:03d}",
+                "descripcion": item["presentacion_nombre"],
+                "cantidad": float(item["cantidad"]),
+                "unidadMedida": "NIU"
+            })
+
+        # Construir payload de SUNAT
+        payload = {
+            "serie": "T001",
+            "numero": numero_correlativo,
+            "fechaEmision": fecha_emision,
+            "motivoTraslado": cod_motivo,
+            "modalidadTransporte": "02", # Transporte Privado
+            "unidadMedidaPeso": "KGM",
+            "pesoBrutoTotal": float(peso_bruto_total),
+            "remitente": {
+                "numeroDocumento": ruc_emisor,
+                "tipoDocumento": "6",
+                "nombre": razon_social_emisor
+            },
+            "destinatario": {
+                "numeroDocumento": dest_doc,
+                "tipoDocumento": tipo_doc_dest,
+                "nombre": dest_nombre
+            },
+            "puntoPartida": {
+                "direccion": dir_partida,
+                "ubigeo": context.get("ubigeo_partida", "030303")
+            },
+            "puntoLlegada": {
+                "direccion": dir_llegada,
+                "ubigeo": context.get("ubigeo_llegada", "030102")
+            },
+            "detalles": detalles_sunat,
+            "chofer": {
+                "tipoDocumento": "1",
+                "numeroDocumento": chofer_dni,
+                "licencia": chofer_licencia,
+                "nombre": chofer_nombre
+            },
+            "vehiculo": {
+                "placa": placa
+            }
+        }
+
+        # 3. Transmitir a la SUNAT
+        telegram_service.edit_message(chat_id, message_id, "📡 <i>Transmitiendo Guía de Remisión a la SUNAT...</i>")
+        
+        try:
+            res = sunat_service.emitir_guia_remision(payload)
+            ticket = res.get("numTicket")
+            
+            if ticket:
+                telegram_service.edit_message(chat_id, message_id, f"✅ <b>Guía enviada. Ticket:</b> {ticket}\n⏳ <i>Consultando estado en SUNAT...</i>")
+                
+                # Esperar antes del primer intento de consulta
+                time.sleep(2)
+                
+                status_res = sunat_service.consultar_estado_ticket(ticket)
+                cod_estado = status_res.get("codRespuesta")
+                mensaje = status_res.get("desRespuesta", "Procesado")
+                
+                if cod_estado == "99":
+                    err_msg = status_res.get("error", {}).get("desError", "Error desconocido")
+                    raise RuntimeError(f"SUNAT rechazó la guía: {err_msg}")
+                elif cod_estado == "0" or "aceptada" in mensaje.lower() or "procesado" in mensaje.lower():
+                    telegram_service.edit_message(
+                        chat_id, 
+                        message_id, 
+                        f"✅ <b>Guía de Remisión Emitida y Aceptada por SUNAT</b>\n\n"
+                        f"<b>Nro de Guía:</b> T001-{numero_correlativo:08d}\n"
+                        f"<b>Ticket:</b> {ticket}\n"
+                        f"<b>Estado:</b> {mensaje}\n\n"
+                        f"📍 <b>Ruta:</b> {dir_partida} ➡️ {dir_llegada}\n"
+                        f"📦 <b>Peso Total:</b> {peso_bruto_total} kg"
+                    )
+                else:
+                    telegram_service.edit_message(
+                        chat_id, 
+                        message_id, 
+                        f"⏳ <b>Guía Enviada (Procesamiento Asíncrono)</b>\n\n"
+                        f"<b>Nro de Guía:</b> T001-{numero_correlativo:08d}\n"
+                        f"<b>Ticket:</b> {ticket}\n"
+                        f"<b>Estado:</b> {mensaje}\n\n"
+                        f"La guía fue recibida por SUNAT y está en proceso de validación final."
+                    )
+            else:
+                raise RuntimeError("SUNAT no devolvió ningún número de ticket.")
+
+        except Exception as e:
+            logger.error(f"Error al emitir guía en SUNAT: {e}", exc_info=True)
+            telegram_service.edit_message(
+                chat_id,
+                message_id,
+                f"❌ <b>Error SUNAT:</b> {str(e)}\n\n"
+                f"No se pudo emitir la guía de remisión electrónica de forma definitiva."
+            )
+
+
+class TelegramLinkResource(Resource):
+    @jwt_required()
+    @handle_db_errors
+    def post(self):
+        """
+        Genera un código temporal de vinculación para el usuario autenticado.
+        """
+        username = get_jwt_identity()
+        user = Users.query.filter_by(username=username).first()
+        if not user:
+            return {"error": "Usuario no encontrado"}, 404
+            
+        # Generar código de 6 dígitos
+        code = f"{random.randint(100000, 999999)}"
+        user.telegram_linking_code = code
+        user.telegram_linking_expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+        db.session.commit()
+        
+        bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "ManngoBot")
+        link = f"https://t.me/{bot_username}?start={code}"
+        
+        return {
+            "codigo": code,
+            "enlace": link,
+            "expira_en_segundos": 600
+        }, 200

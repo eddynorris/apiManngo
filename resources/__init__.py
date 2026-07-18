@@ -23,7 +23,7 @@ from .user_resource import UserResource
 from .venta_resource import VentaResource, VentaFormDataResource, VentaExportResource, VentaFilterDataResource
 from .ventadetalle_resource import VentaDetalleResource
 from .voice_resource import VoiceCommandResource
-from .telegram_webhook_resource import TelegramWebhookResource
+from .telegram_webhook_resource import TelegramWebhookResource, TelegramLinkResource
 
 __all__ = [
     'AlmacenResource',
@@ -70,6 +70,8 @@ __all__ = [
     'VentaFilterDataResource',
     'VentaDetalleResource',
     'VoiceCommandResource',
+    'TelegramWebhookResource',
+    'TelegramLinkResource',
 ]
 
 from resources.transaccion_resource import TransaccionCompletaResource
@@ -155,3 +157,4 @@ def init_resources(api, limiter=None):
     
     api.add_resource(VoiceCommandResource, '/voice/command')
     api.add_resource(TelegramWebhookResource, '/telegram/webhook/<string:webhook_token>')
+    api.add_resource(TelegramLinkResource, '/telegram/vincular')

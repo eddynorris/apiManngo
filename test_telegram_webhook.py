@@ -40,6 +40,20 @@ def run_tests():
             except Exception:
                 db.session.rollback()
 
+        # Asegurar la columna telegram_linking_code en la base de datos local de pruebas
+        try:
+            db.session.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_linking_code VARCHAR(10) UNIQUE"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        # Asegurar la columna telegram_linking_expires en la base de datos local de pruebas
+        try:
+            db.session.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_linking_expires TIMESTAMP WITH TIME ZONE"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
         # 1. Asegurar que exista al menos un usuario en la BD para probar
         user = Users.query.first()
         if not user:
@@ -65,6 +79,8 @@ def run_tests():
                 db.session.flush()
             user.almacen_id = almacen.id
             
+        # Asegurar que solo este almacén sea Planta en la base de datos de pruebas
+        Almacen.query.update({Almacen.es_planta: False})
         almacen.es_planta = True
         almacen.nombre = "Planta de Produccion"
         db.session.flush()
@@ -418,6 +434,343 @@ def run_tests():
                 assert gastos_after == gastos_before + 1, "No se registro el gasto de insumos"
                 assert inv_insumo_after == inv_insumo_before + 500.0, "No se incremento el stock de insumos"
                 print("Ok Test 4.2: Confirmacion de Compra de Insumos exitosa (Gasto y Stock registrados).")
+
+                # Test 5: Vinculación Dinámica
+                print("\nTest 5: Flujo de Vinculacion Dinamica...")
+                from flask_jwt_extended import create_access_token
+                jwt_token = create_access_token(identity=user.username)
+                headers = {"Authorization": f"Bearer {jwt_token}"}
+                
+                # 5.1 Generar código
+                res_gen = client.post("/telegram/vincular", headers=headers)
+                assert res_gen.status_code == 200, "Fallo endpoint /telegram/vincular"
+                gen_data = res_gen.get_json()
+                linking_code = gen_data["codigo"]
+                assert len(linking_code) == 6, "Codigo de vinculacion invalido"
+                print("Ok Test 5.1: Generacion de codigo de vinculacion exitosa.")
+
+                # 5.2 Simular envío de código por Telegram para vincular chat_id
+                user.telegram_chat_id = None
+                db.session.commit()
+
+                link_payload = {
+                    "update_id": 10009,
+                    "message": {
+                        "message_id": 1003,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"/start {linking_code}"
+                    }
+                }
+
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send:
+                    res_link = client.post(webhook_url, json=link_payload)
+                    assert res_link.status_code == 200, "Fallo webhook al procesar codigo de vinculacion"
+                    
+                    db.session.refresh(user)
+                    assert user.telegram_chat_id == TEST_CHAT_ID, "No se vinculo el chat_id correctamente"
+                    
+                    # Verificar que se envio mensaje de exito
+                    sent_messages = [call[0][1] for call in mock_send.call_args_list]
+                    assert any("Vinculación Exitosa" in msg for msg in sent_messages), "No se envio mensaje de confirmacion de vinculacion"
+                    print("Ok Test 5.2: Vinculacion automatica de Chat ID exitosa.")
+
+                # Test 6: Flujo de Guía de Remisión (SUNAT)
+                print("\nTest 6: Flujo de Guia de Remision (SUNAT)...")
+                
+                # Asegurar que el usuario tenga el chat_id asociado
+                user.telegram_chat_id = TEST_CHAT_ID
+                db.session.commit()
+
+                message_payload = {
+                    "update_id": 10010,
+                    "message": {
+                        "message_id": 1004,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": "generame una guia de remision de 20 sacos de 20kg y 5 de 10kg para el RUC 20601234567"
+                    }
+                }
+
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "solicitar_guia_remision",
+                                "args": {
+                                    "items": [
+                                        {"producto_nombre": "20kg", "cantidad": 20},
+                                        {"producto_nombre": "10kg", "cantidad": 5}
+                                    ],
+                                    "destinatario_documento": "20601234567"
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload)
+                    else:
+                        res = client.post(webhook_url, json=message_payload)
+
+                    assert res.status_code == 200
+                    db.session.refresh(user)
+                    assert user.telegram_context["action"] == "guia_remision"
+                    assert len(user.telegram_context["items"]) == 2
+                    print("Ok Test 6.1: Interpretacion de Guia de Remision exitosa.")
+
+                    # Confirmar emisión de Guía en SUNAT
+                    callback_payload = {
+                        "update_id": 10011,
+                        "callback_query": {
+                            "id": "cb_6",
+                            "from": {"id": TEST_CHAT_ID},
+                            "message": {"message_id": 1004, "chat": {"id": TEST_CHAT_ID}},
+                            "data": "confirm:guia_remision"
+                        }
+                    }
+
+                    # Mockear respuestas de sunat_service
+                    with patch("services.sunat_service.SunatService.emitir_guia_remision") as mock_emit, \
+                         patch("services.sunat_service.SunatService.consultar_estado_ticket") as mock_status:
+                        
+                        mock_emit.return_value = {"numTicket": "TICKET-TEST-123456"}
+                        mock_status.return_value = {
+                            "codRespuesta": "0",
+                            "desRespuesta": "La Guia de Remision fue Aceptada"
+                        }
+
+                        res_cb = client.post(webhook_url, json=callback_payload)
+                        assert res_cb.status_code == 200
+                        
+                        # Verificar llamadas
+                        mock_emit.assert_called_once()
+                        mock_status.assert_called_once_with("TICKET-TEST-123456")
+                        
+                        # Verificar mensaje de exito editado
+                        edited_calls = [call[0][2] for call in mock_edit.call_args_list]
+                        assert any("Aceptada por SUNAT" in msg for msg in edited_calls), "No se encontro mensaje de aceptacion de SUNAT"
+                        print("Ok Test 6.2: Confirmacion y Emision de Guia de Remision exitosa.")
+
+                # Test 7: Flujo de Pedidos (Orden sin descuento de Stock y transición a Venta)
+                print("\nTest 7: Flujo de Pedidos (Ordenes sin descuento de Stock)...")
+                
+                # Obtener stock inicial de la presentación de prueba
+                stock_inicial = float(db.session.query(db.func.sum(Inventario.cantidad)).filter(
+                    Inventario.almacen_id == user.almacen_id,
+                    Inventario.presentacion_id == presentacion.id
+                ).scalar() or 0.0)
+                
+                message_payload = {
+                    "update_id": 10012,
+                    "message": {
+                        "message_id": 1005,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"pedido de 2 sacos de {presentacion.nombre} para {cliente_gen.nombre}"
+                    }
+                }
+
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "interpretar_operacion",
+                                "args": {
+                                    "cliente_nombre": cliente_gen.nombre,
+                                    "estado": "pedido",
+                                    "items": [
+                                        {"producto_nombre": presentacion.nombre, "cantidad": 2}
+                                    ]
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload)
+                    else:
+                        res = client.post(webhook_url, json=message_payload)
+
+                    assert res.status_code == 200
+                    db.session.refresh(user)
+                    assert user.telegram_context["action"] == "venta"
+                    assert user.telegram_context["estado"] == "pedido"
+                    print("STOCK DESPUES DE INTERPRETAR:", float(db.session.query(db.func.sum(Inventario.cantidad)).filter(Inventario.almacen_id == user.almacen_id, Inventario.presentacion_id == presentacion.id).scalar() or 0.0))
+                    print("Ok Test 7.1: Interpretacion de Pedido exitosa.")
+
+                    # Confirmar el pedido
+                    callback_payload = {
+                        "update_id": 10013,
+                        "callback_query": {
+                            "id": "cb_7",
+                            "from": {"id": TEST_CHAT_ID},
+                            "message": {"message_id": 1005, "chat": {"id": TEST_CHAT_ID}},
+                            "data": "confirm:venta"
+                        }
+                    }
+                    res_cb = client.post(webhook_url, json=callback_payload)
+                    assert res_cb.status_code == 200
+                    
+                    # Buscar el pedido registrado en la base de datos
+                    pedido_db = Venta.query.filter_by(estado='pedido').order_by(Venta.id.desc()).first()
+                    assert pedido_db is not None, "El pedido no se registró en la base de datos"
+                    assert pedido_db.fecha_pedido is not None, "fecha_pedido no se asignó"
+                    assert pedido_db.fecha_entrega is not None, "fecha_entrega no se asignó"
+                    assert pedido_db.fecha is None, "fecha de venta debe ser nula en un pedido"
+                    
+                    # Verificar que el stock NO disminuyó
+                    stock_despues_cb = float(db.session.query(db.func.sum(Inventario.cantidad)).filter(Inventario.almacen_id == user.almacen_id, Inventario.presentacion_id == presentacion.id).scalar() or 0.0)
+                    print("STOCK INICIAL SUMADO:", stock_inicial)
+                    print("STOCK DESPUES CB SUMADO:", stock_despues_cb)
+                    assert stock_despues_cb == stock_inicial, "El stock no debió disminuir en un pedido"
+                    
+                    # Verificar que no hay movimientos de salida de stock para este pedido
+                    mov_count = Movimiento.query.filter_by(presentacion_id=presentacion.id, motivo=f"Venta ID: {pedido_db.id} (Telegram)").count()
+                    assert mov_count == 0, "No debieron generarse movimientos para un pedido"
+                    print("Ok Test 7.2: Confirmacion de Pedido exitosa (Sin alterar stock).")
+
+                    # Simular la transición de Pedido a Completado usando el endpoint PUT VentaResource
+                    from flask_jwt_extended import create_access_token
+                    access_token = create_access_token(identity=str(user.id), additional_claims={"rol": "admin"})
+                    headers = {
+                        "Authorization": f"Bearer {access_token}"
+                    }
+                    
+                    # Actualizar a 'completado' pasándole los detalles nuevos
+                    update_payload = {
+                        "estado": "completado",
+                        "detalles": [
+                            {"presentacion_id": presentacion.id, "cantidad": 2, "precio_unitario": 25.0}
+                        ]
+                    }
+                    
+                    res_put = client.put(f"/ventas/{pedido_db.id}", json=update_payload, headers=headers)
+                    print("PUT RESPONSE STATUS:", res_put.status_code)
+                    print("PUT RESPONSE DATA:", res_put.data)
+                    assert res_put.status_code == 200
+                    
+                    # Refrescar y validar que la fecha de venta (completado) ya no sea nula
+                    db.session.refresh(pedido_db)
+                    assert pedido_db.fecha is not None, "La fecha de venta debe asignarse al completar el pedido"
+                    
+                    # Verificar que ahora el stock SÍ disminuyó en 2 unidades
+                    stock_despues = float(db.session.query(db.func.sum(Inventario.cantidad)).filter(
+                        Inventario.almacen_id == user.almacen_id,
+                        Inventario.presentacion_id == presentacion.id
+                    ).scalar() or 0.0)
+                    print("STOCK INICIAL SUMADO:", stock_inicial)
+                    print("STOCK DESPUES SUMADO:", stock_despues)
+                    assert stock_despues == stock_inicial - 2.0, "El stock debió disminuir al completar el pedido"
+                    
+                    # Verificar que ahora sí existe el movimiento de salida
+                    mov_venta = Movimiento.query.filter(
+                        Movimiento.presentacion_id == presentacion.id,
+                        Movimiento.tipo == 'salida',
+                        Movimiento.motivo.like(f"Venta ID: {pedido_db.id}%")
+                    ).first()
+                    assert mov_venta is not None, "Debió registrarse el movimiento de salida al completar la venta"
+                    print("Ok Test 7.3: Transicion de Pedido a Completado exitosa (Stock descontado y fechas validadas).")
+
+                # Test 8: Creación de Clientes
+                print("\nTest 8: Registro de Clientes (Auto-registro por celular y creación dedicada)...")
+                
+                # Parte 8.1: Auto-creación de cliente durante una venta/pedido
+                TEST_NEW_PHONE = "911222333"
+                # Limpiar cualquier cliente existente con ese teléfono
+                Cliente.query.filter_by(telefono=TEST_NEW_PHONE).delete()
+                db.session.commit()
+                
+                message_payload_auto = {
+                    "update_id": 10014,
+                    "message": {
+                        "message_id": 1006,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"pedido de 2 sacos de {presentacion.nombre} para Carlos al celular {TEST_NEW_PHONE}"
+                    }
+                }
+                
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+                     
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "interpretar_operacion",
+                                "args": {
+                                    "cliente_nombre": "Carlos",
+                                    "estado": "pedido",
+                                    "items": [
+                                        {"producto_nombre": presentacion.nombre, "cantidad": 2}
+                                    ]
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload_auto)
+                    else:
+                        res = client.post(webhook_url, json=message_payload_auto)
+                        
+                    assert res.status_code == 200
+                    
+                    # Verificar que el cliente fue creado automáticamente en la base de datos
+                    cliente_auto = Cliente.query.filter_by(telefono=TEST_NEW_PHONE).first()
+                    assert cliente_auto is not None, "El cliente nuevo no se creó automáticamente"
+                    assert cliente_auto.nombre == "Carlos", "El nombre del cliente auto-creado es incorrecto"
+                    print("Ok Test 8.1: Auto-registro de cliente nuevo vía celular exitoso.")
+
+                # Parte 8.2: Creación dedicada de cliente con registrar_cliente
+                TEST_DEDICATED_PHONE = "999000111"
+                # Limpiar cliente
+                Cliente.query.filter_by(telefono=TEST_DEDICATED_PHONE).delete()
+                db.session.commit()
+                
+                message_payload_dedicated = {
+                    "update_id": 10015,
+                    "message": {
+                        "message_id": 1007,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"crear cliente Carlos Torres celular {TEST_DEDICATED_PHONE} direccion Calle Lima 123"
+                    }
+                }
+                
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+                     
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "registrar_cliente",
+                                "args": {
+                                    "nombre": "Carlos Torres",
+                                    "telefono": TEST_DEDICATED_PHONE,
+                                    "direccion": "Calle Lima 123"
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload_dedicated)
+                    else:
+                        res = client.post(webhook_url, json=message_payload_dedicated)
+                        
+                    assert res.status_code == 200
+                    db.session.refresh(user)
+                    assert user.telegram_context["action"] == "cliente"
+                    assert user.telegram_context["nombre"] == "Carlos Torres"
+                    print("Ok Test 8.2.1: Solicitud de registro de cliente dedicada exitosa (Contexto guardado).")
+                    
+                    # Confirmar la creación del cliente
+                    callback_payload_dedicated = {
+                        "update_id": 10016,
+                        "callback_query": {
+                            "id": "cb_8",
+                            "from": {"id": TEST_CHAT_ID},
+                            "message": {"message_id": 1007, "chat": {"id": TEST_CHAT_ID}},
+                            "data": "confirm:cliente"
+                        }
+                    }
+                    res_cb = client.post(webhook_url, json=callback_payload_dedicated)
+                    assert res_cb.status_code == 200
+                    
+                    cliente_dedicated = Cliente.query.filter_by(telefono=TEST_DEDICATED_PHONE).first()
+                    assert cliente_dedicated is not None, "El cliente no se guardó en la base de datos al confirmar"
+                    assert cliente_dedicated.nombre == "Carlos Torres", "El nombre es incorrecto"
+                    assert "Calle Lima 123" in cliente_dedicated.direccion, "La dirección es incorrecta"
+                    print("Ok Test 8.2.2: Confirmación de registro de cliente dedicada exitosa.")
 
             print("\n[OK] Todas las pruebas de integracion del bot de Telegram se completaron exitosamente!")
 

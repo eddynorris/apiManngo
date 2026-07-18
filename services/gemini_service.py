@@ -86,6 +86,11 @@ class GeminiService:
                                     "type": "INTEGER",
                                     "description": "Porcentaje del total a pagar (ej: 50 para 'la mitad')."
                                 },
+                                "estado": {
+                                    "type": "STRING",
+                                    "description": "Estado del pedido o venta. Si el usuario menciona que es un pedido, encargo o solicitud pendiente, usar 'pedido'. De lo contrario, usar 'completado'.",
+                                    "enum": ["pedido", "completado"]
+                                },
                                 "gasto_asociado": {
                                     "type": "OBJECT",
                                     "description": "Gasto operativo mencionado.",
@@ -240,6 +245,76 @@ class GeminiService:
                             },
                             "required": ["items"]
                         }
+                    },
+                    {
+                        "name": "solicitar_guia_remision",
+                        "description": "Prepara un borrador de guia de remision remitente (GRE) para traslados o envios de productos.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "items": {
+                                    "type": "ARRAY",
+                                    "description": "Lista de productos a trasladar.",
+                                    "items": {
+                                        "type": "OBJECT",
+                                        "properties": {
+                                            "producto_nombre": {
+                                                "type": "STRING",
+                                                "description": "Nombre de la presentacion o producto."
+                                            },
+                                            "cantidad": {
+                                                "type": "NUMBER",
+                                                "description": "Cantidad de unidades."
+                                            }
+                                        },
+                                        "required": ["producto_nombre", "cantidad"]
+                                    }
+                                },
+                                "destinatario_documento": {
+                                    "type": "STRING",
+                                    "description": "RUC (11 digitos) o DNI (8 digitos) del cliente o destinatario."
+                                },
+                                "motivo_traslado": {
+                                    "type": "STRING",
+                                    "description": "Motivo del traslado. Por defecto 'venta' si no se especifica. Opciones comunes: 'venta', 'traslado', 'compra', 'devolucion'."
+                                },
+                                "placa_vehiculo": {
+                                    "type": "STRING",
+                                    "description": "Placa del vehiculo de transporte (ej: ABC-123). Si no se menciona, null."
+                                },
+                                "conductor_documento": {
+                                    "type": "STRING",
+                                    "description": "DNI del conductor (8 digitos). Si no se menciona, null."
+                                }
+                            },
+                            "required": ["items", "destinatario_documento"]
+                        }
+                    },
+                    {
+                        "name": "registrar_cliente",
+                        "description": "Crea o registra un nuevo cliente en el sistema.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "nombre": {
+                                    "type": "STRING",
+                                    "description": "Nombre o razón social del cliente."
+                                },
+                                "telefono": {
+                                    "type": "STRING",
+                                    "description": "Número de teléfono/celular de 9 dígitos del cliente."
+                                },
+                                "documento": {
+                                    "type": "STRING",
+                                    "description": "Número de RUC o DNI del cliente (opcional)."
+                                },
+                                "direccion": {
+                                    "type": "STRING",
+                                    "description": "Dirección de entrega o residencia del cliente (opcional)."
+                                }
+                            },
+                            "required": ["nombre", "telefono"]
+                        }
                     }
                 ]
             }
@@ -295,13 +370,25 @@ class GeminiService:
         
         return text
 
-    def _validate_output(self, args):
+    def _validate_output(self, action, args):
         """
         Validacion mejorada de la respuesta de Gemini.
         """
         # Validar estructura basica
         if not isinstance(args, dict):
             raise ValueError("Respuesta malformada de Gemini")
+
+        # Validar registrar_cliente
+        if action == 'registrar_cliente':
+            telefono = args.get('telefono')
+            if telefono:
+                digits = re.sub(r'\D', '', str(telefono))
+                if len(digits) != 9:
+                    raise ValueError("El teléfono del cliente debe tener exactamente 9 dígitos")
+                args['telefono'] = digits
+            nombre = args.get('nombre')
+            if not nombre or len(nombre) < 2:
+                raise ValueError("El nombre del cliente debe tener al menos 2 caracteres")
         
         # Validar cliente
         if 'cliente_nombre' in args:
@@ -367,6 +454,17 @@ class GeminiService:
                         if len(prod_nombre) < 2 or len(prod_nombre) > 200:
                             raise ValueError(f"Nombre de producto invalido: {prod_nombre}")
         
+        # Validar solicitar_guia_remision
+        if action == 'solicitar_guia_remision':
+            if 'items' in args and isinstance(args['items'], list):
+                for item in args['items']:
+                    cant = item.get('cantidad', 0)
+                    if not isinstance(cant, (int, float)) or cant <= 0:
+                        raise ValueError("La cantidad a trasladar debe ser mayor a cero")
+                    prod_nombre = item.get('producto_nombre', '')
+                    if len(prod_nombre) < 2 or len(prod_nombre) > 200:
+                        raise ValueError(f"Nombre de producto invalido para la guia: {prod_nombre}")
+        
         # Validar pagos
         if 'pagos' in args and isinstance(args['pagos'], list):
             for pago in args['pagos']:
@@ -386,69 +484,29 @@ class GeminiService:
                 raise ValueError("Monto depositado negativo no permitido")
                 
         return args
-    
+
     def _build_system_prompt(self):
         """
-        Construye un system prompt optimizado con estructura clara y ejemplos.
+        Construye un system prompt optimizado y compacto para minimizar el uso de tokens.
         """
         fecha_actual = get_peru_now().strftime('%Y-%m-%d %H:%M')
         
-        return f"""Eres el asistente comercial inteligente de Manngo, un sistema de gestion de ventas de carbon/briquetas.
-Tu funcion es extraer intenciones y datos estructurados a partir de comandos de usuarios.
-Deberas seleccionar la funcion/herramienta correcta en base al texto del usuario.
+        return f"""Comercial Manngo (carbón/briquetas). Extrae intenciones y datos estructurados.
+Fecha/Hora: {fecha_actual} (Perú, Soles S/)
 
-=== CONTEXTO ACTUAL ===
-Fecha/Hora: {fecha_actual}
-Ubicacion: Peru (moneda: Soles S/)
+Mapeo de Herramientas:
+1. interpretar_operacion (Venta/Pedido/Despacho): "vendi 3 sacos de 20 a juan perez" o "pedido de 10 sacos de 5kg para maria"
+   * Regla de Kg: Mapear 'saco de 20' -> '20kg', 'bolsa de diez' -> '10kg', 'saco grande' -> '30kg', 'saco chico' -> '10kg'.
+2. registrar_gasto (Gastos independientes): "ayudante 30 soles" o "combustible 100 soles categoria logistica"
+3. registrar_pago (Abono de deuda): "juan perez pago 200 soles por yape"
+4. registrar_deposito (Depósito de caja al banco): "depositados 500 soles al banco ref 74829"
+5. registrar_produccion (Producción/Ensacado): "hice 60 sacos de 20kg y 100 de 5kg"
+6. registrar_compra_insumos (Compra/Ingreso de insumos): "compre 500 sacos de 20kg y 30 hilos"
+7. solicitar_guia_remision (Guía de remisión/traslado SUNAT): "guia de 20 sacos de 20kg al RUC 20601234567"
+8. registrar_cliente (Crear o registrar cliente): "crear cliente Juan Perez celular 987654321"
 
-=== REGLAS DE SELECCION DE HERRAMIENTAS ===
-
-1. Ventas (interpretar_operacion):
-   * Se activa cuando el usuario menciona vender o despachar productos a un cliente.
-   * REGLA DE KILOGRAMOS: Este negocio vende productos diferenciados por KILOGRAMOS.
-     Presentaciones comunes: 3kg, 4kg, 5kg, 10kg, 20kg, 30kg.
-     Mapeo: 'saco de 20' -> '20kg', 'bolsa de diez' -> '10kg', 'saco grande' -> '30kg', 'saco chico' -> '10kg'.
-   * Ejemplo: "vendi 3 sacos de 20 a juan perez pago completo"
-   * Ejemplo: "2 bolsas de 10 para maria al credito"
-
-2. Gastos (registrar_gasto):
-   * Se activa cuando se mencionan uno o varios gastos, pagos a ayudantes o fletes independientes de una venta.
-   * Se puede recibir multiples gastos en una sola linea.
-   * Categorias validas: logistica, personal, insumos, otros.
-   * Ejemplo: "Agrega los siguientes gastos: Willy pago por mes de junio 2000, 500 soles para el agua, 1800 compra de bateria panel solar y cable"
-   * Ejemplo: "pagado 100 soles de combustible categoria logistica"
-   * Ejemplo: "le di 30 soles de almuerzo al ayudante" (Categoria: personal)
-
-3. Pagos / Abonos (registrar_pago):
-   * Se activa cuando un cliente realiza un abono o paga una deuda pendiente.
-   * Metodos: efectivo, yape_plin, transferencia, tarjeta, deposito, otro.
-   * Ejemplo: "juan perez pago 200 soles por yape"
-   * Ejemplo: "abono de maria de 150 soles en efectivo"
-
-4. Depositos Bancarios (registrar_deposito):
-   * Se activa cuando se realiza el deposito bancario del efectivo que estaba en gerencia/caja.
-   * Ejemplo: "depositados 500 soles al banco con referencia 74829"
-   * Ejemplo: "se deposito 1000 soles del efectivo de ayer, op 12345"
-
-5. Produccion (registrar_produccion):
-   * Se activa cuando se reporta la produccion de briquetas o ensacado de productos terminados (pueden ser multiples).
-   * Ejemplo: "Hice 60 sacos de 20kg, 100 de 5kg y 70 de 10kg"
-   * Ejemplo: "se produjeron 50 sacos de briquetas de 5kg"
-
-6. Compras de Insumos (registrar_compra_insumos):
-   * Se activa cuando se reporta la compra o el ingreso al inventario de insumos (como sacos vacios, hilos, etc.).
-   * Ejemplo: "Compre 500 sacos de 20kg , 1000 de 10kg, y 30 hilos"
-   * Ejemplo: "Se compro 30 hilos a 150 soles"
-
-=== RESTRICCIONES CRITICAS ===
-* NUNCA inventes informacion que no este en el comando.
-* Si el texto coincide con una produccion, selecciona registrar_produccion.
-* Si el texto coincide con compra de insumos de inventario, selecciona registrar_compra_insumos.
-* Si coincide con un abono a deuda, selecciona registrar_pago.
-* Si coincide con depositar dinero en el banco, selecciona registrar_deposito.
-* Si es una venta compleja (productos + cliente), selecciona interpretar_operacion.
-* Tu output DEBE ser SOLO el function call correspondiente, sin texto adicional."""
-
+Restricción: NUNCA inventes información. Tu output DEBE ser únicamente el function call correspondiente sin texto adicional."""
+    
     def process_command(self, text, history=None):
         """
         Procesa un comando de texto usando Gemini con prompt optimizado y memoria de conversación.
@@ -523,7 +581,7 @@ Ubicacion: Peru (moneda: Soles S/)
                         
                         # Validacion de output
                         try:
-                            args_dict = self._validate_output(args_dict)
+                            args_dict = self._validate_output(fn_call.name, args_dict)
                         except ValueError as ve:
                             logger.error(f"Validation error: {ve}")
                             return {

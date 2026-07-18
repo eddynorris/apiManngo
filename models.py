@@ -16,6 +16,8 @@ class Users(db.Model):
     telegram_chat_id = db.Column(db.BigInteger, unique=True, nullable=True)
     telegram_context = db.Column(db.JSON, nullable=True)
     telegram_history = db.Column(db.JSON, nullable=True)
+    telegram_linking_code = db.Column(db.String(10), unique=True, nullable=True)
+    telegram_linking_expires = db.Column(db.DateTime(timezone=True), nullable=True)
     
     movimientos = db.relationship('Movimiento', back_populates='usuario')
     almacen = db.relationship('Almacen', backref=db.backref('usuarios', lazy=True))
@@ -138,6 +140,9 @@ class Venta(db.Model):
     total = db.Column(db.Numeric(12, 2), nullable=False)
     tipo_pago = db.Column(db.String(10), nullable=False)
     estado_pago = db.Column(db.String(15), default='pendiente')
+    estado = db.Column(db.String(20), nullable=False, default='completado', server_default='completado')
+    fecha_pedido = db.Column(db.DateTime(timezone=True))
+    fecha_entrega = db.Column(db.DateTime(timezone=True))
     consumo_diario_kg = db.Column(db.Numeric(10, 2))  # Estimación global para proyecciones
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
@@ -180,7 +185,8 @@ class Venta(db.Model):
 
     __table_args__ = (
         CheckConstraint("tipo_pago IN ('contado', 'credito')"),
-        CheckConstraint("estado_pago IN ('pendiente', 'parcial', 'pagado')")
+        CheckConstraint("estado_pago IN ('pendiente', 'parcial', 'pagado')"),
+        CheckConstraint("estado IN ('pedido', 'completado')")
     )
 
 class VentaDetalle(db.Model):

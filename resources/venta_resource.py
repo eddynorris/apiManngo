@@ -140,72 +140,95 @@ class VentaResource(Resource):
         claims = get_jwt()
         venta_data.vendedor_id = claims.get('sub')
 
+        estado = data_from_request.get('estado', 'completado').lower()
+        if estado not in ['pedido', 'completado']:
+            return {"error": "Estado inválido. Opciones: pedido, completado"}, 400
+
         total = Decimal('0')
         detalles_para_venta = []
 
-        # --- LÓGICA FIFO: Obtener todos los inventarios por presentación y almacén, ordenados por FIFO ---
-        from models import Lote as LoteModel
-        presentacion_ids = list({d.get('presentacion_id') for d in detalles_data})
-
-        inventarios_por_presentacion = {}
-        invs_raw = (
-            Inventario.query
-            .options(orm.joinedload(Inventario.presentacion), orm.joinedload(Inventario.lote))
-            .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
-            .filter(
-                Inventario.presentacion_id.in_(presentacion_ids),
-                Inventario.almacen_id == venta_data.almacen_id,
-                Inventario.cantidad > 0
-            )
-            .order_by(
-                Inventario.presentacion_id,
-                LoteModel.fecha_ingreso.asc(),  # FIFO: más antiguo primero
-                Inventario.id.asc()             # Desempate
-            )
-            .all()
-        )
-        for inv in invs_raw:
-            inventarios_por_presentacion.setdefault(inv.presentacion_id, []).append(inv)
-        
-        for detalle_data in detalles_data:
-            presentacion_id = detalle_data.get('presentacion_id')
-            cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
-
-            if not all([presentacion_id, cantidad_solicitada]):
-                return {"error": "Cada detalle debe incluir presentacion_id y cantidad"}, 400
-
-            invs_disponibles = inventarios_por_presentacion.get(presentacion_id, [])
-            stock_total = sum(inv.cantidad for inv in invs_disponibles)
-
-            if not invs_disponibles:
-                return {"error": f"No se encontró inventario para presentación ID {presentacion_id} en este almacén."}, 404
-
-            if stock_total < cantidad_solicitada:
-                nombre = invs_disponibles[0].presentacion.nombre if invs_disponibles else str(presentacion_id)
-                return {"error": f"Stock insuficiente para {nombre} (Disponible: {stock_total})"}, 400
-
-            # Precio por unidad para este ítem
-            precio_unitario = Decimal(str(
-                detalle_data.get('precio_unitario') or invs_disponibles[0].presentacion.precio_venta
-            ))
-
-            # Descontar de inventarios FIFO, creando un VentaDetalle por cada lote consumido
-            cantidad_restante = cantidad_solicitada
-            for inv in invs_disponibles:
-                if cantidad_restante <= 0:
-                    break
-                cantidad_a_tomar = min(inv.cantidad, cantidad_restante)
-                inv.cantidad -= cantidad_a_tomar
-                cantidad_restante -= cantidad_a_tomar
-
+        if estado == 'pedido':
+            for detalle_data in detalles_data:
+                presentacion_id = detalle_data.get('presentacion_id')
+                cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
+                if not all([presentacion_id, cantidad_solicitada]):
+                    return {"error": "Cada detalle debe incluir presentacion_id y cantidad"}, 400
+                
+                pres = PresentacionProducto.query.get_or_404(presentacion_id)
+                precio_unitario = Decimal(str(detalle_data.get('precio_unitario') or pres.precio_venta))
+                
                 nuevo_detalle = VentaDetalle(
                     presentacion_id=presentacion_id,
-                    cantidad=int(cantidad_a_tomar),
+                    cantidad=int(cantidad_solicitada),
                     precio_unitario=precio_unitario,
-                    lote_id=inv.lote_id  # Puede ser None para insumos, acepta ambos casos
+                    lote_id=None
                 )
                 detalles_para_venta.append(nuevo_detalle)
-                total += Decimal(str(cantidad_a_tomar)) * Decimal(str(precio_unitario))
+                total += cantidad_solicitada * precio_unitario
+        else:
+            # --- LÓGICA FIFO ---
+            from models import Lote as LoteModel
+            presentacion_ids = list({d.get('presentacion_id') for d in detalles_data})
+
+            inventarios_por_presentacion = {}
+            invs_raw = (
+                Inventario.query
+                .options(orm.joinedload(Inventario.presentacion), orm.joinedload(Inventario.lote))
+                .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
+                .filter(
+                    Inventario.presentacion_id.in_(presentacion_ids),
+                    Inventario.almacen_id == venta_data.almacen_id,
+                    Inventario.cantidad > 0
+                )
+                .order_by(
+                    Inventario.presentacion_id,
+                    LoteModel.fecha_ingreso.asc(),  # FIFO: más antiguo primero
+                    Inventario.id.asc()             # Desempate
+                )
+                .all()
+            )
+            for inv in invs_raw:
+                inventarios_por_presentacion.setdefault(inv.presentacion_id, []).append(inv)
+            
+            for detalle_data in detalles_data:
+                presentacion_id = detalle_data.get('presentacion_id')
+                cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
+
+                if not all([presentacion_id, cantidad_solicitada]):
+                    return {"error": "Cada detalle debe incluir presentacion_id y cantidad"}, 400
+
+                invs_disponibles = inventarios_por_presentacion.get(presentacion_id, [])
+                stock_total = sum(inv.cantidad for inv in invs_disponibles)
+
+                if not invs_disponibles:
+                    return {"error": f"No se encontró inventario para presentación ID {presentacion_id} en este almacén."}, 404
+
+                if stock_total < cantidad_solicitada:
+                    nombre = invs_disponibles[0].presentacion.nombre if invs_disponibles else str(presentacion_id)
+                    return {"error": f"Stock insuficiente para {nombre} (Disponible: {stock_total})"}, 400
+
+                # Precio por unidad para este ítem
+                precio_unitario = Decimal(str(
+                    detalle_data.get('precio_unitario') or invs_disponibles[0].presentacion.precio_venta
+                ))
+
+                # Descontar de inventarios FIFO, creando un VentaDetalle por cada lote consumido
+                cantidad_restante = cantidad_solicitada
+                for inv in invs_disponibles:
+                    if cantidad_restante <= 0:
+                        break
+                    cantidad_a_tomar = min(inv.cantidad, cantidad_restante)
+                    inv.cantidad -= cantidad_a_tomar
+                    cantidad_restante -= cantidad_a_tomar
+
+                    nuevo_detalle = VentaDetalle(
+                        presentacion_id=presentacion_id,
+                        cantidad=int(cantidad_a_tomar),
+                        precio_unitario=precio_unitario,
+                        lote_id=inv.lote_id  # Puede ser None para insumos, acepta ambos casos
+                    )
+                    detalles_para_venta.append(nuevo_detalle)
+                    total += Decimal(str(cantidad_a_tomar)) * Decimal(str(precio_unitario))
 
         # tipo_pago se deriva automáticamente: si paga ahora es 'contado', si no es 'credito'
         monto_pago = Decimal(str(data_from_request.get('monto_pago') or 0))
@@ -214,29 +237,37 @@ class VentaResource(Resource):
         metodo_pago = (data_from_request.get('metodo_pago') or 'efectivo').lower()
         tipo_pago_derivado = 'contado' if monto_pago > 0 else 'credito'
 
+        fecha_pedido_val = datetime.now(timezone.utc) if estado == 'pedido' else None
+        fecha_entrega_val = venta_data.fecha if estado == 'pedido' else None
+
         nueva_venta = Venta(
             cliente_id=venta_data.cliente_id,
             almacen_id=venta_data.almacen_id,
             vendedor_id=venta_data.vendedor_id,
             total=total,
             tipo_pago=tipo_pago_derivado,
-            fecha=venta_data.fecha,
+            fecha=venta_data.fecha if estado == 'completado' else None,
+            estado=estado,
+            fecha_pedido=fecha_pedido_val,
+            fecha_entrega=fecha_entrega_val,
             detalles=detalles_para_venta
         )
 
         db.session.add(nueva_venta)
         db.session.flush()
 
-        for detalle in nueva_venta.detalles:
-            movimiento = Movimiento(
-                tipo='salida',
-                presentacion_id=detalle.presentacion_id,
-                lote_id=detalle.lote_id,
-                cantidad=detalle.cantidad,
-                usuario_id=claims['sub'],
-                motivo=f"Venta ID: {nueva_venta.id} - Cliente: {cliente.nombre}"
-            )
-            db.session.add(movimiento)
+        if estado == 'completado':
+            for detalle in nueva_venta.detalles:
+                movimiento = Movimiento(
+                    tipo='salida',
+                    presentacion_id=detalle.presentacion_id,
+                    lote_id=detalle.lote_id,
+                    cantidad=detalle.cantidad,
+                    usuario_id=claims['sub'],
+                    motivo=f"Venta ID: {nueva_venta.id} - Cliente: {cliente.nombre}",
+                    tipo_operacion='venta'
+                )
+                db.session.add(movimiento)
 
         # --- REGISTRAR PAGO Y DEJAR QUE actualizar_estado() CALCULE EL ESTADO ---
         if monto_pago > 0:
@@ -315,42 +346,68 @@ class VentaResource(Resource):
         # Convertir a un diccionario para acceso instantáneo (O(1))
         inventario_dict = {i.presentacion_id: i for i in inventarios}
 
-        # --- 1. Revertir el estado anterior (usando el diccionario) ---
-        for detalle_actual in venta.detalles:
-            inventario = inventario_dict.get(detalle_actual.presentacion_id)
-            if inventario:
-                inventario.cantidad += detalle_actual.cantidad
-        
-        Movimiento.query.filter(Movimiento.motivo.like(f"Venta ID: {venta_id}%")).delete(synchronize_session=False)
+        was_completado = (venta.estado == 'completado')
+        is_completado = (data.get('estado', venta.estado) == 'completado')
 
+        # --- 1. Revertir el estado anterior (usando el diccionario) si estaba completado ---
+        if was_completado:
+            for detalle_actual in venta.detalles:
+                inventario = inventario_dict.get(detalle_actual.presentacion_id)
+                if inventario:
+                    inventario.cantidad += detalle_actual.cantidad
+            Movimiento.query.filter(Movimiento.motivo.like(f"Venta ID: {venta_id}%")).delete(synchronize_session=False)
+        
         # --- 2. Procesar y aplicar el nuevo estado (usando el diccionario) ---
         nuevo_total = Decimal('0')
         nuevos_detalles_obj = []
 
-        for detalle_data in nuevos_detalles_data:
-            presentacion_id = detalle_data.get('presentacion_id')
-            cantidad = detalle_data.get('cantidad')
-            precio_unitario = Decimal(detalle_data.get('precio_unitario'))
+        if is_completado:
+            for detalle_data in nuevos_detalles_data:
+                presentacion_id = detalle_data.get('presentacion_id')
+                cantidad = Decimal(str(detalle_data.get('cantidad')))
+                precio_unitario = Decimal(str(detalle_data.get('precio_unitario')))
 
-            inventario = inventario_dict.get(presentacion_id)
-            if not inventario or inventario.cantidad < cantidad:
-                db.session.rollback() # Importante: revertir cambios si hay error
-                return {"error": f"Stock insuficiente para actualizar. Presentación ID: {presentacion_id}"}, 400
-            
-            inventario.cantidad -= cantidad
-            
-            detalle_obj = VentaDetalle(
-                presentacion_id=presentacion_id,
-                cantidad=cantidad,
-                precio_unitario=precio_unitario,
-                lote_id=inventario.lote_id
-            )
-            nuevos_detalles_obj.append(detalle_obj)
-            nuevo_total += cantidad * precio_unitario
+                inventario = inventario_dict.get(presentacion_id)
+                if not inventario or inventario.cantidad < cantidad:
+                    db.session.rollback() # Importante: revertir cambios si hay error
+                    return {"error": f"Stock insuficiente para actualizar. Presentación ID: {presentacion_id}"}, 400
+                
+                inventario.cantidad -= cantidad
+                
+                detalle_obj = VentaDetalle(
+                    presentacion_id=presentacion_id,
+                    cantidad=int(cantidad),
+                    precio_unitario=precio_unitario,
+                    lote_id=inventario.lote_id
+                )
+                nuevos_detalles_obj.append(detalle_obj)
+                nuevo_total += cantidad * precio_unitario
+        else:
+            # Pedido: No se descuenta stock
+            for detalle_data in nuevos_detalles_data:
+                presentacion_id = detalle_data.get('presentacion_id')
+                cantidad = Decimal(str(detalle_data.get('cantidad')))
+                
+                pres = PresentacionProducto.query.get_or_404(presentacion_id)
+                precio_unitario = Decimal(str(detalle_data.get('precio_unitario') or pres.precio_venta))
+                
+                detalle_obj = VentaDetalle(
+                    presentacion_id=presentacion_id,
+                    cantidad=int(cantidad),
+                    precio_unitario=precio_unitario,
+                    lote_id=None
+                )
+                nuevos_detalles_obj.append(detalle_obj)
+                nuevo_total += cantidad * precio_unitario
 
         # --- 3. Actualizar la venta ---
         venta.cliente_id = data.get('cliente_id', venta.cliente_id)
         venta.estado_pago = data.get('estado_pago', venta.estado_pago) # Asegurar actualización de estado
+        venta.estado = data.get('estado', venta.estado)
+        
+        if is_completado and not was_completado:
+            # Transición a completado: establecer la fecha al momento actual si no es enviada explícitamente
+            venta.fecha = datetime.now(timezone.utc)
         
         if 'fecha' in data:
             try:
@@ -358,6 +415,20 @@ class VentaResource(Resource):
             except ValueError:
                 db.session.rollback()
                 return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400
+                
+        if 'fecha_pedido' in data and data['fecha_pedido']:
+            try:
+                venta.fecha_pedido = parse_iso_datetime(data['fecha_pedido'], add_timezone=True)
+            except ValueError:
+                db.session.rollback()
+                return {"error": "Formato de fecha_pedido inválido. Usa ISO 8601"}, 400
+                
+        if 'fecha_entrega' in data and data['fecha_entrega']:
+            try:
+                venta.fecha_entrega = parse_iso_datetime(data['fecha_entrega'], add_timezone=True)
+            except ValueError:
+                db.session.rollback()
+                return {"error": "Formato de fecha_entrega inválido. Usa ISO 8601"}, 400
                 
         if 'tipo_pago' in data:
             venta.tipo_pago = data['tipo_pago']
@@ -369,19 +440,20 @@ class VentaResource(Resource):
         venta.total = nuevo_total
         venta.detalles = nuevos_detalles_obj
         
-        # (El resto de la lógica para crear movimientos y hacer commit se mantiene igual)
-        cliente_nombre = Cliente.query.get(venta.cliente_id).nombre
-        current_user_id = get_jwt().get('sub')
-        for detalle in venta.detalles:
-            movimiento = Movimiento(
-                tipo='salida',
-                presentacion_id=detalle.presentacion_id,
-                lote_id=detalle.lote_id,
-                cantidad=detalle.cantidad,
-                usuario_id=current_user_id,
-                motivo=f"Venta ID: {venta.id} - Cliente: {cliente_nombre} (Actualizada)"
-            )
-            db.session.add(movimiento)
+        if is_completado:
+            cliente_nombre = Cliente.query.get(venta.cliente_id).nombre
+            current_user_id = get_jwt().get('sub')
+            for detalle in venta.detalles:
+                movimiento = Movimiento(
+                    tipo='salida',
+                    presentacion_id=detalle.presentacion_id,
+                    lote_id=detalle.lote_id,
+                    cantidad=detalle.cantidad,
+                    usuario_id=current_user_id,
+                    motivo=f"Venta ID: {venta.id} - Cliente: {cliente_nombre} (Actualizada)",
+                    tipo_operacion='venta'
+                )
+                db.session.add(movimiento)
 
         # --- LÓGICA DE PAGO AUTOMÁTICO EN ACTUALIZACIÓN ---
         # Si la venta se actualiza a 'pagado', pagamos el saldo pendiente
