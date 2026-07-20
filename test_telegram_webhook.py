@@ -683,13 +683,13 @@ def run_tests():
                         "message_id": 1006,
                         "from": {"id": TEST_CHAT_ID},
                         "chat": {"id": TEST_CHAT_ID},
-                        "text": f"pedido de 2 sacos de {presentacion.nombre} para Carlos al celular {TEST_NEW_PHONE}"
+                        "text": f"pedido de 2 sacos de {presentacion.nombre} para Carlos al celular {TEST_NEW_PHONE} RUC 20608255738"
                     }
                 }
                 
                 with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
                      patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
-                     
+                      
                     if not use_real_gemini:
                         with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
                             mock_gemini.return_value = {
@@ -712,7 +712,8 @@ def run_tests():
                     cliente_auto = Cliente.query.filter_by(telefono=TEST_NEW_PHONE).first()
                     assert cliente_auto is not None, "El cliente nuevo no se creó automáticamente"
                     assert cliente_auto.nombre == "Carlos", "El nombre del cliente auto-creado es incorrecto"
-                    print("Ok Test 8.1: Auto-registro de cliente nuevo vía celular exitoso.")
+                    assert cliente_auto.ruc == "20608255738", "El RUC del cliente auto-creado es incorrecto o no se guardó"
+                    print("Ok Test 8.1: Auto-registro de cliente nuevo vía celular y RUC exitoso.")
 
                 # Parte 8.2: Creación dedicada de cliente con registrar_cliente
                 TEST_DEDICATED_PHONE = "999000111"
@@ -771,6 +772,115 @@ def run_tests():
                     assert cliente_dedicated.nombre == "Carlos Torres", "El nombre es incorrecto"
                     assert "Calle Lima 123" in cliente_dedicated.direccion, "La dirección es incorrecta"
                     print("Ok Test 8.2.2: Confirmación de registro de cliente dedicada exitosa.")
+
+                # Test 9: Fechas Personalizadas y Ventas sin pago por defecto (Crédito)
+                print("\nTest 9: Fechas Personalizadas y Ventas sin pago (Crédito)...")
+                
+                # Test 9.1: Venta sin pagos (debe quedar al crédito)
+                message_payload_credito = {
+                    "update_id": 10020,
+                    "message": {
+                        "message_id": 1008,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"vendi 2 sacos de {presentacion.nombre} a {cliente_gen.nombre}"
+                    }
+                }
+                
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+                    
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "interpretar_operacion",
+                                "args": {
+                                    "cliente_nombre": cliente_gen.nombre,
+                                    "estado": "completado",
+                                    "items": [
+                                        {"producto_nombre": presentacion.nombre, "cantidad": 2}
+                                    ]
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload_credito)
+                    else:
+                        res = client.post(webhook_url, json=message_payload_credito)
+                    
+                    assert res.status_code == 200
+                    db.session.refresh(user)
+                    assert user.telegram_context["action"] == "venta"
+                    assert len(user.telegram_context["pagos"]) == 0, "No debe registrar pagos para venta sin especificar pago"
+                    
+                    # Confirmar la venta al crédito
+                    callback_payload_credito = {
+                        "update_id": 10021,
+                        "callback_query": {
+                            "id": "cb_9_1",
+                            "from": {"id": TEST_CHAT_ID},
+                            "message": {"message_id": 1008, "chat": {"id": TEST_CHAT_ID}},
+                            "data": "confirm:venta"
+                        }
+                    }
+                    res_cb = client.post(webhook_url, json=callback_payload_credito)
+                    assert res_cb.status_code == 200
+                    
+                    venta_credito = Venta.query.order_by(Venta.id.desc()).first()
+                    assert venta_credito.tipo_pago == 'credito', "La venta debió crearse al crédito"
+                    assert venta_credito.estado_pago == 'pendiente', "El estado de pago debió quedar pendiente"
+                    assert len(venta_credito.pagos) == 0, "No debieron generarse pagos"
+                    print("Ok Test 9.1: Venta sin especificar pago se registra correctamente al crédito.")
+
+                # Test 9.2: Venta con fecha personalizada (ayer)
+                message_payload_fecha = {
+                    "update_id": 10022,
+                    "message": {
+                        "message_id": 1009,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"vendi 1 saco de {presentacion.nombre} a {cliente_gen.nombre} ayer"
+                    }
+                }
+                
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+                    
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "interpretar_operacion",
+                                "args": {
+                                    "cliente_nombre": cliente_gen.nombre,
+                                    "estado": "completado",
+                                    "fecha": "2026-07-17",
+                                    "items": [
+                                        {"producto_nombre": presentacion.nombre, "cantidad": 1}
+                                    ]
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload_fecha)
+                    else:
+                        res = client.post(webhook_url, json=message_payload_fecha)
+                    
+                    assert res.status_code == 200
+                    db.session.refresh(user)
+                    assert user.telegram_context["fecha"] == "2026-07-17"
+                    
+                    # Confirmar la venta con fecha
+                    callback_payload_fecha = {
+                        "update_id": 10023,
+                        "callback_query": {
+                            "id": "cb_9_2",
+                            "from": {"id": TEST_CHAT_ID},
+                            "message": {"message_id": 1009, "chat": {"id": TEST_CHAT_ID}},
+                            "data": "confirm:venta"
+                        }
+                    }
+                    res_cb = client.post(webhook_url, json=callback_payload_fecha)
+                    assert res_cb.status_code == 200
+                    
+                    venta_fecha = Venta.query.order_by(Venta.id.desc()).first()
+                    assert venta_fecha.fecha.strftime("%Y-%m-%d") == "2026-07-17", "La fecha de la venta es incorrecta"
+                    print("Ok Test 9.2: Venta con fecha personalizada registrada correctamente en base de datos.")
 
             print("\n[OK] Todas las pruebas de integracion del bot de Telegram se completaron exitosamente!")
 

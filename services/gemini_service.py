@@ -79,12 +79,16 @@ class GeminiService:
                                 },
                                 "condicion_pago": {
                                     "type": "STRING",
-                                    "description": "Indica si el pago es total, al credito o parcial.",
+                                    "description": "Indica si el pago es total (completo), al credito (credito) o parcial (parcial). Si el usuario NO menciona que pagó, abonó o un método de pago, DEBE ser 'credito'. No asumas pago completo por defecto.",
                                     "enum": ["completo", "credito", "parcial"]
                                 },
                                 "porcentaje_abono": {
                                     "type": "INTEGER",
                                     "description": "Porcentaje del total a pagar (ej: 50 para 'la mitad')."
+                                },
+                                "fecha": {
+                                    "type": "STRING",
+                                    "description": "Fecha personalizada de la venta o pedido en formato YYYY-MM-DD. Resolver a partir de fechas relativas como 'ayer', 'hace 2 días', 'el lunes', etc. en base a la fecha actual."
                                 },
                                 "estado": {
                                     "type": "STRING",
@@ -136,6 +140,10 @@ class GeminiService:
                                         },
                                         "required": ["descripcion", "monto", "categoria"]
                                     }
+                                },
+                                "fecha": {
+                                    "type": "STRING",
+                                    "description": "Fecha personalizada del gasto en formato YYYY-MM-DD. Resolver a partir de fechas relativas (ej. 'ayer', 'el lunes') usando la fecha actual."
                                 }
                             },
                             "required": ["gastos"]
@@ -163,6 +171,10 @@ class GeminiService:
                                 "referencia": {
                                     "type": "STRING",
                                     "description": "Codigo o numero de referencia del comprobante."
+                                },
+                                "fecha": {
+                                    "type": "STRING",
+                                    "description": "Fecha personalizada del pago/abono en formato YYYY-MM-DD. Resolver a partir de fechas relativas (ej. 'ayer', 'el lunes') usando la fecha actual."
                                 }
                             },
                             "required": ["monto", "metodo_pago"]
@@ -492,7 +504,11 @@ class GeminiService:
         fecha_actual = get_peru_now().strftime('%Y-%m-%d %H:%M')
         
         return f"""Comercial Manngo (carbón/briquetas). Extrae intenciones y datos estructurados.
-Fecha/Hora: {fecha_actual} (Perú, Soles S/)
+Fecha/Hora actual de referencia: {fecha_actual} (Perú, Soles S/)
+
+Reglas:
+- Si mencionan fechas relativas ('ayer', 'el lunes', 'hace 3 días', etc.) o absolutas ('15 de julio'), resuélvelas a formato YYYY-MM-DD usando la fecha de referencia y envíalas en el parámetro 'fecha'.
+- Si NO se menciona explícitamente haber pagado, abonado, cobrado o un método de pago, la condición de pago DEBE ser 'credito' (no asumas 'completo').
 
 Mapeo de Herramientas:
 1. interpretar_operacion (Venta/Pedido/Despacho): "vendi 3 sacos de 20 a juan perez" o "pedido de 10 sacos de 5kg para maria"

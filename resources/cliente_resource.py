@@ -91,6 +91,11 @@ class ClienteResource(Resource):
                 if not re.match(r'^[\d\+\-\s()]{3,20}$', telefono):
                     return {"error": "Formato de teléfono inválido"}, 400
             
+            # Validar RUC si está presente
+            if ruc := data.get('ruc'):
+                if not re.match(r'^\d{11}$', str(ruc)):
+                    return {"error": "Formato de RUC inválido. Debe tener exactamente 11 dígitos numéricos"}, 400
+            
             # Crear y guardar cliente
             nuevo_cliente = cliente_schema.load(data)
             db.session.add(nuevo_cliente)
@@ -127,6 +132,11 @@ class ClienteResource(Resource):
             if telefono := data.get('telefono'):
                 if not re.match(r'^[\d\+\-\s()]{3,20}$', telefono):
                     return {"error": "Formato de teléfono inválido"}, 400
+                    
+            # Validar RUC si está presente
+            if ruc := data.get('ruc'):
+                if not re.match(r'^\d{11}$', str(ruc)):
+                    return {"error": "Formato de RUC inválido. Debe tener exactamente 11 dígitos numéricos"}, 400
             
             # Actualizar cliente
             cliente_actualizado = cliente_schema.load(

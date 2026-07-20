@@ -235,6 +235,7 @@ class Cliente(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(255), nullable=False)
     telefono = db.Column(db.String(20))
+    ruc = db.Column(db.String(20))
     direccion = db.Column(db.Text)
     ciudad = db.Column(db.String(100))
     frecuencia_compra_dias = db.Column(db.Integer)

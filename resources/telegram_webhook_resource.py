@@ -258,6 +258,8 @@ class TelegramWebhookResource(Resource):
         # 1. Resolver Cliente (Por teléfono primero, luego por nombre)
         import re
         phone_match = re.search(r'\b(9\d{8})\b', original_text)
+        ruc_match = re.search(r'\b(\d{11})\b', original_text)
+        ruc_val = ruc_match.group(1) if ruc_match else None
         cliente = None
         warnings = []
 
@@ -265,19 +267,27 @@ class TelegramWebhookResource(Resource):
             phone = phone_match.group(1)
             cliente = Cliente.query.filter_by(telefono=phone).first()
             if cliente:
-                warnings.append(f"Se identificó al cliente {cliente.nombre} por el número de teléfono {phone}.")
+                # Si el cliente ya existe pero no tiene RUC, y el comando de texto sí lo menciona, actualizarlo
+                if ruc_val and not cliente.ruc:
+                    cliente.ruc = ruc_val
+                    db.session.commit()
+                    warnings.append(f"Se identificó al cliente {cliente.nombre} y se le asignó RUC {ruc_val}.")
+                else:
+                    warnings.append(f"Se identificó al cliente {cliente.nombre} por el número de teléfono {phone}.")
             else:
                 # Auto-crear cliente si tiene teléfono pero no existe en BD
                 nombre_nuevo = cliente_nombre if cliente_nombre and cliente_nombre.strip() else f"Cliente {phone}"
                 cliente = Cliente(
                     nombre=nombre_nuevo,
                     telefono=phone,
+                    ruc=ruc_val,
                     direccion="Dirección no especificada",
                     ciudad="Lima"
                 )
                 db.session.add(cliente)
                 db.session.flush()
-                warnings.append(f"👤 <b>Cliente Nuevo Creado</b>: Se registró automáticamente a '{nombre_nuevo}' con teléfono {phone}.")
+                extra_ruc_txt = f" y RUC {ruc_val}" if ruc_val else ""
+                warnings.append(f"👤 <b>Cliente Nuevo Creado</b>: Se registró automáticamente a '{nombre_nuevo}' con teléfono {phone}{extra_ruc_txt}.")
 
         if not cliente and cliente_nombre:
             cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
@@ -334,9 +344,18 @@ class TelegramWebhookResource(Resource):
             })
 
         # 3. Lógica de Pago
-        condicion_pago = args.get("condicion_pago", "completo")
+        condicion_pago = args.get("condicion_pago")
         porcentaje_abono = args.get("porcentaje_abono")
         pagos_raw = args.get("pagos", [])
+
+        if not condicion_pago:
+            # Si hay abono o pagos explícitos, usar completo/parcial. Si no, es crédito.
+            if pagos_raw:
+                condicion_pago = "completo"
+            elif porcentaje_abono and porcentaje_abono > 0:
+                condicion_pago = "parcial"
+            else:
+                condicion_pago = "credito"
 
         pagos = []
         if condicion_pago == "completo":
@@ -364,6 +383,7 @@ class TelegramWebhookResource(Resource):
 
         gasto_asociado = args.get("gasto_asociado")
         estado = args.get("estado", "completado").lower()
+        fecha = args.get("fecha")
 
         # Guardar en contexto del usuario
         context_data = {
@@ -376,7 +396,8 @@ class TelegramWebhookResource(Resource):
             "total": float(total_estimado),
             "almacen_id": almacen_id,
             "almacen_nombre": almacen_nombre,
-            "estado": estado
+            "estado": estado,
+            "fecha": fecha
         }
         user.telegram_context = context_data
         db.session.commit()
@@ -390,6 +411,7 @@ class TelegramWebhookResource(Resource):
         if gasto_asociado:
             gasto_txt = f"\n💸 <b>Gasto Asociado:</b> S/ {gasto_asociado.get('monto')} ({gasto_asociado.get('descripcion')})"
 
+        fecha_txt = f"\n📅 <b>Fecha:</b> {fecha}" if fecha else ""
         card_title = "Pedido (Sin descuento de Stock)" if estado == 'pedido' else "Venta"
         confirm_text = "pedido" if estado == 'pedido' else "venta"
 
@@ -400,7 +422,8 @@ class TelegramWebhookResource(Resource):
             f"📦 <b>Productos:</b>\n{items_txt}\n"
             f"💰 <b>Total:</b> S/ {total_estimado:.2f}\n"
             f"💳 <b>Pagos:</b>\n{pagos_txt}"
-            f"{gasto_txt}\n"
+            f"{gasto_txt}"
+            f"{fecha_txt}\n"
         )
         if warnings_txt and estado != 'pedido':
             card += f"\n⚠️ <b>Alertas:</b>\n{warnings_txt}\n"
@@ -456,22 +479,26 @@ class TelegramWebhookResource(Resource):
             telegram_service.send_message(chat_id, "❌ Error: No se encontraron gastos válidos con montos mayores a cero.")
             return
 
+        fecha = args.get("fecha")
         context_data = {
             "action": "gasto",
             "gastos": gastos_normalized,
             "almacen_id": almacen_id,
             "almacen_nombre": almacen_nombre,
-            "total_monto": float(total_monto)
+            "total_monto": float(total_monto),
+            "fecha": fecha
         }
         user.telegram_context = context_data
         db.session.commit()
 
         gastos_txt = "\n".join([f"• {g['descripcion']}: S/ {g['monto']:.2f} ({g['categoria']})" for g in gastos_normalized])
+        fecha_txt = f"📅 <b>Fecha:</b> {fecha}\n" if fecha else ""
 
         card = (
             f"📋 <b>Confirmar Registro de Gastos</b>\n\n"
             f"🏪 <b>Almacén:</b> {almacen_nombre}\n"
             f"💵 <b>Detalle de Gastos:</b>\n{gastos_txt}\n\n"
+            f"{fecha_txt}"
             f"💰 <b>Total Acumulado:</b> S/ {total_monto:.2f}\n\n"
             f"¿Confirmas el registro de estos gastos?"
         )
@@ -516,18 +543,21 @@ class TelegramWebhookResource(Resource):
         if saldo <= 0:
             warnings.append(f"⚠️ El cliente {cliente.nombre} no tiene deudas pendientes en el sistema.")
 
+        fecha = args.get("fecha")
         context_data = {
             "action": "pago",
             "cliente_id": cliente.id,
             "cliente_nombre": cliente.nombre,
             "monto": monto,
             "metodo_pago": metodo_pago,
-            "referencia": referencia
+            "referencia": referencia,
+            "fecha": fecha
         }
         user.telegram_context = context_data
         db.session.commit()
 
         warnings_txt = "\n".join(warnings) if warnings else ""
+        fecha_txt = f"📅 Fecha: {fecha}\n" if fecha else ""
 
         card = (
             f"📋 <b>Confirmar Pago de Deuda</b>\n\n"
@@ -535,6 +565,7 @@ class TelegramWebhookResource(Resource):
             f"💰 Monto: S/ {monto:.2f}\n"
             f"💳 Método de Pago: {metodo_pago}\n"
             f"🔑 Referencia: {referencia if referencia else 'Ninguna'}\n"
+            f"{fecha_txt}"
             f"📈 Saldo Deuda Actual: S/ {saldo:.2f}\n\n"
         )
         if warnings_txt:
@@ -788,7 +819,22 @@ class TelegramWebhookResource(Resource):
         gasto_data = context["gasto_asociado"]
         almacen_id = context.get("almacen_id", user.almacen_id)
         almacen_nombre = context.get("almacen_nombre", "Desconocido")
-        fecha_transaccion = datetime.now()
+        
+        # Resolver fecha personalizada de la transacción
+        fecha_str = context.get("fecha")
+        if fecha_str:
+            try:
+                fecha_parsed = datetime.strptime(fecha_str, "%Y-%m-%d")
+                ahora = datetime.now()
+                fecha_transaccion = datetime(
+                    fecha_parsed.year, fecha_parsed.month, fecha_parsed.day,
+                    ahora.hour, ahora.minute, ahora.second, ahora.microsecond, ahora.tzinfo
+                )
+            except Exception:
+                fecha_transaccion = datetime.now()
+        else:
+            fecha_transaccion = datetime.now()
+            
         estado = context.get("estado", "completado")
 
         total_venta = Decimal("0")
@@ -949,16 +995,11 @@ class TelegramWebhookResource(Resource):
         documento = context.get("documento")
         direccion = context.get("direccion")
 
-        # Al no haber una columna explícita 'documento_identidad', podemos guardar el documento en el campo 'direccion'
-        # o simplemente no registrarlo si no es crítico, o concatenarlo. Concatenarlo en la dirección es muy útil.
-        direccion_final = direccion
-        if documento:
-            direccion_final = f"{direccion} (Doc: {documento})"
-
         nuevo_cliente = Cliente(
             nombre=nombre,
             telefono=telefono,
-            direccion=direccion_final,
+            ruc=documento,
+            direccion=direccion,
             ciudad="Lima"
         )
         db.session.add(nuevo_cliente)
@@ -971,7 +1012,8 @@ class TelegramWebhookResource(Resource):
             f"<b>ID:</b> #{nuevo_cliente.id}\n"
             f"<b>Nombre:</b> {nombre}\n"
             f"<b>Teléfono:</b> {telefono}\n"
-            f"<b>Dirección:</b> {direccion_final}"
+            f"<b>RUC:</b> {documento or 'No especificado'}\n"
+            f"<b>Dirección:</b> {direccion}"
         )
 
     def _execute_gasto(self, chat_id, user, context, message_id):
@@ -987,7 +1029,16 @@ class TelegramWebhookResource(Resource):
             
         almacen_id = context.get("almacen_id", user.almacen_id)
         almacen_nombre = context.get("almacen_nombre", "Desconocido")
-        fecha_gasto = datetime.now().date()
+        
+        # Resolver fecha personalizada del gasto
+        fecha_str = context.get("fecha")
+        if fecha_str:
+            try:
+                fecha_gasto = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+            except Exception:
+                fecha_gasto = datetime.now().date()
+        else:
+            fecha_gasto = datetime.now().date()
         
         registros_creados = []
         for g in gastos_list:
@@ -1013,6 +1064,21 @@ class TelegramWebhookResource(Resource):
         monto = Decimal(str(context["monto"]))
         metodo_pago = context["metodo_pago"]
         referencia = context["referencia"]
+
+        # Resolver fecha personalizada del abono
+        fecha_str = context.get("fecha")
+        if fecha_str:
+            try:
+                fecha_parsed = datetime.strptime(fecha_str, "%Y-%m-%d")
+                ahora = datetime.now()
+                fecha_pago = datetime(
+                    fecha_parsed.year, fecha_parsed.month, fecha_parsed.day,
+                    ahora.hour, ahora.minute, ahora.second, ahora.microsecond, ahora.tzinfo
+                )
+            except Exception:
+                fecha_pago = datetime.now()
+        else:
+            fecha_pago = datetime.now()
 
         # Buscar ventas pendientes/parciales de ese cliente
         ventas_pendientes = Venta.query.filter(
@@ -1041,7 +1107,7 @@ class TelegramWebhookResource(Resource):
                 usuario_id=user.id,
                 monto=abono,
                 metodo_pago=metodo_pago,
-                fecha=datetime.now(),
+                fecha=fecha_pago,
                 referencia=referencia if referencia else "Abono Telegram"
             )
             db.session.add(nuevo_pago)
@@ -1403,15 +1469,23 @@ class TelegramWebhookResource(Resource):
                     "peso_total_kg": float(cant * presentacion.capacidad_kg)
                 })
 
-        # Intentar buscar cliente por RUC/DNI en la base de datos
-        cliente = Cliente.query.filter(
-            (Cliente.telefono.ilike(f"%{dest_doc}%")) | 
-            (Cliente.direccion.ilike(f"%{dest_doc}%"))
-        ).first()
+        # Intentar buscar cliente por RUC en la base de datos
+        cliente = Cliente.query.filter_by(ruc=dest_doc).first()
+        
+        # Si no se encuentra por RUC, intentar por teléfono/dirección
+        if not cliente:
+            cliente = Cliente.query.filter(
+                (Cliente.telefono.ilike(f"%{dest_doc}%")) | 
+                (Cliente.direccion.ilike(f"%{dest_doc}%"))
+            ).first()
 
         # Si no se encuentra, buscar por nombre
         if not cliente:
             cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{dest_doc}%")).first()
+
+        # Usar el RUC del cliente si está registrado
+        if cliente and cliente.ruc:
+            dest_doc = cliente.ruc
 
         # Establecer datos de llegada
         dest_nombre = cliente.nombre if cliente else "Cliente Externo"
