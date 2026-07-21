@@ -155,6 +155,8 @@ class TelegramWebhookResource(Resource):
             self._prepare_guia_remision(chat_id, user, args, text)
         elif action == "registrar_cliente":
             self._prepare_cliente(chat_id, user, args, text)
+        elif action == "registrar_ventas_lote":
+            self._prepare_ventas_lote(chat_id, user, args, text)
         else:
             # Error o mensaje conversacional
             msg = result.get("message", "No entendí la operación. Intenta reformular.")
@@ -801,6 +803,8 @@ class TelegramWebhookResource(Resource):
                 self._execute_guia_remision(chat_id, user, context, message_id)
             elif data == "confirm:cliente":
                 self._execute_cliente(chat_id, user, context, message_id)
+            elif data == "confirm:ventas_lote":
+                self._execute_ventas_lote(chat_id, user, context, message_id)
 
             # Limpiar contexto tras el éxito
             user.telegram_context = None
@@ -1705,6 +1709,308 @@ class TelegramWebhookResource(Resource):
                 f"❌ <b>Error SUNAT:</b> {str(e)}\n\n"
                 f"No se pudo emitir la guía de remisión electrónica de forma definitiva."
             )
+
+    def _prepare_ventas_lote(self, chat_id, user, args, original_text):
+        ventas_raw = args.get("ventas")
+        fecha = args.get("fecha") # YYYY-MM-DD
+        
+        if not ventas_raw or not isinstance(ventas_raw, list):
+            telegram_service.send_message(chat_id, "❌ Error: No se encontraron ventas válidas en el lote.")
+            return
+
+        ventas_enriched = []
+        warnings = []
+        resumen_lineas = []
+        total_lote = Decimal("0")
+
+        for idx, v_item in enumerate(ventas_raw):
+            cliente_nombre = v_item.get("cliente_nombre")
+            items = v_item.get("items", [])
+
+            if not cliente_nombre or not items:
+                continue
+
+            # 1. Buscar Cliente (similitud trigram / ILIKE)
+            cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
+            if not cliente:
+                try:
+                    cliente = Cliente.query.filter(func.similarity(Cliente.nombre, cliente_nombre) > 0.3).order_by(func.similarity(Cliente.nombre, cliente_nombre).desc()).first()
+                except Exception:
+                    pass
+
+            cliente_id = None
+            cliente_real_nombre = cliente_nombre
+            almacen_preferido_id = user.almacen_id
+            
+            if cliente:
+                cliente_id = cliente.id
+                cliente_real_nombre = cliente.nombre
+                if cliente.almacen_preferido_id:
+                    almacen_preferido_id = cliente.almacen_preferido_id
+            else:
+                # Alerta si el cliente no está en la base de datos
+                warnings.append(f"👤 Cliente '{cliente_nombre}' no encontrado. Se creará automáticamente al confirmar.")
+
+            # 2. Obtener Almacén
+            almacen = Almacen.query.get(almacen_preferido_id) if almacen_preferido_id else None
+            if not almacen:
+                almacen = Almacen.query.first()
+                if almacen:
+                    almacen_preferido_id = almacen.id
+            almacen_nombre = almacen.nombre if almacen else "Desconocido"
+
+            # 3. Enriquecer los items de la venta
+            items_enriched = []
+            venta_total = Decimal("0")
+            for item in items:
+                prod_name = item.get("producto_nombre")
+                cantidad = Decimal(str(item.get("cantidad", 0)))
+                
+                if cantidad <= 0 or not prod_name:
+                    continue
+
+                presentacion = self._buscar_presentacion(prod_name, ['procesado', 'briqueta'])
+                if not presentacion:
+                    telegram_service.send_message(chat_id, f"❌ Error: No se encontró la presentación '{prod_name}' en el catálogo.")
+                    return
+
+                precio_unitario = presentacion.precio_venta
+                total_linea = cantidad * precio_unitario
+                venta_total += total_linea
+
+                # Validar stock en el almacén preferido
+                inv = Inventario.query.filter_by(almacen_id=almacen_preferido_id, presentacion_id=presentacion.id).first()
+                stock_disp = Decimal(str(inv.cantidad)) if inv else Decimal("0")
+                if stock_disp < cantidad:
+                    warnings.append(f"⚠️ Stock insuficiente en {almacen_nombre} para '{presentacion.nombre}'. Req: {cantidad}, Disp: {stock_disp}")
+
+                # Determinar lote (FIFO)
+                from models import Lote as LoteModel
+                invs_fifo = (
+                    Inventario.query
+                    .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
+                    .filter(
+                        Inventario.presentacion_id == presentacion.id,
+                        Inventario.almacen_id == almacen_preferido_id,
+                        Inventario.cantidad > 0
+                    )
+                    .order_by(LoteModel.fecha_ingreso.asc(), Inventario.id.asc())
+                    .all()
+                )
+                lote_id = invs_fifo[0].lote_id if invs_fifo else None
+
+                items_enriched.append({
+                    "producto_id": presentacion.producto_id,
+                    "producto_nombre": presentacion.nombre,
+                    "presentacion_id": presentacion.id,
+                    "cantidad": float(cantidad),
+                    "precio_unitario": float(precio_unitario),
+                    "lote_id": lote_id
+                })
+
+            total_lote += venta_total
+            ventas_enriched.append({
+                "cliente_id": cliente_id,
+                "cliente_nombre": cliente_real_nombre,
+                "cliente_nombre_original": cliente_nombre, # por si hay que crearlo
+                "almacen_id": almacen_preferido_id,
+                "almacen_nombre": almacen_nombre,
+                "items": items_enriched,
+                "total": float(venta_total)
+            })
+
+            items_txt = ", ".join([f"{item['cantidad']}x {item['producto_nombre']}" for item in items_enriched])
+            resumen_lineas.append(f"• 👤 <b>{cliente_real_nombre}</b> ({almacen_nombre}): {items_txt} -> S/ {venta_total:.2f}")
+
+        if not ventas_enriched:
+            telegram_service.send_message(chat_id, "❌ Error: No se interpretó ninguna venta válida en el lote.")
+            return
+
+        context_data = {
+            "action": "ventas_lote",
+            "ventas": ventas_enriched,
+            "fecha": fecha,
+            "total_lote": float(total_lote)
+        }
+        user.telegram_context = context_data
+        db.session.commit()
+
+        resumen_ventas = "\n".join(resumen_lineas)
+        warnings_txt = "\n".join(warnings) if warnings else ""
+        fecha_txt = f"📅 <b>Fecha Lote:</b> {fecha}\n" if fecha else ""
+
+        card = (
+            f"📋 <b>Confirmar Lote de Ventas</b>\n\n"
+            f"{fecha_txt}"
+            f"📦 <b>Detalle de Ventas ({len(ventas_enriched)}):</b>\n{resumen_ventas}\n\n"
+            f"💰 <b>Total Acumulado Lote:</b> S/ {total_lote:.2f}\n\n"
+        )
+        if warnings_txt:
+            card += f"⚠️ <b>Alertas / Advertencias:</b>\n{warnings_txt}\n\n"
+        card += "¿Confirmas el registro de este lote de ventas?"
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Confirmar Lote", "callback_data": "confirm:ventas_lote"},
+                    {"text": "❌ Cancelar", "callback_data": "cancel"}
+                ]
+            ]
+        }
+        telegram_service.send_message(chat_id, card, reply_markup)
+
+    def _execute_ventas_lote(self, chat_id, user, context, message_id):
+        ventas_list = context.get("ventas", [])
+        fecha_str = context.get("fecha")
+        
+        # Resolver fecha del lote
+        if fecha_str:
+            try:
+                fecha_parsed = datetime.strptime(fecha_str, "%Y-%m-%d")
+                ahora = datetime.now()
+                fecha_transaccion = datetime(
+                    fecha_parsed.year, fecha_parsed.month, fecha_parsed.day,
+                    ahora.hour, ahora.minute, ahora.second, ahora.microsecond, ahora.tzinfo
+                )
+            except Exception:
+                fecha_transaccion = datetime.now()
+        else:
+            fecha_transaccion = datetime.now()
+
+        ventas_registradas = []
+        for v in ventas_list:
+            cliente_id = v.get("cliente_id")
+            cliente_nombre_original = v.get("cliente_nombre_original")
+            almacen_id = v.get("almacen_id")
+            items = v.get("items", [])
+            total = Decimal(str(v.get("total", 0)))
+
+            # 1. Auto-registro de cliente si no existe
+            if not cliente_id:
+                nuevo_cliente = Cliente(
+                    nombre=cliente_nombre_original,
+                    telefono="999999999", # Teléfono genérico
+                    ciudad="Lima",
+                    almacen_preferido_id=almacen_id
+                )
+                db.session.add(nuevo_cliente)
+                db.session.flush()
+                cliente_id = nuevo_cliente.id
+                cliente_nombre = nuevo_cliente.nombre
+            else:
+                cliente = Cliente.query.get(cliente_id)
+                cliente_nombre = cliente.nombre
+
+            # 2. Registrar Venta
+            nueva_venta = Venta(
+                cliente_id=cliente_id,
+                almacen_id=almacen_id,
+                vendedor_id=user.id,
+                total=total,
+                tipo_pago="credito",
+                estado_pago="pendiente",
+                estado="completado",
+                fecha=fecha_transaccion
+            )
+            db.session.add(nueva_venta)
+            db.session.flush()
+
+            # Registrar detalles y descontar de inventario FIFO
+            for item in items:
+                presentacion_id = item["presentacion_id"]
+                cantidad_solicitada = Decimal(str(item["cantidad"]))
+                precio_unitario = Decimal(str(item["precio_unitario"]))
+
+                # Buscar inventarios de forma FIFO
+                from models import Lote as LoteModel
+                invs_disponibles = (
+                    Inventario.query
+                    .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
+                    .filter(
+                        Inventario.presentacion_id == presentacion_id,
+                        Inventario.almacen_id == almacen_id,
+                        Inventario.cantidad > 0
+                    )
+                    .order_by(LoteModel.fecha_ingreso.asc(), Inventario.id.asc())
+                    .all()
+                )
+
+                cantidad_restante = cantidad_solicitada
+                for inv in invs_disponibles:
+                    if cantidad_restante <= 0:
+                        break
+                    cantidad_a_tomar = min(inv.cantidad, cantidad_restante)
+                    inv.cantidad -= cantidad_a_tomar
+                    cantidad_restante -= cantidad_a_tomar
+
+                    # Crear detalle de la venta
+                    nuevo_detalle = VentaDetalle(
+                        venta_id=nueva_venta.id,
+                        presentacion_id=presentacion_id,
+                        cantidad=int(cantidad_a_tomar),
+                        precio_unitario=precio_unitario,
+                        lote_id=inv.lote_id
+                    )
+                    db.session.add(nuevo_detalle)
+
+                    # Crear Movimiento de stock
+                    movimiento = Movimiento(
+                        tipo='salida',
+                        presentacion_id=presentacion_id,
+                        lote_id=inv.lote_id,
+                        cantidad=cantidad_a_tomar,
+                        usuario_id=user.id,
+                        motivo=f"Venta ID: {nueva_venta.id} - Cliente: {cliente_nombre}",
+                        tipo_operacion='venta'
+                    )
+                    db.session.add(movimiento)
+
+                # Si no había suficiente stock en FIFO, se descuenta de lo que haya o del inventario sin lote
+                if cantidad_restante > 0:
+                    inv_sin_lote = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion_id).first()
+                    if not inv_sin_lote:
+                        inv_sin_lote = Inventario(
+                            presentacion_id=presentacion_id,
+                            almacen_id=almacen_id,
+                            lote_id=None,
+                            cantidad=Decimal("0")
+                        )
+                        db.session.add(inv_sin_lote)
+                        db.session.flush()
+                    inv_sin_lote.cantidad -= cantidad_restante
+
+                    nuevo_detalle = VentaDetalle(
+                        venta_id=nueva_venta.id,
+                        presentacion_id=presentacion_id,
+                        cantidad=int(cantidad_restante),
+                        precio_unitario=precio_unitario,
+                        lote_id=None
+                    )
+                    db.session.add(nuevo_detalle)
+
+                    movimiento = Movimiento(
+                        tipo='salida',
+                        presentacion_id=presentacion_id,
+                        lote_id=None,
+                        cantidad=cantidad_restante,
+                        usuario_id=user.id,
+                        motivo=f"Venta ID: {nueva_venta.id} - Cliente: {cliente_nombre} (Sin Lote)",
+                        tipo_operacion='venta'
+                    )
+                    db.session.add(movimiento)
+
+            ventas_registradas.append(f"• Venta #{nueva_venta.id} a <b>{cliente_nombre}</b> por S/ {total:.2f}")
+
+        db.session.commit()
+
+        detalles_txt = "\n".join(ventas_registradas)
+        telegram_service.edit_message(
+            chat_id,
+            message_id,
+            f"✅ <b>¡Lote de {len(ventas_list)} ventas registrado con éxito!</b>\n\n"
+            f"📅 Fecha: {fecha_transaccion.strftime('%Y-%m-%d')}\n\n"
+            f"<b>Resumen de Ventas creadas:</b>\n{detalles_txt}"
+        )
 
 
 class TelegramLinkResource(Resource):

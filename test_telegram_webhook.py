@@ -1,7 +1,9 @@
 import os
 import json
 import sys
+import random
 from decimal import Decimal
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
 # Configurar variables de entorno ficticias si no existen
@@ -53,6 +55,14 @@ def run_tests():
             db.session.commit()
         except Exception:
             db.session.rollback()
+
+        # Asegurar la columna almacen_preferido_id en la base de datos de pruebas
+        try:
+            db.session.execute(db.text("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS almacen_preferido_id INTEGER"))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"Nota: No se pudo agregar la columna almacen_preferido_id: {e}")
 
         # 1. Asegurar que exista al menos un usuario en la BD para probar
         user = Users.query.first()
@@ -148,12 +158,23 @@ def run_tests():
                 else:
                     inv_insumo.cantidad = Decimal("1000")
             elif componente.tipo_consumo == "materia_prima":
-                lote_mp = Lote.query.filter(Lote.producto_id == componente.componente_presentacion.producto_id, Lote.cantidad_disponible_kg > 0).first()
-                if not lote_mp:
-                    lote_mp = Lote(producto_id=componente.componente_presentacion.producto_id, codigo_lote=f"MP-{componente.id}", cantidad_disponible_kg=Decimal("10000"), es_produccion=False)
-                    db.session.add(lote_mp)
-                else:
-                    lote_mp.cantidad_disponible_kg = Decimal("10000")
+                # Inactivar y poner a 0 otros lotes de este producto para evitar que interfieran
+                Lote.query.filter(Lote.producto_id == componente.componente_presentacion.producto_id).update({
+                    Lote.cantidad_disponible_kg: Decimal("0"),
+                    Lote.is_active: False
+                })
+                # Crear lote limpio
+                lote_mp = Lote(
+                    producto_id=componente.componente_presentacion.producto_id,
+                    codigo_lote=f"MP-{componente.id}-{random.randint(1000, 9999)}",
+                    cantidad_disponible_kg=Decimal("10000"),
+                    peso_humedo_kg=Decimal("10000"),
+                    peso_seco_kg=Decimal("10000"),
+                    es_produccion=False,
+                    is_active=True,
+                    fecha_ingreso=datetime.now(timezone.utc)
+                )
+                db.session.add(lote_mp)
 
         db.session.commit()
 
@@ -925,6 +946,100 @@ def run_tests():
                 assert Venta.query.get(v1_id) is None
                 assert Venta.query.get(v2_id) is None
                 print("Ok Test 9.3: Eliminación en lote de ventas exitosa.")
+
+                # Test 10: Registro de Ventas en Lote (Batch) y Almacén Preferido por Cliente
+                print("\nTest 10: Registro de Ventas en Lote (Batch) y Almacén Preferido...")
+                
+                almacen_abancay = Almacen.query.filter(Almacen.nombre.ilike("%abancay%")).first()
+                if not almacen_abancay:
+                    almacen_abancay = Almacen(nombre="Almacen Abancay", direccion="Av Central 456", ciudad="Abancay", es_planta=False)
+                    db.session.add(almacen_abancay)
+                    db.session.flush()
+                
+                cliente_preferido = Cliente.query.filter_by(nombre="Polleria Plaza Abancay").first()
+                if not cliente_preferido:
+                    cliente_preferido = Cliente(
+                        nombre="Polleria Plaza Abancay",
+                        telefono="988888888",
+                        ciudad="Abancay",
+                        almacen_preferido_id=almacen_abancay.id
+                    )
+                    db.session.add(cliente_preferido)
+                    db.session.flush()
+                else:
+                    cliente_preferido.almacen_preferido_id = almacen_abancay.id
+                    db.session.flush()
+                
+                inv_abancay = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).first()
+                if not inv_abancay:
+                    inv_abancay = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=None, cantidad=Decimal("100"))
+                    db.session.add(inv_abancay)
+                else:
+                    inv_abancay.cantidad = Decimal("100")
+                db.session.commit()
+                
+                message_payload_lote = {
+                    "update_id": 10030,
+                    "message": {
+                        "message_id": 1010,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"Ventas 24/06/2026: Polleria Plaza Abancay 4 sacos de {presentacion.nombre}"
+                    }
+                }
+                
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+                    
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "registrar_ventas_lote",
+                                "args": {
+                                    "fecha": "2026-06-24",
+                                    "ventas": [
+                                        {
+                                            "cliente_nombre": "Polleria Plaza Abancay",
+                                            "items": [
+                                                {"producto_nombre": presentacion.nombre, "cantidad": 4}
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload_lote)
+                    else:
+                        res = client.post(webhook_url, json=message_payload_lote)
+                    
+                    assert res.status_code == 200
+                    db.session.refresh(user)
+                    assert user.telegram_context["action"] == "ventas_lote"
+                    assert user.telegram_context["fecha"] == "2026-06-24"
+                    assert len(user.telegram_context["ventas"]) == 1
+                    assert user.telegram_context["ventas"][0]["almacen_id"] == almacen_abancay.id
+                    
+                    # Confirmar lote
+                    callback_payload_lote = {
+                        "update_id": 10031,
+                        "callback_query": {
+                            "id": "cb_10_1",
+                            "from": {"id": TEST_CHAT_ID},
+                            "message": {"message_id": 1010, "chat": {"id": TEST_CHAT_ID}},
+                            "data": "confirm:ventas_lote"
+                        }
+                    }
+                    res_cb = client.post(webhook_url, json=callback_payload_lote)
+                    assert res_cb.status_code == 200
+                    
+                    venta_lote = Venta.query.filter_by(cliente_id=cliente_preferido.id).order_by(Venta.id.desc()).first()
+                    assert venta_lote is not None
+                    assert venta_lote.almacen_id == almacen_abancay.id, "La venta debió registrarse en el almacén de Abancay"
+                    assert venta_lote.fecha.strftime("%Y-%m-%d") == "2026-06-24", "La fecha de la venta es incorrecta"
+                    
+                    # Limpiar
+                    db.session.delete(venta_lote)
+                    db.session.commit()
+                    print("Ok Test 10: Procesamiento de ventas en lote y almacén preferido de cliente exitoso.")
 
             print("\n[OK] Todas las pruebas de integracion del bot de Telegram se completaron exitosamente!")
 

@@ -111,11 +111,13 @@ class ClienteSchema(SQLAlchemyAutoSchema):
     ultima_fecha_compra = fields.DateTime(format="%Y-%m-%d")
     proxima_compra_manual = fields.Date(format="%Y-%m-%d", allow_none=True)
     ultimo_contacto = fields.DateTime(format="iso", allow_none=True)
+    almacen_preferido = fields.Nested("AlmacenSchema", only=("id", "nombre"), dump_only=True)
 
     class Meta:
         model = Cliente
         load_instance = True
         unknown = EXCLUDE
+        include_fk = True
         sqla_session = db.session 
 
 

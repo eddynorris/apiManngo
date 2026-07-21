@@ -245,6 +245,9 @@ class Cliente(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
+    almacen_preferido_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='SET NULL'), nullable=True)
+    almacen_preferido = db.relationship('Almacen', foreign_keys=[almacen_preferido_id])
+
     ventas = db.relationship('Venta', back_populates='cliente', lazy=True)
 
     @property
