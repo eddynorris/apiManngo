@@ -7,9 +7,9 @@ from schemas import movimiento_schema, movimientos_schema
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE
 from datetime import datetime
-import logging # Importar el módulo estándar
+from sqlalchemy.orm import joinedload
+import logging
 
-# Configurar logging para este módulo
 logger = logging.getLogger(__name__)
 
 class MovimientoResource(Resource):
@@ -22,10 +22,22 @@ class MovimientoResource(Resource):
         - Sin ID: Lista paginada con filtros (tipo, producto_id, fecha_inicio, fecha_fin, lote_id, presentacion_id)
         """
         if movimiento_id:
-            return movimiento_schema.dump(Movimiento.query.get_or_404(movimiento_id)), 200
+            
+            movimiento = Movimiento.query.options(
+                joinedload(Movimiento.presentacion),
+                joinedload(Movimiento.lote),
+                joinedload(Movimiento.usuario),
+                joinedload(Movimiento.lote_origen)
+            ).get_or_404(movimiento_id)
+            return movimiento_schema.dump(movimiento), 200
         
-        # Construir query con filtros
-        query = Movimiento.query
+        query = Movimiento.query.options(
+            joinedload(Movimiento.presentacion),
+            joinedload(Movimiento.lote),
+            joinedload(Movimiento.usuario),
+            joinedload(Movimiento.lote_origen)
+        )
+        
         if tipo := request.args.get('tipo'):
             query = query.filter_by(tipo=tipo)
         if lote_id := request.args.get('lote_id'):
@@ -56,6 +68,9 @@ class MovimientoResource(Resource):
                 query = query.filter(Movimiento.fecha < fecha_fin_dt)
             except ValueError:
                 return {"error": "Formato de fecha_fin inválido. Use YYYY-MM-DD."}, 400
+
+        # Ordenar por fecha descendente (historial lógico óptimo)
+        query = query.order_by(Movimiento.fecha.desc(), Movimiento.id.desc())
 
         # Paginación
         page = request.args.get('page', 1, type=int)

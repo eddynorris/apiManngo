@@ -882,6 +882,50 @@ def run_tests():
                     assert venta_fecha.fecha.strftime("%Y-%m-%d") == "2026-07-17", "La fecha de la venta es incorrecta"
                     print("Ok Test 9.2: Venta con fecha personalizada registrada correctamente en base de datos.")
 
+                # Test 9.3: Eliminación en lote (Batch Delete) de Ventas
+                print("\nTest 9.3: Eliminación en lote (Batch Delete) de Ventas...")
+                from flask_jwt_extended import create_access_token
+                access_token_admin = create_access_token(identity=str(user.id), additional_claims={"rol": "admin"})
+                headers_admin = {
+                    "Authorization": f"Bearer {access_token_admin}"
+                }
+                
+                venta_temp1 = Venta(
+                    cliente_id=cliente_gen.id,
+                    almacen_id=user.almacen_id,
+                    vendedor_id=user.id,
+                    total=Decimal("10.0"),
+                    tipo_pago="credito"
+                )
+                venta_temp2 = Venta(
+                    cliente_id=cliente_gen.id,
+                    almacen_id=user.almacen_id,
+                    vendedor_id=user.id,
+                    total=Decimal("20.0"),
+                    tipo_pago="credito"
+                )
+                db.session.add(venta_temp1)
+                db.session.add(venta_temp2)
+                db.session.commit()
+
+                v1_id = venta_temp1.id
+                v2_id = venta_temp2.id
+                assert Venta.query.get(v1_id) is not None
+                assert Venta.query.get(v2_id) is not None
+
+                res_batch_delete = client.delete(
+                    "/ventas",
+                    json={"ids": [v1_id, v2_id]},
+                    headers=headers_admin
+                )
+                assert res_batch_delete.status_code == 200
+                res_data = json.loads(res_batch_delete.data)
+                assert "2 ventas eliminadas con éxito" in res_data["message"]
+                
+                assert Venta.query.get(v1_id) is None
+                assert Venta.query.get(v2_id) is None
+                print("Ok Test 9.3: Eliminación en lote de ventas exitosa.")
+
             print("\n[OK] Todas las pruebas de integracion del bot de Telegram se completaron exitosamente!")
 
         finally:
