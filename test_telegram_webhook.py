@@ -970,7 +970,14 @@ def run_tests():
                     cliente_preferido.almacen_preferido_id = almacen_abancay.id
                     db.session.flush()
                 
-                inv_abancay = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).first()
+                # Crear primero un lote agotado (cantidad = 0) para verificar que _prepare_ventas_lote sume todo el stock y no use sólo el primero (.first())
+                inv_depleted = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id, cantidad=Decimal("0")).first()
+                if not inv_depleted:
+                    inv_depleted = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=None, cantidad=Decimal("0"))
+                    db.session.add(inv_depleted)
+                    db.session.flush()
+
+                inv_abancay = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).filter(Inventario.id != inv_depleted.id).first()
                 if not inv_abancay:
                     inv_abancay = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=None, cantidad=Decimal("100"))
                     db.session.add(inv_abancay)
@@ -1040,6 +1047,98 @@ def run_tests():
                     db.session.delete(venta_lote)
                     db.session.commit()
                     print("Ok Test 10: Procesamiento de ventas en lote y almacén preferido de cliente exitoso.")
+
+                # Test 11: Registro de Traslado Físico de Inventario entre Almacenes (registrar_transferencia)
+                print("\nTest 11: Registro de Traslado Físico de Inventario entre Almacenes...")
+
+                # Rellenar stock del producto en Planta
+                inv_planta = Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).first()
+                if not inv_planta:
+                    inv_planta = Inventario(presentacion_id=presentacion.id, almacen_id=user.almacen_id, lote_id=None, cantidad=Decimal("150"))
+                    db.session.add(inv_planta)
+                else:
+                    inv_planta.cantidad = Decimal("150")
+
+                inv_dest = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).first()
+                if not inv_dest:
+                    inv_dest = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=None, cantidad=Decimal("5"))
+                    db.session.add(inv_dest)
+                else:
+                    inv_dest.cantidad = Decimal("5")
+                db.session.commit()
+
+                stock_planta_antes = sum(inv.cantidad for inv in Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).all())
+                stock_dest_antes = sum(inv.cantidad for inv in Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).all())
+
+                message_payload_traslado = {
+                    "update_id": 10040,
+                    "message": {
+                        "message_id": 1020,
+                        "from": {"id": TEST_CHAT_ID},
+                        "chat": {"id": TEST_CHAT_ID},
+                        "text": f"traslado de planta a abancay 10 sacos de {presentacion.nombre}"
+                    }
+                }
+
+                with patch("services.telegram_service.TelegramService.send_message") as mock_send, \
+                     patch("services.telegram_service.TelegramService.edit_message") as mock_edit:
+                    
+                    if not use_real_gemini:
+                        with patch("services.gemini_service.GeminiService.process_command") as mock_gemini:
+                            mock_gemini.return_value = {
+                                "action": "registrar_transferencia",
+                                "args": {
+                                    "almacen_origen_nombre": "planta de produccion",
+                                    "almacen_destino_nombre": "almacen abancay",
+                                    "items": [
+                                        {"producto_nombre": presentacion.nombre, "cantidad": 10}
+                                    ]
+                                }
+                            }
+                            res = client.post(webhook_url, json=message_payload_traslado)
+                    else:
+                        res = client.post(webhook_url, json=message_payload_traslado)
+                    
+                    assert res.status_code == 200
+                    db.session.refresh(user)
+                    assert user.telegram_context["action"] == "transferencia"
+                    assert user.telegram_context["almacen_origen_id"] == user.almacen_id
+                    assert user.telegram_context["almacen_destino_id"] == almacen_abancay.id
+                    assert len(user.telegram_context["transferencias"]) == 1
+                    
+                    # Confirmar traslado
+                    callback_payload_traslado = {
+                        "update_id": 10041,
+                        "callback_query": {
+                            "id": "cb_11_1",
+                            "from": {"id": TEST_CHAT_ID},
+                            "message": {"message_id": 1020, "chat": {"id": TEST_CHAT_ID}},
+                            "data": "confirm:transferencia"
+                        }
+                    }
+                    res_cb = client.post(webhook_url, json=callback_payload_traslado)
+                    assert res_cb.status_code == 200
+                    
+                    # Verificar afectación de inventario
+                    db.session.expire_all()
+                    db.session.commit()
+                    
+                    all_planta_invs = Inventario.query.filter_by(almacen_id=user.almacen_id, presentacion_id=presentacion.id).all()
+                    all_dest_invs = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).all()
+                    
+                    stock_planta_despues = sum(i.cantidad for i in all_planta_invs)
+                    stock_dest_despues = sum(i.cantidad for i in all_dest_invs)
+                    
+                    assert stock_planta_despues == stock_planta_antes - 10, "El stock de origen no disminuyó correctamente"
+                    assert stock_dest_despues == stock_dest_antes + 10, "El stock de destino no aumentó correctamente"
+                    
+                    # Verificar movimientos
+                    movs = Movimiento.query.filter_by(usuario_id=user.id, tipo_operacion='transferencia').order_by(Movimiento.id.desc()).limit(2).all()
+                    assert len(movs) == 2
+                    assert any(m.tipo == 'salida' for m in movs)
+                    assert any(m.tipo == 'entrada' for m in movs)
+                    
+                    print("Ok Test 11: Registro de traslado físico de inventario entre almacenes exitoso.")
 
             print("\n[OK] Todas las pruebas de integracion del bot de Telegram se completaron exitosamente!")
 

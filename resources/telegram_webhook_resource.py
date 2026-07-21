@@ -157,6 +157,8 @@ class TelegramWebhookResource(Resource):
             self._prepare_cliente(chat_id, user, args, text)
         elif action == "registrar_ventas_lote":
             self._prepare_ventas_lote(chat_id, user, args, text)
+        elif action == "registrar_transferencia":
+            self._prepare_transferencia(chat_id, user, args, text)
         else:
             # Error o mensaje conversacional
             msg = result.get("message", "No entendí la operación. Intenta reformular.")
@@ -327,10 +329,23 @@ class TelegramWebhookResource(Resource):
             subtotal = cantidad * precio_unitario
             total_estimado += Decimal(str(subtotal))
 
-            # Resolver Lote y Stock en el almacén resuelto
-            inventario = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion.id).first()
-            lote_id = inventario.lote_id if inventario else None
-            stock_actual = float(inventario.cantidad) if inventario else 0.0
+            # Resolver Lote (FIFO) y Stock total en el almacén resuelto
+            from models import Lote as LoteModel
+            invs_fifo = (
+                Inventario.query
+                .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
+                .filter(
+                    Inventario.presentacion_id == presentacion.id,
+                    Inventario.almacen_id == almacen_id,
+                    Inventario.cantidad > 0
+                )
+                .order_by(LoteModel.fecha_ingreso.asc(), Inventario.id.asc())
+                .all()
+            )
+            lote_id = invs_fifo[0].lote_id if invs_fifo else None
+
+            all_invs = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion.id).all()
+            stock_actual = sum(float(i.cantidad) for i in all_invs) if all_invs else 0.0
 
             if stock_actual < cantidad:
                 warnings.append(f"⚠️ Stock insuficiente para '{presentacion.nombre}'. Solicitado: {cantidad}, Disponible: {stock_actual}")
@@ -707,8 +722,8 @@ class TelegramWebhookResource(Resource):
                         warnings.append(f"⚠️ Stock de materia prima '{componente.componente_presentacion.nombre}' es insuficiente. Req: {cantidad_req}kg, Disp: {cantidad_acumulada}kg.")
                 
                 elif componente.tipo_consumo == 'insumo':
-                    inv_insumo = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=componente.componente_presentacion_id).first()
-                    insumo_disponible = Decimal(str(inv_insumo.cantidad)) if inv_insumo else Decimal("0")
+                    invs_insumo = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=componente.componente_presentacion_id).all()
+                    insumo_disponible = sum(Decimal(str(i.cantidad)) for i in invs_insumo) if invs_insumo else Decimal("0")
                     detalles_consumo.append(f"• Consumir insumo '{componente.componente_presentacion.nombre}': {cantidad_req} unidades (Disp: {insumo_disponible})")
                     if insumo_disponible < cantidad_req:
                         warnings.append(f"⚠️ Stock de insumo '{componente.componente_presentacion.nombre}' es insuficiente. Req: {cantidad_req}, Disp: {insumo_disponible}.")
@@ -805,6 +820,8 @@ class TelegramWebhookResource(Resource):
                 self._execute_cliente(chat_id, user, context, message_id)
             elif data == "confirm:ventas_lote":
                 self._execute_ventas_lote(chat_id, user, context, message_id)
+            elif data == "confirm:transferencia":
+                self._execute_transferencia(chat_id, user, context, message_id)
 
             # Limpiar contexto tras el éxito
             user.telegram_context = None
@@ -852,11 +869,25 @@ class TelegramWebhookResource(Resource):
 
             if estado == 'completado':
                 if not lote_id:
-                    # Buscar el lote con inventario en el almacén
-                    inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id).first()
-                    if not inv or inv.cantidad < cantidad:
-                        raise ValueError(f"Stock insuficiente para producto ID {prod_id} durante la confirmación.")
-                    lote_id = inv.lote_id
+                    # Buscar el lote con inventario activo (FIFO) en el almacén
+                    from models import Lote as LoteModel
+                    inv_fifo = (
+                        Inventario.query
+                        .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
+                        .filter(
+                            Inventario.presentacion_id == prod_id,
+                            Inventario.almacen_id == almacen_id,
+                            Inventario.cantidad > 0
+                        )
+                        .order_by(LoteModel.fecha_ingreso.asc(), Inventario.id.asc())
+                        .first()
+                    )
+                    if inv_fifo:
+                        lote_id = inv_fifo.lote_id
+                    else:
+                        inv_fallback = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id).first()
+                        if inv_fallback:
+                            lote_id = inv_fallback.lote_id
 
                 inventario = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=prod_id, lote_id=lote_id).with_for_update().first()
                 if not inventario or inventario.cantidad < cantidad:
@@ -1710,6 +1741,151 @@ class TelegramWebhookResource(Resource):
                 f"No se pudo emitir la guía de remisión electrónica de forma definitiva."
             )
 
+    def _prepare_transferencia(self, chat_id, user, args, original_text):
+        origen_nombre = args.get("almacen_origen_nombre")
+        destino_nombre = args.get("almacen_destino_nombre")
+        items = args.get("items", [])
+
+        if not items:
+            telegram_service.send_message(chat_id, "❌ Error: No se especificaron productos para trasladar.")
+            return
+
+        # 1. Resolver almacén origen
+        almacen_origen = None
+        if origen_nombre:
+            almacen_origen = Almacen.query.filter(Almacen.nombre.ilike(f"%{origen_nombre}%")).first()
+        if not almacen_origen:
+            almacen_origen = Almacen.query.filter(Almacen.es_planta == True).first()
+            if not almacen_origen:
+                almacen_origen = Almacen.query.filter(Almacen.nombre.ilike("%planta%")).first()
+            if not almacen_origen:
+                almacen_origen = Almacen.query.get(user.almacen_id) if user.almacen_id else None
+
+        if not almacen_origen:
+            telegram_service.send_message(chat_id, "❌ Error: No se pudo determinar el almacén de origen.")
+            return
+
+        # 2. Resolver almacén destino
+        almacen_destino = None
+        if destino_nombre:
+            almacen_destino = Almacen.query.filter(Almacen.nombre.ilike(f"%{destino_nombre}%")).first()
+        if not almacen_destino:
+            telegram_service.send_message(chat_id, f"❌ Error: No se encontró ningún almacén con el nombre '{destino_nombre}'.")
+            return
+
+        if almacen_origen.id == almacen_destino.id:
+            telegram_service.send_message(chat_id, "❌ Error: El almacén de origen y destino no pueden ser el mismo.")
+            return
+
+        # 3. Enriquecer items y validar stock
+        items_enriched = []
+        warnings = []
+        detalles_txt = []
+        for item in items:
+            prod_name = item.get("producto_nombre")
+            cantidad = Decimal(str(item.get("cantidad", 0)))
+
+            if cantidad <= 0 or not prod_name:
+                continue
+
+            presentacion = self._buscar_presentacion(prod_name, ['procesado', 'briqueta', 'insumo'])
+            if not presentacion:
+                telegram_service.send_message(chat_id, f"❌ Error: No se encontró la presentación '{prod_name}' en el catálogo.")
+                return
+
+            # Validar stock origen
+            invs_origen = Inventario.query.filter_by(
+                almacen_id=almacen_origen.id,
+                presentacion_id=presentacion.id
+            ).all()
+            stock_disp = sum(inv.cantidad for inv in invs_origen)
+
+            if stock_disp < cantidad:
+                warnings.append(f"⚠️ Stock insuficiente en {almacen_origen.nombre} para '{presentacion.nombre}'. Req: {cantidad}, Disp: {stock_disp}")
+
+            items_enriched.append({
+                "presentacion_id": presentacion.id,
+                "presentacion_nombre": presentacion.nombre,
+                "cantidad": float(cantidad)
+            })
+            detalles_txt.append(f"• {cantidad}x {presentacion.nombre}")
+
+        if not items_enriched:
+            telegram_service.send_message(chat_id, "❌ Error: No se interpretaron productos válidos para transferir.")
+            return
+
+        context_data = {
+            "action": "transferencia",
+            "almacen_origen_id": almacen_origen.id,
+            "almacen_origen_nombre": almacen_origen.nombre,
+            "almacen_destino_id": almacen_destino.id,
+            "almacen_destino_nombre": almacen_destino.nombre,
+            "transferencias": items_enriched
+        }
+        user.telegram_context = context_data
+        db.session.commit()
+
+        prod_txt = "\n".join(detalles_txt)
+        warnings_txt = "\n".join(warnings) if warnings else ""
+
+        card = (
+            f"📋 <b>Confirmar Traslado de Inventario</b>\n\n"
+            f"📤 <b>Origen:</b> {almacen_origen.nombre}\n"
+            f"📥 <b>Destino:</b> {almacen_destino.nombre}\n\n"
+            f"📦 <b>Mercadería a Mover:</b>\n{prod_txt}\n\n"
+        )
+        if warnings_txt:
+            card += f"⚠️ <b>Alertas de Stock:</b>\n{warnings_txt}\n\n"
+        card += "¿Confirmas el traslado físico de estos productos?"
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Confirmar Traslado", "callback_data": "confirm:transferencia"},
+                    {"text": "❌ Cancelar", "callback_data": "cancel"}
+                ]
+            ]
+        }
+        telegram_service.send_message(chat_id, card, reply_markup)
+
+    def _execute_transferencia(self, chat_id, user, context, message_id):
+        almacen_origen_id = context["almacen_origen_id"]
+        almacen_destino_id = context["almacen_destino_id"]
+        transferencias_raw = context["transferencias"]
+
+        payload = {
+            "almacen_origen_id": almacen_origen_id,
+            "almacen_destino_id": almacen_destino_id,
+            "transferencias": [
+                {"presentacion_id": t["presentacion_id"], "cantidad": t["cantidad"]}
+                for t in transferencias_raw
+            ]
+        }
+
+        from resources.transferencia_resource import TransferenciaService
+        from unittest.mock import patch
+
+        with patch('resources.transferencia_resource.get_jwt', return_value={"sub": user.id, "rol": user.rol, "almacen_id": user.almacen_id}):
+            service = TransferenciaService(payload)
+            result = service.ejecutar_transferencia()
+            db.session.commit()
+
+        # Generar texto de confirmación
+        detalles_txt = []
+        for t in transferencias_raw:
+            detalles_txt.append(f"• {t['cantidad']}x {t['presentacion_name'] if 'presentacion_name' in t else t.get('presentacion_nombre')}")
+
+        detalles_str = "\n".join(detalles_txt)
+        telegram_service.edit_message(
+            chat_id,
+            message_id,
+            f"✅ <b>¡Traslado de inventario registrado con éxito!</b>\n\n"
+            f"📤 <b>Origen:</b> {context['almacen_origen_nombre']}\n"
+            f"📥 <b>Destino:</b> {context['almacen_destino_nombre']}\n"
+            f"🔑 <b>Op ID:</b> {result['id_operacion']}\n\n"
+            f"<b>Productos transferidos:</b>\n{detalles_str}"
+        )
+
     def _prepare_ventas_lote(self, chat_id, user, args, original_text):
         ventas_raw = args.get("ventas")
         fecha = args.get("fecha") # YYYY-MM-DD
@@ -1778,9 +1954,9 @@ class TelegramWebhookResource(Resource):
                 total_linea = cantidad * precio_unitario
                 venta_total += total_linea
 
-                # Validar stock en el almacén preferido
-                inv = Inventario.query.filter_by(almacen_id=almacen_preferido_id, presentacion_id=presentacion.id).first()
-                stock_disp = Decimal(str(inv.cantidad)) if inv else Decimal("0")
+                # Validar stock total en el almacén preferido (sumando todos los lotes)
+                invs_almacen = Inventario.query.filter_by(almacen_id=almacen_preferido_id, presentacion_id=presentacion.id).all()
+                stock_disp = sum(Decimal(str(i.cantidad)) for i in invs_almacen) if invs_almacen else Decimal("0")
                 if stock_disp < cantidad:
                     warnings.append(f"⚠️ Stock insuficiente en {almacen_nombre} para '{presentacion.nombre}'. Req: {cantidad}, Disp: {stock_disp}")
 
@@ -1967,7 +2143,7 @@ class TelegramWebhookResource(Resource):
 
                 # Si no había suficiente stock en FIFO, se descuenta de lo que haya o del inventario sin lote
                 if cantidad_restante > 0:
-                    inv_sin_lote = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion_id).first()
+                    inv_sin_lote = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion_id, lote_id=None).first()
                     if not inv_sin_lote:
                         inv_sin_lote = Inventario(
                             presentacion_id=presentacion_id,

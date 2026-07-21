@@ -275,6 +275,42 @@ class GeminiService:
                         },
                         "required": ["ventas"]
                     }
+                },
+                {
+                    "name": "registrar_transferencia",
+                    "description": "Registra el traslado o movimiento físico de inventario de productos entre un almacén origen y otro destino en la base de datos.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "almacen_origen_nombre": {
+                                "type": "STRING",
+                                "description": "Nombre del almacén origen (ej: 'planta', 'planta de produccion')."
+                            },
+                            "almacen_destino_nombre": {
+                                "type": "STRING",
+                                "description": "Nombre del almacén de destino (ej: 'abancay', 'andahuaylas')."
+                            },
+                            "items": {
+                                "type": "ARRAY",
+                                "description": "Lista de productos a trasladar físicamente.",
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "producto_nombre": {
+                                            "type": "STRING",
+                                            "description": "Nombre de la presentación a transferir (ej: '20kg', '10kg', '5kg')."
+                                        },
+                                        "cantidad": {
+                                            "type": "NUMBER",
+                                            "description": "Cantidad de unidades."
+                                        }
+                                    },
+                                    "required": ["producto_nombre", "cantidad"]
+                                }
+                            }
+                        },
+                        "required": ["almacen_origen_nombre", "almacen_destino_nombre", "items"]
+                    }
                 }
             ]
         }
@@ -292,6 +328,10 @@ Reglas:
 - Si mencionan fechas relativas ('ayer', 'el lunes', 'hace 3 días', etc.) o absolutas ('15 de julio'), resuélvelas a formato YYYY-MM-DD usando la fecha de referencia dada al inicio del mensaje del usuario, y envíalas en el parámetro 'fecha'.
 - Si NO se menciona explícitamente haber pagado, abonado, cobrado o un método de pago, la condición de pago DEBE ser 'credito' (no asumas 'completo').
 
+Diferenciación Crítica de Traslados vs Guías:
+* Si el texto menciona 'guia' o 'remision' (ej: "hacer guia", "guia de remision para RUC..."), usa solicitar_guia_remision.
+* Si el texto menciona 'traslado', 'mover' o 'movimiento' entre almacenes (ej: "traslado 10 sacos de planta a abancay"), usa registrar_transferencia para actualizar la base de datos física del sistema.
+
 Mapeo de Herramientas:
 1. interpretar_operacion (Venta/Pedido/Despacho): "vendi 3 sacos de 20 a juan perez" o "pedido de 10 sacos de 5kg para maria"
    * Regla de Kg: Mapear 'saco de 20' -> '20kg', 'bolsa de diez' -> '10kg', 'saco grande' -> '30kg', 'saco chico' -> '10kg'.
@@ -303,6 +343,7 @@ Mapeo de Herramientas:
 7. solicitar_guia_remision (Guía de remisión/traslado SUNAT): "guia de 20 sacos de 20kg al RUC 20601234567"
 8. registrar_cliente (Crear o registrar cliente): "crear cliente Juan Perez celular 987654321"
 9. registrar_ventas_lote (Registrar múltiples ventas dictadas juntas): "Ventas 24/06/2026: Cliente A 4 sacos de 20kg, Cliente B 1 saco de 20kg"
+10. registrar_transferencia (Traslado físico de inventario entre almacenes): "traslado de planta a abancay 100 sacos de 20kg"
 
 Restricción: NUNCA inventes información. Tu output DEBE ser únicamente el function call correspondiente sin texto adicional."""
 
