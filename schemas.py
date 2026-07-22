@@ -143,6 +143,7 @@ class MovimientoSchema(SQLAlchemyAutoSchema):
 class VentaDetalleSchema(SQLAlchemyAutoSchema):
     presentacion = fields.Nested(PresentacionSchema, only=("id", "nombre", "precio_venta", "url_foto"))
     precio_unitario = fields.Decimal(as_string=True)
+    cantidad = fields.Decimal(as_string=True)
     total_linea = fields.Decimal(as_string=True, dump_only=True)
 
     class Meta:

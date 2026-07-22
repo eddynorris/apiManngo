@@ -38,9 +38,13 @@ class TransferenciaService:
         """
         self._validar_y_preparar_datos()
         
-        # --- OPTIMIZACIÓN CLAVE: OBTENER TODO EL INVENTARIO EN POCAS CONSULTAS ---
-        inventarios_origen = self._obtener_inventarios(self.almacen_origen_id)
-        inventarios_destino = self._obtener_inventarios(self.almacen_destino_id)
+        # --- LOCK IN CONSISTENT ORDER TO PREVENT DEADLOCKS ---
+        if self.almacen_origen_id < self.almacen_destino_id:
+            inventarios_origen = self._obtener_inventarios(self.almacen_origen_id)
+            inventarios_destino = self._obtener_inventarios(self.almacen_destino_id)
+        else:
+            inventarios_destino = self._obtener_inventarios(self.almacen_destino_id)
+            inventarios_origen = self._obtener_inventarios(self.almacen_origen_id)
 
         self._validar_stock(inventarios_origen)
 
@@ -95,7 +99,7 @@ class TransferenciaService:
         from models import Lote
         ids_presentaciones = {t['presentacion_id'] for t in self.transferencias_validadas}
         
-        inventarios = Inventario.query.options(
+        inventarios = Inventario.query.with_for_update(of=Inventario).options(
             joinedload(Inventario.presentacion),
             joinedload(Inventario.lote)
         ).join(

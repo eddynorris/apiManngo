@@ -1,12 +1,14 @@
 import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
+from flask_migrate import Migrate
 from supabase import create_client, Client
 from flasgger import Swagger
 
 # Crear instancias de extensiones
 db = SQLAlchemy()
 jwt = JWTManager()
+migrate = Migrate()
 swagger = Swagger()
 
 # Inicializar cliente de Supabase

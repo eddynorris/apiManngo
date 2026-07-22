@@ -1,6 +1,6 @@
 from flask_restful import Resource
 from flask_jwt_extended import jwt_required, get_jwt
-from flask import request, current_app
+from flask import request
 import json
 from models import Movimiento, Inventario, PresentacionProducto, Lote, Almacen, Receta, ComponenteReceta
 from extensions import db
@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy.orm import joinedload, selectinload
 import logging
 import uuid
+from services.produccion_service import ProduccionService, ProduccionValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class ProduccionResource(Resource):
                 })
         except (ValueError, TypeError, InvalidOperation) as e:
             logger.error(f"Error de formato en ProduccionResource: {e}", exc_info=True)
-            return {"error": "Formato de datos inválido. Asegúrese de que todos los IDs y cantidades sean números válidos.", "detalle": str(e)}, 400
+            return {"error": "Formato de datos inválido. Asegúrese de que todos los IDs y cantidades sean números válidos."}, 400
 
         receta = Receta.query.options(
             selectinload(Receta.componentes).joinedload(ComponenteReceta.componente_presentacion)
@@ -90,131 +91,38 @@ class ProduccionResource(Resource):
             "salidas": salidas
         }
 
-        ensamblaje_resource = ProduccionEnsamblajeResource()
-        auth_header = request.headers.get('Authorization')
-        headers = {'Content-Type': 'application/json'}
-        if auth_header:
-            headers['Authorization'] = auth_header
-
-        with current_app.test_request_context('/api/produccion/ensamblaje', method='POST', headers=headers, data=json.dumps(ensamblaje_payload)):
-            return ensamblaje_resource.post()
+        claims = get_jwt()
+        usuario_id = claims.get('sub')
+        try:
+            res = ProduccionService.ejecutar_ensamblaje(usuario_id, ensamblaje_payload)
+            db.session.commit()
+            return res, 201
+        except ProduccionValidationError as e:
+            db.session.rollback()
+            return {"error": str(e)}, 400
+        except Exception as e:
+            db.session.rollback()
+            error_id = uuid.uuid4().hex[:8]
+            logger.error(f"Error en ProduccionResource [{error_id}]: {str(e)}", exc_info=True)
+            return {"error": "Error interno al procesar la producción", "error_id": error_id}, 500
 
 class ProduccionEnsamblajeResource(Resource):
     @jwt_required()
     @handle_db_errors
     def post(self):
         data = request.get_json()
-        almacen_id = data["almacen_id"]
-        entradas = data["entradas"]
-        salidas = data["salidas"]
         claims = get_jwt()
         usuario_id = claims.get('sub')
 
         try:
-            # --- Fase de Verificación de Stock y Lote de Destino ---
-            for item in [s for s in salidas if s['tipo_consumo'] == 'insumo']:
-                cantidad_req = Decimal(item["cantidad_unidades"])
-                inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=int(item["presentacion_id"]), lote_id=None).first()
-                if not inv or inv.cantidad < cantidad_req:
-                    return {"error": f"Stock de insumo insuficiente para presentación ID {item['presentacion_id']}. Requerido: {cantidad_req}, Disponible: {inv.cantidad if inv else 0}"}, 400
-
-            for item in [s for s in salidas if s['tipo_consumo'] == 'materia_prima']:
-                lote_id = int(item["lote_id"])
-                cantidad_req_kg = Decimal(item["cantidad_kg"])
-                lote = Lote.query.get(lote_id)
-                
-                if not lote:
-                    return {"error": f"No se encontró el lote ID {lote_id}."}, 400
-                
-                if lote.cantidad_disponible_kg < cantidad_req_kg:
-                    return {"error": f"Stock en KG insuficiente en Lote ID {lote_id}. Requerido: {cantidad_req_kg}, Disponible: {lote.cantidad_disponible_kg}"}, 400
-
-            for item in entradas:
-                if lote_destino_id := item.get('lote_destino_id'):
-                    lote_destino = Lote.query.get(lote_destino_id)
-                    if not lote_destino:
-                        return {"error": f"El lote de destino con ID {lote_destino_id} no existe."}, 400
-
-            # --- Fase de Ejecución (Transacción Atómica) ---
-            id_ensamblaje = str(uuid.uuid4())
-            fecha_operacion = datetime.now(timezone.utc)
-            motivo_base = f"Ensamblaje {id_ensamblaje}: {data['descripcion']}"
-
-            for item in salidas:
-                if item["tipo_consumo"] == "materia_prima":
-                    lote_id, cantidad_kg = int(item["lote_id"]), Decimal(item["cantidad_kg"])
-                    lote = Lote.query.get(lote_id)
-                    # Para materia prima, solo reducimos del lote directamente
-                    lote.cantidad_disponible_kg -= cantidad_kg
-                    # Registramos el movimiento sin presentacion_id específica ya que es materia prima
-                    db.session.add(Movimiento(tipo='salida', presentacion_id=None, lote_id=lote_id, cantidad=cantidad_kg, fecha=fecha_operacion, motivo=motivo_base, usuario_id=usuario_id, tipo_operacion='ensamblaje'))
-                elif item["tipo_consumo"] == "insumo":
-                    presentacion_id, cantidad_unidades = int(item["presentacion_id"]), Decimal(item["cantidad_unidades"])
-                    inv = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion_id, lote_id=None).first()
-                    inv.cantidad -= cantidad_unidades
-                    db.session.add(Movimiento(tipo='salida', presentacion_id=presentacion_id, lote_id=None, cantidad=cantidad_unidades, fecha=fecha_operacion, motivo=motivo_base, usuario_id=usuario_id, tipo_operacion='ensamblaje'))
-
-            for item in entradas:
-                presentacion_id, cantidad_unidades = int(item["presentacion_id"]), Decimal(item["cantidad_unidades"])
-                presentacion_final = PresentacionProducto.query.get(presentacion_id)
-                cantidad_kg_producida = cantidad_unidades * (presentacion_final.capacidad_kg or Decimal('0.0'))
-                lote_destino_id = item.get('lote_destino_id')
-
-                lote_para_movimiento_id = None
-                
-                # Todas las presentaciones van al inventario (productos finales)
-                if lote_destino_id:
-                    lote_destino = Lote.query.get(lote_destino_id)
-                    if not lote_destino:
-                        return {"error": f"El lote de origen con ID {lote_destino_id} no existe."}, 400
-                    if lote_destino.producto_id != presentacion_final.producto_id:
-                        return {"error": "El lote de destino es para una presentación diferente"}, 400
-                    
-                    # OJO: NO sumamos cantidad_kg_producida a lote_destino.cantidad_disponible_kg aquí,
-                    # porque ese valor pertenece estrictamente a la materia prima descontada en las 'salidas'.
-                    # El producto terminado se contabiliza puramente en la tabla Inventario.
-
-                    lote_para_movimiento_id = lote_destino.id
-                else:
-                    # Para productos sin lote específico, usar None en el lote
-                    lote_para_movimiento_id = None
-                
-                # Buscar inventario existente por presentacion_id, almacen_id y exacto lote_id
-                inv_destino = Inventario.query.filter_by(
-                    presentacion_id=presentacion_id, 
-                    almacen_id=almacen_id,
-                    lote_id=lote_destino_id
-                ).first()
-                
-                if inv_destino:
-                    # Actualizar inventario existente
-                    inv_destino.cantidad += cantidad_unidades
-                    inv_destino.ultima_actualizacion = fecha_operacion
-                else:
-                    # Crear nuevo registro de inventario
-                    inv_destino = Inventario(
-                        presentacion_id=presentacion_id, 
-                        almacen_id=almacen_id, 
-                        lote_id=lote_destino_id, 
-                        cantidad=cantidad_unidades
-                    )
-                    db.session.add(inv_destino)
-                
-                db.session.add(Movimiento(
-                    tipo='entrada', 
-                    presentacion_id=presentacion_id, 
-                    lote_id=lote_para_movimiento_id, 
-                    cantidad=cantidad_unidades, 
-                    fecha=fecha_operacion, 
-                    motivo=motivo_base, 
-                    usuario_id=usuario_id, 
-                    tipo_operacion='ensamblaje'
-                ))
-
+            res = ProduccionService.ejecutar_ensamblaje(usuario_id, data)
             db.session.commit()
-            return {"mensaje": "Operación de ensamblaje registrada exitosamente", "id_ensamblaje": id_ensamblaje}, 201
-
+            return res, 201
+        except ProduccionValidationError as e:
+            db.session.rollback()
+            return {"error": str(e)}, 400
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error en registro de ensamblaje: {str(e)}", exc_info=True)
-            return {"error": "Error interno al registrar el ensamblaje", "detalle": str(e)}, 500
+            error_id = uuid.uuid4().hex[:8]
+            logger.error(f"Error en registro de ensamblaje [{error_id}]: {str(e)}", exc_info=True)
+            return {"error": "Error interno al registrar el ensamblaje", "error_id": error_id}, 500

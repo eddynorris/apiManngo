@@ -50,21 +50,20 @@ class InventarioGlobalResource(Resource):
                 PresentacionProducto.precio_venta
             ).order_by(PresentacionProducto.nombre).all()
 
+            todos_detalles = db.session.query(stock_por_almacen_lote).all()
+            detalles_por_presentacion = {}
+            for d in todos_detalles:
+                detalles_por_presentacion.setdefault(d.presentacion_id, []).append({
+                    'almacen': d.almacen_nombre,
+                    'lote_id': d.lote_id,
+                    'lote': d.lote_descripcion or 'Sin Lote Asignado',
+                    'lote_kg_disponible': float(d.lote_kg_disponible) if d.lote_kg_disponible is not None else 0,
+                    'stock': float(d.cantidad) if d.cantidad is not None else 0
+                })
+
             resultado_final = []
             for item in reporte:
-                detalles = db.session.query(stock_por_almacen_lote)\
-                    .filter(stock_por_almacen_lote.c.presentacion_id == item.presentacion_id)\
-                    .all()
-                
-                detalles_serializados = [
-                    {
-                        'almacen': d.almacen_nombre,
-                        'lote_id': d.lote_id,
-                        'lote': d.lote_descripcion or 'Sin Lote Asignado',
-                        'lote_kg_disponible': float(d.lote_kg_disponible) if d.lote_kg_disponible is not None else 0,
-                        'stock': float(d.cantidad) if d.cantidad is not None else 0
-                    } for d in detalles
-                ]
+                detalles_serializados = detalles_por_presentacion.get(item.presentacion_id, [])
 
                 total_unidades = int(item.stock_total_unidades)
                 precio_venta = item.precio_venta

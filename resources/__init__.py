@@ -149,9 +149,9 @@ def init_resources(api, limiter=None):
     # Chat
     api.add_resource(ChatResource, '/chat')
     
-    # Voice Commands (Gemini) - Rate limited: 20/minute
+    # Voice Commands (Gemini) - Rate limited: 20/minute & Auth: 10/minute
     if limiter:
-        # Aplicar rate limit de 20 comandos por minuto
+        limiter.limit("10/minute", error_message="Demasiados intentos de autenticación. Intenta nuevamente en un minuto.")(AuthResource)
         limiter.limit("20/minute", error_message="Demasiados comandos de voz. Espera un momento.")(VoiceCommandResource)
         limiter.exempt(TelegramWebhookResource)
     

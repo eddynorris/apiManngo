@@ -16,7 +16,7 @@ env_file = '.env.production' if os.environ.get('FLASK_ENV') == 'production' else
 load_dotenv(env_file)
 
 # Importar extensiones y recursos
-from extensions import db, jwt, swagger
+from extensions import db, jwt, swagger, migrate
 from scripts.sync_supabase import sync_supabase_command
 from resources import init_resources
 
@@ -33,23 +33,38 @@ IS_PRODUCTION = FLASK_ENV == 'production'
 logger.info(f"🔧 Entorno: {FLASK_ENV}")
 logger.info(f"🚀 Modo producción: {IS_PRODUCTION}")
 
+# Validar configuraciones críticas al arranque (SEG-01, SEG-02, SEG-07)
+db_url = os.environ.get('DATABASE_URL')
+if not db_url:
+    raise RuntimeError("DATABASE_URL es obligatoria (ver .env.example)")
 
+jwt_secret = os.environ.get('JWT_SECRET_KEY')
+if not jwt_secret or len(jwt_secret) < 32:
+    raise RuntimeError("JWT_SECRET_KEY es obligatoria y debe tener al menos 32 caracteres")
+
+if IS_PRODUCTION and os.environ.get('FLASK_DEBUG') == '1':
+    raise RuntimeError("No se permite ejecutar en modo DEBUG (FLASK_DEBUG=1) en producción (SEG-07)")
 
 app = Flask(__name__)
 
-# Configuración de CORS
-allowed_origins = os.environ.get('ALLOWED_ORIGINS', '*')
-origins = allowed_origins.split(',') if ',' in allowed_origins else allowed_origins
+# Configuración de CORS (SEG-06)
+raw_origins = os.environ.get('ALLOWED_ORIGINS', '')
+origins = [o.strip() for o in raw_origins.split(',') if o.strip()]
 
 if IS_PRODUCTION:
+    if not origins:
+        raise RuntimeError("ALLOWED_ORIGINS es obligatoria en producción (CORS cerrado)")
     logger.info(f"CORS configurado para orígenes: {origins}")
     CORS(app, resources={r"/*": {"origins": origins}})
 else:
-    CORS(app, resources={r"/*": {"origins": "*"}})
-    logger.info("CORS configurado para desarrollo, permitiendo todos los orígenes ('*').")
+    # Para desarrollo permitimos localhost por defecto si no se especifican orígenes
+    if not origins:
+        origins = ["http://localhost:5173"]
+    logger.info(f"CORS configurado para desarrollo, permitiendo orígenes: {origins}")
+    CORS(app, resources={r"/*": {"origins": origins}})
 
 # Configuración de la base de datos
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'postgresql://postgres:123456@localhost/manngo_db')
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Configurar options del engine de forma condicional (evitar pooling en SQLite de pruebas)
@@ -83,12 +98,9 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'pdf'}
 jwt_expires_str = os.environ.get('JWT_EXPIRES_SECONDS', '43200')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(jwt_expires_str.split('#')[0].strip())
 app.config['JWT_ALGORITHM'] = 'HS256'
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'insecure-dev-key')
+app.config['JWT_SECRET_KEY'] = jwt_secret
 app.config['JWT_BLACKLIST_ENABLED'] = False
 app.config['PROPAGATE_EXCEPTIONS'] = True
-
-if app.config['JWT_SECRET_KEY'] == 'insecure-dev-key' and IS_PRODUCTION:
-    raise ValueError("JWT_SECRET_KEY no configurada en producción!")
 
 # Configuración Limiter
 app.config['RATELIMIT_STORAGE_URL'] = os.environ.get('LIMITER_STORAGE_URI', 'memory://')
@@ -104,6 +116,7 @@ app.config['SWAGGER'] = {
 
 # Inicializar extensiones
 db.init_app(app)
+migrate.init_app(app, db)
 jwt.init_app(app)
 Compress(app)  # Compresión gzip automática para respuestas
 api = Api(app)
@@ -214,4 +227,4 @@ with app.app_context():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=not IS_PRODUCTION)
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_DEBUG') == '1')

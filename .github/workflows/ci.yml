@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest ruff
+
+      - name: Run Ruff Linter
+        run: |
+          ruff check .
+
+      - name: Run Pytest
+        env:
+          DATABASE_URL: 'sqlite:///:memory:'
+          JWT_SECRET_KEY: 'ci-testing-jwt-secret-key-32-chars-minimum'
+          FLASK_ENV: 'testing'
+        run: |
+          pytest -v

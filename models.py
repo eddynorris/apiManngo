@@ -116,7 +116,12 @@ class Inventario(db.Model):
     cantidad = db.Column(db.Numeric(12, 4), nullable=False, default=0)
     stock_minimo = db.Column(db.Integer, nullable=False, default=10)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    ultima_actualizacion = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    ultima_actualizacion = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=db.func.now()
+    )
 
     # Relaciones
     presentacion = db.relationship('PresentacionProducto')
@@ -195,7 +200,7 @@ class VentaDetalle(db.Model):
     venta_id = db.Column(db.Integer, db.ForeignKey('ventas.id', ondelete='CASCADE'), nullable=False)
     presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=False)
     lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='SET NULL'), nullable=True)
-    cantidad = db.Column(db.Integer, nullable=False)
+    cantidad = db.Column(db.Numeric(12, 4), nullable=False)
     precio_unitario = db.Column(db.Numeric(12, 2), nullable=False)  # Precio en el momento de la venta
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
@@ -252,6 +257,8 @@ class Cliente(db.Model):
 
     @property
     def saldo_pendiente(self):
+        if hasattr(self, '_saldo_pendiente_cached'):
+            return self._saldo_pendiente_cached
         return sum(
             venta.total - sum(pago.monto for pago in venta.pagos)
             for venta in self.ventas
@@ -300,6 +307,12 @@ class Pago(db.Model):
         Index('idx_pago_depositado_fecha', 'depositado', 'fecha_deposito'),
     )
 
+class TelegramUpdate(db.Model):
+    __tablename__ = 'telegram_updates'
+    
+    update_id = db.Column(db.BigInteger, primary_key=True)
+    recibido_en = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+
 class Movimiento(db.Model):
     __tablename__ = 'movimientos'
     id = db.Column(db.Integer, primary_key=True)
@@ -316,6 +329,10 @@ class Movimiento(db.Model):
     # Relación con Usuario (3)
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     usuario = db.relationship('Users', back_populates='movimientos')  # Nombre del modelo en singular
+    
+    # Relación con Venta (BD-03)
+    venta_id = db.Column(db.Integer, db.ForeignKey('ventas.id', ondelete='SET NULL'), index=True, nullable=True)
+    venta = db.relationship('Venta')
     
     cantidad = db.Column(db.Numeric(12, 2), nullable=False)
     fecha = db.Column(db.DateTime(timezone=True))

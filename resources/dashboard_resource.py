@@ -171,5 +171,7 @@ class DashboardResource(Resource):
             return dashboard_data, 200
 
         except Exception as e:
-            logger.exception(f"Error al ejecutar queries del dashboard de alertas: {e}")
-            return {"error": "Error al obtener datos para el dashboard de alertas", "details": str(e)}, 500
+            import uuid
+            error_id = uuid.uuid4().hex[:8]
+            logger.exception(f"Error al ejecutar queries del dashboard de alertas [{error_id}]: {e}")
+            return {"error": "Error al obtener datos para el dashboard de alertas", "error_id": error_id}, 500

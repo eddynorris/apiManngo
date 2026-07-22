@@ -41,7 +41,7 @@ RUN chown -R appuser:appgroup /app
 
 # Configurar variables de entorno por defecto (pueden ser sobrescritas)
 ENV FLASK_APP=app.py
-ENV FLASK_ENV=development
+ENV FLASK_ENV=production
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 ENV GUNICORN_WORKERS=3
@@ -52,6 +52,10 @@ USER appuser
 
 # Exponer el puerto
 EXPOSE ${PORT}
+
+# Healthcheck usando curl o script interno
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD curl -fsS http://localhost:${PORT}/health || exit 1
 
 # Ejecutar con gunicorn usando variables de entorno
 CMD exec gunicorn --bind :${PORT} --workers ${GUNICORN_WORKERS} --threads 2 --timeout ${GUNICORN_TIMEOUT} app:app

@@ -60,6 +60,14 @@ class ClienteResource(Resource):
             page, per_page = validate_pagination_params()
             resultado = query.paginate(page=page, per_page=per_page, error_out=False)
             
+            # Precalcular saldos en lote para evitar N+1
+            from common import obtener_saldos_pendientes_clientes
+            cliente_ids = [c.id for c in resultado.items]
+            if cliente_ids:
+                saldos_map = obtener_saldos_pendientes_clientes(cliente_ids)
+                for cliente in resultado.items:
+                    cliente._saldo_pendiente_cached = saldos_map.get(cliente.id, 0)
+
             # Respuesta estandarizada
             return create_pagination_response(clientes_schema.dump(resultado.items), resultado), 200
             

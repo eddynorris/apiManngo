@@ -6,7 +6,8 @@ from schemas import venta_schema, ventas_schema, clientes_schema, almacenes_sche
 from extensions import db
 from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
 from utils.file_handlers import get_presigned_url
-from resources.pago_resource import PagoService
+from services.pago_service import PagoService
+from services.venta_service import VentaService, StockInsuficienteError
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
@@ -109,13 +110,7 @@ class VentaResource(Resource):
     @handle_db_errors
     def post(self):
         """
-        Crea una nueva venta con lógica FIFO de lotes.
-        El frontend solo envía: cliente_id, almacen_id, fecha, monto_pago (opcional),
-        metodo_pago (opcional, default 'efectivo') y detalles [{presentacion_id, cantidad, precio_unitario}].
-        El estado_pago se determina automáticamente según monto_pago vs total:
-          - monto_pago >= total  -> 'pagado'
-          - 0 < monto_pago < total -> 'parcial'
-          - sin monto_pago o = 0 -> 'pendiente'
+        Crea una nueva venta delegando la lógica al VentaService.
         """
         import json
         if request.content_type and 'multipart/form-data' in request.content_type:
@@ -133,191 +128,53 @@ class VentaResource(Resource):
         detalles_data = data_from_request.get('detalles', [])
         if not detalles_data:
             return {"error": "La venta debe tener al menos un detalle"}, 400
-        
-        venta_data = venta_schema.load(data_from_request, partial=("detalles", "tipo_pago", "consumo_diario_kg", "total"))
-        cliente = Cliente.query.get_or_404(venta_data.cliente_id)
-        
+
+        try:
+            venta_data_loaded = venta_schema.load(data_from_request, partial=("detalles", "tipo_pago", "consumo_diario_kg", "total"))
+        except Exception as e:
+            return {"error": str(e)}, 400
+
         claims = get_jwt()
-        venta_data.vendedor_id = claims.get('sub')
-
+        vendedor_id = claims.get('sub')
         estado = data_from_request.get('estado', 'completado').lower()
-        if estado not in ['pedido', 'completado']:
-            return {"error": "Estado inválido. Opciones: pedido, completado"}, 400
-
-        total = Decimal('0')
-        detalles_para_venta = []
-
-        if estado == 'pedido':
-            for detalle_data in detalles_data:
-                presentacion_id = detalle_data.get('presentacion_id')
-                cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
-                if not all([presentacion_id, cantidad_solicitada]):
-                    return {"error": "Cada detalle debe incluir presentacion_id y cantidad"}, 400
-                
-                pres = PresentacionProducto.query.get_or_404(presentacion_id)
-                precio_unitario = Decimal(str(detalle_data.get('precio_unitario') or pres.precio_venta))
-                
-                nuevo_detalle = VentaDetalle(
-                    presentacion_id=presentacion_id,
-                    cantidad=int(cantidad_solicitada),
-                    precio_unitario=precio_unitario,
-                    lote_id=None
-                )
-                detalles_para_venta.append(nuevo_detalle)
-                total += cantidad_solicitada * precio_unitario
-        else:
-            # --- LÓGICA FIFO ---
-            from models import Lote as LoteModel
-            presentacion_ids = list({d.get('presentacion_id') for d in detalles_data})
-
-            inventarios_por_presentacion = {}
-            invs_raw = (
-                Inventario.query
-                .options(orm.joinedload(Inventario.presentacion), orm.joinedload(Inventario.lote))
-                .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
-                .filter(
-                    Inventario.presentacion_id.in_(presentacion_ids),
-                    Inventario.almacen_id == venta_data.almacen_id,
-                    Inventario.cantidad > 0
-                )
-                .order_by(
-                    Inventario.presentacion_id,
-                    LoteModel.fecha_ingreso.asc(),  # FIFO: más antiguo primero
-                    Inventario.id.asc()             # Desempate
-                )
-                .all()
-            )
-            for inv in invs_raw:
-                inventarios_por_presentacion.setdefault(inv.presentacion_id, []).append(inv)
-            
-            for detalle_data in detalles_data:
-                presentacion_id = detalle_data.get('presentacion_id')
-                cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
-
-                if not all([presentacion_id, cantidad_solicitada]):
-                    return {"error": "Cada detalle debe incluir presentacion_id y cantidad"}, 400
-
-                invs_disponibles = inventarios_por_presentacion.get(presentacion_id, [])
-                stock_total = sum(inv.cantidad for inv in invs_disponibles)
-
-                if not invs_disponibles:
-                    return {"error": f"No se encontró inventario para presentación ID {presentacion_id} en este almacén."}, 404
-
-                if stock_total < cantidad_solicitada:
-                    nombre = invs_disponibles[0].presentacion.nombre if invs_disponibles else str(presentacion_id)
-                    return {"error": f"Stock insuficiente para {nombre} (Disponible: {stock_total})"}, 400
-
-                # Precio por unidad para este ítem
-                precio_unitario = Decimal(str(
-                    detalle_data.get('precio_unitario') or invs_disponibles[0].presentacion.precio_venta
-                ))
-
-                # Descontar de inventarios FIFO, creando un VentaDetalle por cada lote consumido
-                cantidad_restante = cantidad_solicitada
-                for inv in invs_disponibles:
-                    if cantidad_restante <= 0:
-                        break
-                    cantidad_a_tomar = min(inv.cantidad, cantidad_restante)
-                    inv.cantidad -= cantidad_a_tomar
-                    cantidad_restante -= cantidad_a_tomar
-
-                    nuevo_detalle = VentaDetalle(
-                        presentacion_id=presentacion_id,
-                        cantidad=int(cantidad_a_tomar),
-                        precio_unitario=precio_unitario,
-                        lote_id=inv.lote_id  # Puede ser None para insumos, acepta ambos casos
-                    )
-                    detalles_para_venta.append(nuevo_detalle)
-                    total += Decimal(str(cantidad_a_tomar)) * Decimal(str(precio_unitario))
-
-        # tipo_pago se deriva automáticamente: si paga ahora es 'contado', si no es 'credito'
         monto_pago = Decimal(str(data_from_request.get('monto_pago') or 0))
-        if monto_pago == 0 and data_from_request.get('estado_pago') == 'pagado':
-            monto_pago = total
         metodo_pago = (data_from_request.get('metodo_pago') or 'efectivo').lower()
-        tipo_pago_derivado = 'contado' if monto_pago > 0 else 'credito'
-
-        fecha_pedido_val = datetime.now(timezone.utc) if estado == 'pedido' else None
-        fecha_entrega_val = venta_data.fecha if estado == 'pedido' else None
-
-        nueva_venta = Venta(
-            cliente_id=venta_data.cliente_id,
-            almacen_id=venta_data.almacen_id,
-            vendedor_id=venta_data.vendedor_id,
-            total=total,
-            tipo_pago=tipo_pago_derivado,
-            fecha=venta_data.fecha if estado == 'completado' else None,
-            estado=estado,
-            fecha_pedido=fecha_pedido_val,
-            fecha_entrega=fecha_entrega_val,
-            detalles=detalles_para_venta
-        )
-
-        db.session.add(nueva_venta)
-        db.session.flush()
-
-        if estado == 'completado':
-            for detalle in nueva_venta.detalles:
-                movimiento = Movimiento(
-                    tipo='salida',
-                    presentacion_id=detalle.presentacion_id,
-                    lote_id=detalle.lote_id,
-                    cantidad=detalle.cantidad,
-                    usuario_id=claims['sub'],
-                    motivo=f"Venta ID: {nueva_venta.id} - Cliente: {cliente.nombre}",
-                    tipo_operacion='venta'
-                )
-                db.session.add(movimiento)
-
-        # --- REGISTRAR PAGO Y DEJAR QUE actualizar_estado() CALCULE EL ESTADO ---
-        if monto_pago > 0:
-            monto_a_registrar = min(monto_pago, total)  # Evitar sobrepago
-            METODOS_VALIDOS = {'efectivo', 'deposito', 'transferencia', 'tarjeta', 'yape_plin', 'otro'}
-            if metodo_pago not in METODOS_VALIDOS:
-                return {"error": f"Método de pago inválido. Opciones: {', '.join(sorted(METODOS_VALIDOS))}"}, 400
-
-            pago_instancia = Pago(
-                venta_id=nueva_venta.id,
-                monto=monto_a_registrar,
-                metodo_pago=metodo_pago,
-                fecha=venta_data.fecha
-            )
-            try:
-                PagoService.create_pago(pago_instancia, file_comprobante, claims['sub'])
-                # create_pago ya llama actualizar_estado() internamente
-            except Exception as e:
-                db.session.rollback()
-                return {"error": f"Error al registrar el pago: {str(e)}"}, 400
-        else:
-            # Sin pago: el estado queda 'pendiente' (default del modelo)
-            nueva_venta.actualizar_estado()
-
-        # --- REGISTRO DE GASTO ASOCIADO (OPCIONAL) ---
         monto_gasto = Decimal(str(data_from_request.get('monto_gasto') or 0))
-        if monto_gasto > 0:
-            nuevo_gasto = Gasto(
-                monto=monto_gasto,
-                descripcion=f"Gasto asociado a venta #{nueva_venta.id}",
-                almacen_id=nueva_venta.almacen_id,
-                usuario_id=claims['sub'],
-                fecha=nueva_venta.fecha.date() if hasattr(nueva_venta.fecha, 'date') else nueva_venta.fecha,
-                categoria='logistica'
-            )
-            db.session.add(nuevo_gasto)
 
-        db.session.commit()
-        return venta_schema.dump(nueva_venta), 201
+        try:
+            nueva_venta = VentaService.crear_venta(
+                vendedor_id=vendedor_id,
+                cliente_id=venta_data_loaded.cliente_id,
+                almacen_id=venta_data_loaded.almacen_id,
+                detalles_data=detalles_data,
+                estado=estado,
+                fecha=venta_data_loaded.fecha,
+                monto_pago=monto_pago,
+                metodo_pago=metodo_pago,
+                monto_gasto=monto_gasto,
+                file_comprobante=file_comprobante,
+                estado_pago=data_from_request.get('estado_pago')
+            )
+            db.session.commit()
+            return venta_schema.dump(nueva_venta), 201
+        except StockInsuficienteError as e:
+            db.session.rollback()
+            return {"error": str(e)}, 400
+        except ValueError as e:
+            db.session.rollback()
+            return {"error": str(e)}, 400
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error al crear venta: {e}", exc_info=True)
+            return {"error": "Error interno al procesar la venta."}, 500
 
     @jwt_required()
     @mismo_almacen_o_admin
     @handle_db_errors
     def put(self, venta_id):
         """
-        Actualiza una venta existente de forma optimizada, precargando el inventario.
+        Actualiza una venta existente delegando en el servicio.
         """
-        # Carga la venta y sus detalles de una sola vez
-        venta = Venta.query.options(orm.joinedload(Venta.detalles)).get_or_404(venta_id)
-        
         import json
         if request.content_type and 'multipart/form-data' in request.content_type:
             data = request.form.to_dict()
@@ -331,174 +188,43 @@ class VentaResource(Resource):
             data = request.get_json()
             file_comprobante = None
 
-        nuevos_detalles_data = data.get('detalles', [])
-        
-        # IDs de presentaciones de los detalles actuales y nuevos para una consulta única
-        presentacion_ids_actuales = {d.presentacion_id for d in venta.detalles}
-        presentacion_ids_nuevos = {d.get('presentacion_id') for d in nuevos_detalles_data}
-        todos_los_ids = list(presentacion_ids_actuales.union(presentacion_ids_nuevos))
+        claims = get_jwt()
+        vendedor_id = claims.get('sub')
 
-        # --- MEJORA CLAVE: Cargar todo el inventario necesario en una sola consulta ---
-        inventarios = Inventario.query.filter(
-            Inventario.almacen_id == venta.almacen_id,
-            Inventario.presentacion_id.in_(todos_los_ids)
-        ).all()
-        # Convertir a un diccionario para acceso instantáneo (O(1))
-        inventario_dict = {i.presentacion_id: i for i in inventarios}
+        try:
+            venta_actualizada = VentaService.actualizar_venta(
+                venta_id=venta_id,
+                vendedor_id=vendedor_id,
+                data=data,
+                file_comprobante=file_comprobante
+            )
 
-        was_completado = (venta.estado == 'completado')
-        is_completado = (data.get('estado', venta.estado) == 'completado')
-
-        # --- 1. Revertir el estado anterior (usando el diccionario) si estaba completado ---
-        if was_completado:
-            for detalle_actual in venta.detalles:
-                inventario = inventario_dict.get(detalle_actual.presentacion_id)
-                if inventario:
-                    inventario.cantidad += detalle_actual.cantidad
-            Movimiento.query.filter(Movimiento.motivo.like(f"Venta ID: {venta_id}%")).delete(synchronize_session=False)
-        
-        # --- 2. Procesar y aplicar el nuevo estado (usando el diccionario) ---
-        nuevo_total = Decimal('0')
-        nuevos_detalles_obj = []
-
-        if is_completado:
-            for detalle_data in nuevos_detalles_data:
-                presentacion_id = detalle_data.get('presentacion_id')
-                cantidad = Decimal(str(detalle_data.get('cantidad')))
-                precio_unitario = Decimal(str(detalle_data.get('precio_unitario')))
-
-                inventario = inventario_dict.get(presentacion_id)
-                if not inventario or inventario.cantidad < cantidad:
-                    db.session.rollback() # Importante: revertir cambios si hay error
-                    return {"error": f"Stock insuficiente para actualizar. Presentación ID: {presentacion_id}"}, 400
-                
-                inventario.cantidad -= cantidad
-                
-                detalle_obj = VentaDetalle(
-                    presentacion_id=presentacion_id,
-                    cantidad=int(cantidad),
-                    precio_unitario=precio_unitario,
-                    lote_id=inventario.lote_id
-                )
-                nuevos_detalles_obj.append(detalle_obj)
-                nuevo_total += cantidad * precio_unitario
-        else:
-            # Pedido: No se descuenta stock
-            for detalle_data in nuevos_detalles_data:
-                presentacion_id = detalle_data.get('presentacion_id')
-                cantidad = Decimal(str(detalle_data.get('cantidad')))
-                
-                pres = PresentacionProducto.query.get_or_404(presentacion_id)
-                precio_unitario = Decimal(str(detalle_data.get('precio_unitario') or pres.precio_venta))
-                
-                detalle_obj = VentaDetalle(
-                    presentacion_id=presentacion_id,
-                    cantidad=int(cantidad),
-                    precio_unitario=precio_unitario,
-                    lote_id=None
-                )
-                nuevos_detalles_obj.append(detalle_obj)
-                nuevo_total += cantidad * precio_unitario
-
-        # --- 3. Actualizar la venta ---
-        venta.cliente_id = data.get('cliente_id', venta.cliente_id)
-        venta.estado_pago = data.get('estado_pago', venta.estado_pago) # Asegurar actualización de estado
-        venta.estado = data.get('estado', venta.estado)
-        
-        if is_completado and not was_completado:
-            # Transición a completado: establecer la fecha al momento actual si no es enviada explícitamente
-            venta.fecha = datetime.now(timezone.utc)
-        
-        if 'fecha' in data:
-            try:
-                venta.fecha = parse_iso_datetime(data['fecha'], add_timezone=True)
-            except ValueError:
-                db.session.rollback()
-                return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400
-                
-        if 'fecha_pedido' in data and data['fecha_pedido']:
-            try:
-                venta.fecha_pedido = parse_iso_datetime(data['fecha_pedido'], add_timezone=True)
-            except ValueError:
-                db.session.rollback()
-                return {"error": "Formato de fecha_pedido inválido. Usa ISO 8601"}, 400
-                
-        if 'fecha_entrega' in data and data['fecha_entrega']:
-            try:
-                venta.fecha_entrega = parse_iso_datetime(data['fecha_entrega'], add_timezone=True)
-            except ValueError:
-                db.session.rollback()
-                return {"error": "Formato de fecha_entrega inválido. Usa ISO 8601"}, 400
-                
-        if 'tipo_pago' in data:
-            venta.tipo_pago = data['tipo_pago']
-            
-        if 'consumo_diario_kg' in data:
-            venta.consumo_diario_kg = data['consumo_diario_kg']
-
-        # (actualiza los otros campos de la venta como ya lo hacías)
-        venta.total = nuevo_total
-        venta.detalles = nuevos_detalles_obj
-        
-        if is_completado:
-            cliente_nombre = Cliente.query.get(venta.cliente_id).nombre
-            current_user_id = get_jwt().get('sub')
-            for detalle in venta.detalles:
-                movimiento = Movimiento(
-                    tipo='salida',
-                    presentacion_id=detalle.presentacion_id,
-                    lote_id=detalle.lote_id,
-                    cantidad=detalle.cantidad,
-                    usuario_id=current_user_id,
-                    motivo=f"Venta ID: {venta.id} - Cliente: {cliente_nombre} (Actualizada)",
-                    tipo_operacion='venta'
-                )
-                db.session.add(movimiento)
-
-        # --- LÓGICA DE PAGO AUTOMÁTICO EN ACTUALIZACIÓN ---
-        # Si la venta se actualiza a 'pagado', pagamos el saldo pendiente
-        # Nota: La venta ya se actualizó arriba, así que verificamos el estado *nuevo*
-        if venta.estado_pago == 'pagado':
-            saldo_pendiente = venta.saldo_pendiente
-            if saldo_pendiente > 0:
-                metodo_pago = data.get('metodo_pago', 'efectivo') # Por defecto efectivo si no se envia
-                pago_instancia = Pago(
-                    venta_id=venta.id,
-                    monto=saldo_pendiente,
-                    metodo_pago=metodo_pago,
-                    fecha=datetime.now(timezone.utc)
-                )
-                try:
-                    PagoService.create_pago(pago_instancia, file_comprobante, current_user_id)
-                except Exception as e:
-                    db.session.rollback()
-                    return {"error": f"Error al registrar el pago automático en la actualización: {str(e)}"}, 400
-
-        db.session.commit()
-        return venta_schema.dump(venta), 200
+            db.session.commit()
+            return venta_schema.dump(venta_actualizada), 200
+        except StockInsuficienteError as e:
+            db.session.rollback()
+            return {"error": str(e)}, 400
+        except ValueError as e:
+            db.session.rollback()
+            return {"error": str(e)}, 400
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error al actualizar venta {venta_id}: {e}", exc_info=True)
+            return {"error": "Error interno al actualizar la venta."}, 500
 
     @jwt_required()
     @mismo_almacen_o_admin
     @handle_db_errors
     def delete(self, venta_id=None):
         if venta_id is not None:
-            venta = Venta.query.get_or_404(venta_id)
-            
-            # Revertir movimientos e inventario
-            movimientos = Movimiento.query.filter(Movimiento.motivo.like(f"Venta ID: {venta_id}%")).all()
-            for movimiento in movimientos:
-                inventario = Inventario.query.filter_by(
-                    presentacion_id=movimiento.presentacion_id,
-                    almacen_id=venta.almacen_id
-                ).first()
-                if inventario:
-                    inventario.cantidad += movimiento.cantidad
-                db.session.delete(movimiento)
-            
-            db.session.delete(venta)
-            db.session.commit()
-            
-            return {"message": "Venta eliminada con éxito"}, 200
+            try:
+                VentaService.eliminar_venta(venta_id)
+                db.session.commit()
+                return {"message": "Venta eliminada con éxito"}, 200
+            except Exception as e:
+                db.session.rollback()
+                logger.error(f"Error al eliminar venta {venta_id}: {e}", exc_info=True)
+                return {"error": "Error al eliminar la venta"}, 500
 
         # Lógica tipo batch para eliminar varias ventas
         data = request.get_json() or {}
@@ -511,37 +237,25 @@ class VentaResource(Resource):
         except (ValueError, TypeError):
             return {"error": "Todos los IDs en la lista 'ids' deben ser números enteros válidos"}, 400
 
-        # Buscar ventas en lote
-        ventas = Venta.query.filter(Venta.id.in_(venta_ids)).all()
-        if not ventas:
-            return {"message": "No se encontraron ventas para eliminar"}, 404
-        
         # Verificar permisos (si no es admin, solo eliminar de su propio almacén)
         claims = get_jwt()
         user_rol = claims.get('rol')
         user_almacen_id = claims.get('almacen_id')
         if user_rol != 'admin':
+            # Obtener ventas para chequear almacén antes de eliminar
+            ventas = Venta.query.filter(Venta.id.in_(venta_ids)).all()
             for v in ventas:
                 if int(v.almacen_id) != int(user_almacen_id or 0):
                     return {"error": f"No tienes permisos para eliminar la venta #{v.id} de otro almacén"}, 403
-        
-        # Revertir stock y eliminar movimientos en lote
-        count = 0
-        for venta in ventas:
-            movimientos = Movimiento.query.filter(Movimiento.motivo.like(f"Venta ID: {venta.id}%")).all()
-            for movimiento in movimientos:
-                inventario = Inventario.query.filter_by(
-                    presentacion_id=movimiento.presentacion_id,
-                    almacen_id=venta.almacen_id
-                ).first()
-                if inventario:
-                    inventario.cantidad += movimiento.cantidad
-                db.session.delete(movimiento)
-            db.session.delete(venta)
-            count += 1
-        
-        db.session.commit()
-        return {"message": f"{count} ventas eliminadas con éxito"}, 200
+
+        try:
+            count = VentaService.eliminar_ventas_en_lote(venta_ids)
+            db.session.commit()
+            return {"message": f"{count} ventas eliminadas con éxito"}, 200
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error al eliminar ventas en lote: {e}", exc_info=True)
+            return {"error": "Error interno al eliminar ventas en lote"}, 500
 
 class VentaFormDataResource(Resource):
     @jwt_required()
@@ -572,6 +286,13 @@ class VentaFormDataResource(Resource):
         try:
             # --- Consultas en Paralelo (si es posible) o secuenciales ---
             clientes = Cliente.query.order_by(Cliente.nombre).all()
+            from common import obtener_saldos_pendientes_clientes
+            cliente_ids = [c.id for c in clientes]
+            if cliente_ids:
+                saldos_map = obtener_saldos_pendientes_clientes(cliente_ids)
+                for c in clientes:
+                    c._saldo_pendiente_cached = saldos_map.get(c.id, 0)
+
             todos_almacenes = Almacen.query.order_by(Almacen.nombre).all()
 
             # --- Consulta Principal Optimizada ---

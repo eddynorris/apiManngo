@@ -2,6 +2,7 @@
 import logging
 import re
 import werkzeug.exceptions
+from decimal import Decimal
 from functools import wraps
 from datetime import datetime, date, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -95,9 +96,21 @@ def handle_db_errors(func: Callable) -> Callable:
             raise e
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error en {func.__name__}: {str(e)}", exc_info=True)
-            # Retornar el mensaje de error real para debugging
-            return {"message": f"Error interno del servidor: {str(e)}"}, 500
+            import uuid
+            error_id = uuid.uuid4().hex[:8]
+            logger.error(f"Error en {func.__name__} [{error_id}]: {str(e)}", exc_info=True)
+            
+            # Si es un error de integridad de SQLAlchemy, podemos traducirlo a un 409 o 400
+            from sqlalchemy.exc import IntegrityError
+            if isinstance(e, IntegrityError):
+                err_msg = str(e.orig).lower() if hasattr(e, 'orig') else ""
+                if "unique" in err_msg or "duplicado" in err_msg:
+                    return {"message": "El registro ya existe o entra en conflicto con un registro único.", "error_id": error_id}, 409
+                if "foreign key" in err_msg or "violates foreign key constraint" in err_msg:
+                    return {"message": "El registro hace referencia a una entidad no existente.", "error_id": error_id}, 400
+                return {"message": "Violación de integridad de datos en el servidor.", "error_id": error_id}, 400
+                
+            return {"message": "Error interno del servidor", "error_id": error_id}, 500
     return wrapper
 
 def rol_requerido(*roles_permitidos: str) -> Callable:
@@ -227,6 +240,10 @@ def validate_pagination_params() -> Tuple[int, int]:
     Returns:
         Tuple[int, int]: Una tupla con (page, per_page).
     """
+    from flask import has_request_context
+    if not has_request_context():
+        return 1, config.DEFAULT_ITEMS_PER_PAGE
+
     try:
         page = max(1, int(request.args.get('page', 1)))
     except (ValueError, TypeError):
@@ -259,6 +276,49 @@ def create_pagination_response(items: List[Any], pagination: Any) -> Dict[str, A
             "pages": pagination.pages
         }
     }
+
+def paginar(query, schema=None):
+    """
+    Pagina una consulta SQLAlchemy y opcionalmente serializa con un schema Marshmallow.
+    """
+    page, per_page = validate_pagination_params()
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    if schema:
+        items = schema.dump(pagination.items, many=True)
+    else:
+        items = pagination.items
+        
+    return create_pagination_response(items, pagination)
+
+def obtener_saldos_pendientes_clientes(cliente_ids: Optional[List[int]] = None) -> Dict[int, Decimal]:
+    """
+    Calcula el saldo pendiente total por cliente utilizando 1 sola consulta SQL agregada.
+    Evita el problema N+1 de la propiedad Python.
+    """
+    from decimal import Decimal
+    from models import Venta, Pago
+    from sqlalchemy import select, func
+
+    sub_pagos = (
+        select(Pago.venta_id, func.coalesce(func.sum(Pago.monto), 0).label('total_pagado'))
+        .group_by(Pago.venta_id)
+        .subquery()
+    )
+
+    query = (
+        db.session.query(
+            Venta.cliente_id,
+            func.coalesce(func.sum(Venta.total - func.coalesce(sub_pagos.c.total_pagado, 0)), 0).label('saldo_total')
+        )
+        .outerjoin(sub_pagos, sub_pagos.c.venta_id == Venta.id)
+    )
+
+    if cliente_ids:
+        query = query.filter(Venta.cliente_id.in_(cliente_ids))
+
+    query = query.group_by(Venta.cliente_id)
+    return {row[0]: Decimal(str(row[1])) for row in query.all()}
 
 def validate_password(password: str) -> Tuple[bool, Optional[str]]:
     """
