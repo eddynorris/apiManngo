@@ -179,10 +179,20 @@ class TelegramRouter:
 
         if action == "interpretar_operacion":
             VentaHandler.prepare_venta(chat_id, user, args, text, TelegramRouter.resolver_almacen, TelegramRouter.buscar_presentacion)
+        elif action == "registrar_ventas_lote":
+            VentaHandler.prepare_ventas_lote(chat_id, user, args, text, TelegramRouter.resolver_almacen, TelegramRouter.buscar_presentacion)
         elif action == "registrar_gasto":
             PagoHandler.prepare_gasto(chat_id, user, args, text, TelegramRouter.resolver_almacen)
         elif action == "registrar_pago":
             PagoHandler.prepare_pago(chat_id, user, args, TelegramRouter.resolver_almacen)
+        elif action == "registrar_deposito":
+            PagoHandler.prepare_deposito(chat_id, user, args)
+        elif action == "registrar_produccion":
+            VentaHandler.prepare_produccion(chat_id, user, args, text, TelegramRouter.resolver_almacen, TelegramRouter.buscar_presentacion)
+        elif action == "registrar_compra_insumos":
+            PagoHandler.prepare_compra_insumos(chat_id, user, args, text, TelegramRouter.resolver_almacen, TelegramRouter.buscar_presentacion)
+        elif action == "solicitar_guia_remision":
+            TransferenciaHandler.prepare_guia_remision(chat_id, user, args, text, TelegramRouter.resolver_almacen, TelegramRouter.buscar_presentacion)
         elif action == "registrar_cliente":
             VentaHandler.prepare_cliente(chat_id, user, args)
         elif action == "registrar_transferencia":
@@ -219,10 +229,20 @@ class TelegramRouter:
             try:
                 if action == "venta":
                     VentaHandler.execute_venta(chat_id, user, context, message_id)
+                elif action == "ventas_lote":
+                    VentaHandler.execute_ventas_lote(chat_id, user, context, message_id)
                 elif action == "gasto":
                     PagoHandler.execute_gasto(chat_id, user, context, message_id)
                 elif action == "pago":
                     PagoHandler.execute_pago(chat_id, user, context, message_id)
+                elif action == "deposito":
+                    PagoHandler.execute_deposito(chat_id, user, context, message_id)
+                elif action == "produccion":
+                    VentaHandler.execute_produccion(chat_id, user, context, message_id)
+                elif action == "compra_insumos":
+                    PagoHandler.execute_compra_insumos(chat_id, user, context, message_id)
+                elif action == "guia_remision":
+                    TransferenciaHandler.execute_guia_remision(chat_id, user, context, message_id)
                 elif action == "cliente":
                     VentaHandler.execute_cliente(chat_id, user, context, message_id)
                 elif action == "transferencia":

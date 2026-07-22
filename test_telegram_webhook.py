@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
 # Configurar variables de entorno ficticias si no existen
-os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test_secret_123")
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test_bot_token_123")
-os.environ.setdefault("GOOGLE_API_KEY", "dummy_key")
+os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test_secret_123"
+os.environ["TELEGRAM_BOT_TOKEN"] = "test_bot_token_123"
+os.environ["GOOGLE_API_KEY"] = "dummy"
 
 from app import app
 from extensions import db
@@ -17,6 +17,7 @@ from models import Users, Cliente, PresentacionProducto, Inventario, Lote, Venta
 
 def run_tests():
     print("=== Iniciando pruebas de integracion del bot de Telegram ===")
+    app.testing = True
 
     # Crear cliente de pruebas de Flask
     client = app.test_client()
@@ -63,6 +64,23 @@ def run_tests():
         except Exception as e:
             db.session.rollback()
             print(f"Nota: No se pudo agregar la columna almacen_preferido_id: {e}")
+
+        # Limpiar tabla de telegram_updates de pruebas anteriores y chat_id
+        try:
+            db.session.execute(db.text("DELETE FROM telegram_updates"))
+            db.session.execute(db.text("UPDATE users SET telegram_chat_id = NULL WHERE telegram_chat_id = 987654321"))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"Nota limpieza updates/users: {e}")
+
+        # Renombrar almacenes de pruebas anteriores para evitar colisiones de nombre
+        try:
+            db.session.execute(db.text("UPDATE almacenes SET nombre = 'Obsoleto_' || id WHERE nombre ILIKE '%Abancay%' OR nombre ILIKE '%Planta de Produccion%'"))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"Nota renombrar almacenes: {e}")
 
         # 1. Asegurar que exista al menos un usuario en la BD para probar
         user = Users.query.first()
@@ -970,19 +988,24 @@ def run_tests():
                     cliente_preferido.almacen_preferido_id = almacen_abancay.id
                     db.session.flush()
                 
-                # Crear primero un lote agotado (cantidad = 0) para verificar que _prepare_ventas_lote sume todo el stock y no use sólo el primero (.first())
-                inv_depleted = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id, cantidad=Decimal("0")).first()
-                if not inv_depleted:
-                    inv_depleted = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=None, cantidad=Decimal("0"))
-                    db.session.add(inv_depleted)
+                # Limpiar cualquier inventario existente para evitar conflictos
+                Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).delete()
+                db.session.commit()
+
+                # Obtener o crear un lote para el test
+                lote_abancay = Lote.query.filter_by(producto_id=presentacion.producto_id).first()
+                if not lote_abancay:
+                    lote_abancay = Lote(producto_id=presentacion.producto_id, codigo_lote="LOTE-ABANCAY", cantidad_disponible_kg=Decimal("100"), es_produccion=False)
+                    db.session.add(lote_abancay)
                     db.session.flush()
 
-                inv_abancay = Inventario.query.filter_by(almacen_id=almacen_abancay.id, presentacion_id=presentacion.id).filter(Inventario.id != inv_depleted.id).first()
-                if not inv_abancay:
-                    inv_abancay = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=None, cantidad=Decimal("100"))
-                    db.session.add(inv_abancay)
-                else:
-                    inv_abancay.cantidad = Decimal("100")
+                # Crear primero un lote agotado (lote_id asignado, cantidad = 0)
+                inv_depleted = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=lote_abancay.id, cantidad=Decimal("0"))
+                db.session.add(inv_depleted)
+                
+                # Crear el inventario activo (sin lote, cantidad = 100)
+                inv_abancay = Inventario(presentacion_id=presentacion.id, almacen_id=almacen_abancay.id, lote_id=None, cantidad=Decimal("100"))
+                db.session.add(inv_abancay)
                 db.session.commit()
                 
                 message_payload_lote = {

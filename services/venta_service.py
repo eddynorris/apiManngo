@@ -250,11 +250,17 @@ class VentaService:
                 nuevo_total += cantidad_solicitada * precio_unitario
 
         # 3. Actualizar la venta
+        is_transition_to_completed = (venta.estado == 'pedido' and is_completado)
         venta.cliente_id = data.get('cliente_id', venta.cliente_id)
         venta.almacen_id = data.get('almacen_id', venta.almacen_id)
         venta.estado = data.get('estado', venta.estado)
         venta.estado_pago = data.get('estado_pago', venta.estado_pago)
-        venta.fecha = parse_iso_datetime(data.get('fecha')) if data.get('fecha') else venta.fecha
+        
+        if data.get('fecha'):
+            from common import parse_iso_datetime
+            venta.fecha = parse_iso_datetime(data.get('fecha'))
+        elif is_transition_to_completed or (is_completado and not venta.fecha):
+            venta.fecha = datetime.now(timezone.utc)
         
         # Asignar los nuevos detalles
         venta.detalles = nuevos_detalles_obj

@@ -76,7 +76,10 @@ class TelegramWebhookResource(Resource):
 
         # 4. Procesamiento asíncrono en hilo de fondo para responder 200 inmediatamente
         app = current_app._get_current_object()
-        executor.submit(_process_update_async, app, update)
+        if app.testing:
+            _process_update_async(app, update)
+        else:
+            executor.submit(_process_update_async, app, update)
 
         return {"status": "ok"}, 200
 
