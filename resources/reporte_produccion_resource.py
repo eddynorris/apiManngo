@@ -34,8 +34,9 @@ class ReporteProduccionBriquetasResource(Resource):
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
-                    fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
-                    fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+                    from utils.date_parser import parse_telegram_date_only
+                    fecha_inicio = parse_telegram_date_only(fecha_inicio_str)
+                    fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
             
@@ -192,8 +193,9 @@ class ReporteProduccionGeneralResource(Resource):
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
-                    fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
-                    fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+                    from utils.date_parser import parse_telegram_date_only
+                    fecha_inicio = parse_telegram_date_only(fecha_inicio_str)
+                    fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
             

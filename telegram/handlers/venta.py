@@ -266,18 +266,8 @@ class VentaHandler:
         estado = context.get("estado", "completado")
         
         fecha_str = context.get("fecha")
-        if fecha_str:
-            try:
-                fecha_parsed = datetime.strptime(fecha_str, "%Y-%m-%d")
-                ahora = datetime.now()
-                fecha_transaccion = datetime(
-                    fecha_parsed.year, fecha_parsed.month, fecha_parsed.day,
-                    ahora.hour, ahora.minute, ahora.second, ahora.microsecond, ahora.tzinfo
-                )
-            except Exception:
-                fecha_transaccion = datetime.now()
-        else:
-            fecha_transaccion = datetime.now()
+        from utils.date_parser import parse_telegram_date
+        fecha_transaccion = parse_telegram_date(fecha_str)
 
         detalles_data = [
             {
@@ -524,18 +514,8 @@ class VentaHandler:
         fecha_str = context.get("fecha")
         
         # Resolver fecha del lote
-        if fecha_str:
-            try:
-                fecha_parsed = datetime.strptime(fecha_str, "%Y-%m-%d")
-                ahora = datetime.now()
-                fecha_transaccion = datetime(
-                    fecha_parsed.year, fecha_parsed.month, fecha_parsed.day,
-                    ahora.hour, ahora.minute, ahora.second, ahora.microsecond, ahora.tzinfo
-                )
-            except Exception:
-                fecha_transaccion = datetime.now()
-        else:
-            fecha_transaccion = datetime.now()
+        from utils.date_parser import parse_telegram_date
+        fecha_transaccion = parse_telegram_date(fecha_str)
 
         ventas_registradas = []
         for v in ventas_list:

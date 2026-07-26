@@ -155,14 +155,9 @@ class CompraInsumoResource(Resource):
             proveedor_nombre = proveedor.nombre
 
         # --- Fecha de la operación ---
+        from utils.date_parser import parse_telegram_date
         fecha_str = data.get('fecha')
-        if fecha_str:
-            try:
-                fecha_operacion = datetime.strptime(fecha_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
-            except ValueError:
-                return {"error": "Formato de fecha inválido. Usar YYYY-MM-DD"}, 400
-        else:
-            fecha_operacion = datetime.now(timezone.utc)
+        fecha_operacion = parse_telegram_date(fecha_str)
 
         claims = get_jwt()
         usuario_id = claims.get('sub')

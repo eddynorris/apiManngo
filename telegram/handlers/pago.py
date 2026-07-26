@@ -89,18 +89,8 @@ class PagoHandler:
         referencia = context["referencia"]
 
         fecha_str = context.get("fecha")
-        if fecha_str:
-            try:
-                fecha_parsed = datetime.strptime(fecha_str, "%Y-%m-%d")
-                ahora = datetime.now()
-                fecha_pago = datetime(
-                    fecha_parsed.year, fecha_parsed.month, fecha_parsed.day,
-                    ahora.hour, ahora.minute, ahora.second, ahora.microsecond, ahora.tzinfo
-                )
-            except Exception:
-                fecha_pago = datetime.now()
-        else:
-            fecha_pago = datetime.now()
+        from utils.date_parser import parse_telegram_date
+        fecha_pago = parse_telegram_date(fecha_str)
 
         cliente = db.session.get(Cliente, cliente_id)
         from models import Venta
@@ -222,13 +212,8 @@ class PagoHandler:
         almacen_nombre = context.get("almacen_nombre", "Desconocido")
         
         fecha_str = context.get("fecha")
-        if fecha_str:
-            try:
-                fecha_gasto = datetime.strptime(fecha_str, "%Y-%m-%d").date()
-            except Exception:
-                fecha_gasto = datetime.now().date()
-        else:
-            fecha_gasto = datetime.now().date()
+        from utils.date_parser import parse_telegram_date_only
+        fecha_gasto = parse_telegram_date_only(fecha_str)
         
         registros_creados = []
         for g in gastos_list:
