@@ -74,13 +74,16 @@ def run_tests():
             db.session.rollback()
             print(f"Nota limpieza updates/users: {e}")
 
-        # Renombrar almacenes de pruebas anteriores para evitar colisiones de nombre
-        try:
-            db.session.execute(db.text("UPDATE almacenes SET nombre = 'Obsoleto_' || id WHERE nombre ILIKE '%Abancay%' OR nombre ILIKE '%Planta de Produccion%'"))
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            print(f"Nota renombrar almacenes: {e}")
+        # Lista simple para registrar los elementos creados explícitamente para las pruebas y eliminarlos al final
+        created_test_ids = {
+            "ventas": [],
+            "lotes": [],
+            "clientes": [],
+            "almacenes": [],
+            "gastos": [],
+            "pagos": [],
+            "movimientos": []
+        }
 
         # 1. Asegurar que exista al menos un usuario en la BD para probar
         user = Users.query.first()
@@ -91,6 +94,7 @@ def run_tests():
         # Respaldar datos originales del usuario
         orig_chat_id = user.telegram_chat_id
         orig_context = user.telegram_context
+        orig_history = getattr(user, 'telegram_history', None)
         orig_almacen_id = user.almacen_id
 
         # Configurar Chat ID de pruebas y asegurar un almacén asociado
@@ -1166,12 +1170,38 @@ def run_tests():
             print("\n[OK] Todas las pruebas de integracion del bot de Telegram se completaron exitosamente!")
 
         finally:
-            # Restaurar datos originales del usuario de pruebas
-            user.telegram_chat_id = orig_chat_id
-            user.telegram_context = orig_context
-            user.almacen_id = orig_almacen_id
-            db.session.commit()
-            print("Limpieza completa. Base de datos restaurada.")
+            print("\n--- Limpiando datos creados durante la prueba ---")
+            try:
+                db.session.rollback()
+
+                # Eliminar elementos registrados en created_test_ids
+                for entity_key, model_cls in [
+                    ("movimientos", Movimiento),
+                    ("pagos", Pago),
+                    ("gastos", Gasto),
+                    ("ventas", Venta),
+                    ("inventarios", Inventario),
+                    ("lotes", Lote),
+                    ("clientes", Cliente),
+                    ("almacenes", Almacen)
+                ]:
+                    ids = created_test_ids.get(entity_key, [])
+                    if ids:
+                        model_cls.query.filter(model_cls.id.in_(ids)).delete(synchronize_session=False)
+
+                # Restaurar datos del usuario de pruebas
+                if user:
+                    user.telegram_chat_id = orig_chat_id
+                    user.telegram_context = orig_context
+                    if hasattr(user, 'telegram_history'):
+                        user.telegram_history = orig_history
+                    user.almacen_id = orig_almacen_id
+
+                db.session.commit()
+                print("[OK] Limpieza completada: todos los datos creados por el test fueron eliminados.")
+            except Exception as clean_err:
+                db.session.rollback()
+                print(f"Error durante la limpieza: {clean_err}")
 
 if __name__ == "__main__":
     run_tests()

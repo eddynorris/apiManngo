@@ -88,7 +88,7 @@ class VentaHandler:
             cantidad = item.get("cantidad", 1)
             precio_explicito = item.get("precio")
 
-            presentacion = buscar_presentacion_fn(prod_name, ['procesado'])
+            presentacion = buscar_presentacion_fn(prod_name, ['procesado', 'briqueta'])
             if not presentacion:
                 telegram_service.send_message(chat_id, f"❌ Error: No se encontró el producto '{prod_name}' en el catálogo.")
                 return

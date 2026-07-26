@@ -333,8 +333,8 @@ Diferenciación Crítica de Traslados vs Guías:
 * Si el texto menciona 'traslado', 'mover' o 'movimiento' entre almacenes (ej: "traslado 10 sacos de planta a abancay"), usa registrar_transferencia para actualizar la base de datos física del sistema.
 
 Mapeo de Herramientas:
-1. interpretar_operacion (Venta/Pedido/Despacho): "vendi 3 sacos de 20 a juan perez" o "pedido de 10 sacos de 5kg para maria"
-   * Regla de Kg: Mapear 'saco de 20' -> '20kg', 'bolsa de diez' -> '10kg', 'saco grande' -> '30kg', 'saco chico' -> '10kg'.
+1. interpretar_operacion (Venta/Pedido/Despacho): "vendi 3 sacos de 20 a juan perez" o "pedido de 10 bolsas de 5kg para maria"
+   * Regla de Presentaciones: Conservar el tipo de empaque o contenedor si se menciona (ej: 'saco de 20kg', 'bolsa de 5kg', 'saco de 5kg', 'briqueta 5kg'). Si solo especifican el peso sin empaque (ej: '20kg'), usar '20kg'. Mapear 'saco grande' -> 'saco 30kg', 'saco chico' -> 'saco 10kg'.
 2. registrar_gasto (Gastos independientes): "ayudante 30 soles" o "combustible 100 soles categoria logistica"
 3. registrar_pago (Abono de deuda): "juan perez pago 200 soles por yape"
 4. registrar_deposito (Depósito de caja al banco): "depositados 500 soles al banco ref 74829"

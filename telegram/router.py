@@ -18,7 +18,31 @@ from telegram.handlers.produccion import ProduccionHandler
 from telegram.handlers.guia_sunat import GuiaSunatHandler
 from telegram.handlers.consulta import ConsultaHandler
 
+import uuid
+
 logger = logging.getLogger(__name__)
+
+def format_user_friendly_error(e: Exception) -> str:
+    """Transforma excepciones internas o de BD en mensajes seguros y amigables para la interfaz de Telegram."""
+    err_str = str(e)
+    logger.error(f"Excepción en bot de Telegram: {e}", exc_info=True)
+    
+    # 1. Violaciones de restricción de stock / Check constraints de DB
+    if "inventario_cantidad_check" in err_str or "violates check constraint" in err_str or ("inventario" in err_str.lower() and "check" in err_str.lower()):
+        return "❌ <b>Operación no realizada:</b> Stock insuficiente en el almacén para cubrir la cantidad solicitada."
+    elif "foreign key constraint" in err_str.lower() or "fk_" in err_str.lower():
+        return "❌ <b>Operación no realizada:</b> Referencia a un registro que no existe en el sistema."
+    elif "unique constraint" in err_str.lower() or "uq_" in err_str.lower():
+        return "❌ <b>Operación no realizada:</b> Ya existe un registro registrado con los mismos datos."
+
+    # 2. Excepciones conocidas de validación
+    err_type = type(e).__name__
+    if err_type in ["VentaValidationError", "ProduccionValidationError", "StockInsuficienteError", "ValueError"]:
+        return f"❌ <b>Atención:</b> {err_str}"
+
+    # 3. Errores inesperados: no exponer SQL ni stacktrace al usuario final por seguridad
+    error_code = uuid.uuid4().hex[:8].upper()
+    return f"❌ <b>Error del sistema:</b> No se pudo completar la solicitud. Intenta nuevamente o contacta a soporte indicando la referencia <code>ERR-{error_code}</code>."
 
 class TelegramRouter:
     @staticmethod
@@ -35,78 +59,83 @@ class TelegramRouter:
 
     @staticmethod
     def handle_message(message):
-        chat_id = message["chat"]["id"]
-        text = message.get("text", "").strip()
+        try:
+            chat_id = message["chat"]["id"]
+            text = message.get("text", "").strip()
 
-        if not text:
-            return
-
-        user = Users.query.filter_by(telegram_chat_id=chat_id).first()
-        if not user:
-            if intentar_vinculacion(chat_id, text):
+            if not text:
                 return
-                
-            msg = (
-                f"❌ <b>Acceso Denegado</b>\n\n"
-                f"Tu Telegram Chat ID no está vinculado a ningún usuario en el sistema.\n"
-                f"<b>Chat ID:</b> <code>{chat_id}</code>\n\n"
-                f"Para vincular tu cuenta, ingresa a tu perfil en Manngo, genera tu código de vinculación de 6 dígitos e ingrésalo aquí (ejemplo: <code>/vincular 123456</code>)."
-            )
-            telegram_service.send_message(chat_id, msg)
-            return
 
-        if text.lower() in ["/start", "/help", "hola"]:
-            welcome_msg = (
-                f"👋 ¡Hola <b>{user.username}</b>!\n\n"
-                f"Bienvenido al asistente de <b>Manngo</b> via Telegram. Puedes escribirme comandos en lenguaje natural para realizar operaciones:\n\n"
-                f"• <b>Ventas:</b> <i>'vendí 3 sacos de 20 a juan pérez pago completo'</i>\n"
-                f"• <b>Gastos:</b> <i>'gasté 40 soles en combustible categoría logistica'</i>\n"
-                f"• <b>Pagos:</b> <i>'abono de maría de 100 soles por yape'</i>\n"
-                f"• <b>Depósitos:</b> <i>'depositados 300 soles en cuenta con referencia 8394'</i>\n"
-                f"• <b>Producción:</b> <i>'se produjeron 10 sacos de briquetas de 5kg'</i>\n\n"
-                f"¿Qué deseas realizar hoy?"
-            )
-            telegram_service.send_message(chat_id, welcome_msg)
-            return
+            user = Users.query.filter_by(telegram_chat_id=chat_id).first()
+            if not user:
+                if intentar_vinculacion(chat_id, text):
+                    return
+                    
+                msg = (
+                    f"❌ <b>Acceso Denegado</b>\n\n"
+                    f"Tu Telegram Chat ID no está vinculado a ningún usuario en el sistema.\n"
+                    f"<b>Chat ID:</b> <code>{chat_id}</code>\n\n"
+                    f"Para vincular tu cuenta, ingresa a tu perfil en Manngo, genera tu código de vinculación de 6 dígitos e ingrésalo aquí (ejemplo: <code>/vincular 123456</code>)."
+                )
+                telegram_service.send_message(chat_id, msg)
+                return
 
-        telegram_service.send_message(chat_id, "🔄 <i>Procesando con Gemini...</i>")
-        result = gemini_service.process_command(text, user.telegram_history)
+            if text.lower() in ["/start", "/help", "hola"]:
+                welcome_msg = (
+                    f"👋 ¡Hola <b>{user.username}</b>!\n\n"
+                    f"Bienvenido al asistente de <b>Manngo</b> via Telegram. Puedes escribirme comandos en lenguaje natural para realizar operaciones:\n\n"
+                    f"• <b>Ventas:</b> <i>'vendí 3 sacos de 20 a juan pérez pago completo'</i>\n"
+                    f"• <b>Gastos:</b> <i>'gasté 40 soles en combustible categoría logistica'</i>\n"
+                    f"• <b>Pagos:</b> <i>'abono de maría de 100 soles por yape'</i>\n"
+                    f"• <b>Depósitos:</b> <i>'depositados 300 soles en cuenta con referencia 8394'</i>\n"
+                    f"• <b>Producción:</b> <i>'se produjeron 10 sacos de briquetas de 5kg'</i>\n\n"
+                    f"¿Qué deseas realizar hoy?"
+                )
+                telegram_service.send_message(chat_id, welcome_msg)
+                return
 
-        history_entry = result.get("history_entry")
-        if history_entry:
-            update_user_history(user, history_entry["user"], history_entry["model"])
+            telegram_service.send_message(chat_id, "🔄 <i>Procesando con Gemini...</i>")
+            result = gemini_service.process_command(text, user.telegram_history)
 
-        action = result.get("action")
-        args = result.get("args", {})
+            history_entry = result.get("history_entry")
+            if history_entry:
+                update_user_history(user, history_entry["user"], history_entry["model"])
 
-        if action == "interpretar_operacion":
-            VentaHandler.prepare_venta(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
-        elif action == "registrar_ventas_lote":
-            VentaHandler.prepare_ventas_lote(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
-        elif action == "registrar_gasto":
-            PagoHandler.prepare_gasto(chat_id, user, args, text, resolver_almacen)
-        elif action == "registrar_pago":
-            PagoHandler.prepare_pago(chat_id, user, args, resolver_almacen)
-        elif action == "registrar_deposito":
-            PagoHandler.prepare_deposito(chat_id, user, args)
-        elif action == "registrar_produccion":
-            ProduccionHandler.prepare_produccion(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
-        elif action == "registrar_compra_insumos":
-            PagoHandler.prepare_compra_insumos(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
-        elif action == "solicitar_guia_remision":
-            GuiaSunatHandler.prepare_guia_remision(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
-        elif action == "registrar_cliente":
-            VentaHandler.prepare_cliente(chat_id, user, args)
-        elif action == "registrar_transferencia":
-            TransferenciaHandler.prepare_transferencia(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
-        elif action == "consultar_stock":
-            ConsultaHandler.consultar_stock(chat_id, user, args, buscar_presentacion)
-        elif action == "consultar_deudas":
-            ConsultaHandler.consultar_deudas(chat_id, user, args)
-        else:
-            msg = result.get("message", "No entendí la operación. Intenta reformular.")
-            telegram_service.send_message(chat_id, f"ℹ️ {msg}")
-            db.session.commit()
+            action = result.get("action")
+            args = result.get("args", {})
+
+            if action == "interpretar_operacion":
+                VentaHandler.prepare_venta(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
+            elif action == "registrar_ventas_lote":
+                VentaHandler.prepare_ventas_lote(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
+            elif action == "registrar_gasto":
+                PagoHandler.prepare_gasto(chat_id, user, args, text, resolver_almacen)
+            elif action == "registrar_pago":
+                PagoHandler.prepare_pago(chat_id, user, args, resolver_almacen)
+            elif action == "registrar_deposito":
+                PagoHandler.prepare_deposito(chat_id, user, args)
+            elif action == "registrar_produccion":
+                ProduccionHandler.prepare_produccion(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
+            elif action == "registrar_compra_insumos":
+                PagoHandler.prepare_compra_insumos(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
+            elif action == "solicitar_guia_remision":
+                GuiaSunatHandler.prepare_guia_remision(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
+            elif action == "registrar_cliente":
+                VentaHandler.prepare_cliente(chat_id, user, args)
+            elif action == "registrar_transferencia":
+                TransferenciaHandler.prepare_transferencia(chat_id, user, args, text, resolver_almacen, buscar_presentacion)
+            elif action == "consultar_stock":
+                ConsultaHandler.consultar_stock(chat_id, user, args, buscar_presentacion)
+            elif action == "consultar_deudas":
+                ConsultaHandler.consultar_deudas(chat_id, user, args)
+            else:
+                msg = result.get("message", "No entendí la operación. Intenta reformular.")
+                telegram_service.send_message(chat_id, f"ℹ️ {msg}")
+                db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            friendly_msg = format_user_friendly_error(e)
+            telegram_service.send_message(chat_id, friendly_msg)
 
     @staticmethod
     def handle_callback_query(callback_query):
@@ -158,5 +187,5 @@ class TelegramRouter:
                 clear_user_context(user)
             except Exception as e:
                 db.session.rollback()
-                logger.error(f"Error al ejecutar acción '{action}': {e}", exc_info=True)
-                telegram_service.edit_message(chat_id, message_id, f"❌ <b>Error interno:</b> {str(e)}")
+                friendly_msg = format_user_friendly_error(e)
+                telegram_service.edit_message(chat_id, message_id, friendly_msg)
