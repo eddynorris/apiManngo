@@ -2,6 +2,7 @@
 Máquina de estados para conversaciones del bot de Telegram.
 Permite flujos multi-paso donde el bot puede pedir información faltante.
 """
+import re
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Optional, Dict, Any, List
@@ -280,7 +281,28 @@ class StateMachine:
     
     @staticmethod
     def _handle_extra_data_response(user, ctx: ConversationContext, text: str) -> Dict[str, Any]:
-        """Procesa la respuesta para edición de campos (cliente, precio, gasto, almacén)."""
+        """Procesa la respuesta para edición de campos (cliente, precio, gasto, almacén) o creación de cliente."""
+        # Flujo de creación de cliente (esperando teléfono)
+        if ctx.action == "creating_client":
+            phone_digits = re.sub(r'\D', '', text.strip())
+            original_data = ctx.data.get("original_data", {})
+            if ctx.data.get("step") == "awaiting_phone":
+                if len(phone_digits) != 9:
+                    # Mantener estado, pedir de nuevo
+                    return {
+                        "action": "invalid_phone",
+                        "message": "El teléfono debe tener exactamente 9 dígitos. Intenta de nuevo (o /cancel)."
+                    }
+                StateMachine.clear_context(user)
+                return {
+                    "action": "create_client_with_phone",
+                    "client_name": ctx.data.get("client_name"),
+                    "phone": phone_digits,
+                    "original_action": original_data.get("action", "venta"),
+                    "original_data": original_data.get("data", original_data)
+                }
+        
+        # Flujo de edición de campos
         edit_action = ctx.action
         original_context = ctx.data.get("original_context", {})
         message_id = ctx.data.get("message_id")

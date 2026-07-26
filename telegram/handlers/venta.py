@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class VentaHandler:
     @staticmethod
-    def prepare_venta(chat_id, user, args, original_text, resolver_almacen_fn, buscar_presentacion_fn):
+    def prepare_venta(chat_id, user, args, original_text, resolver_almacen_fn, buscar_presentacion_fn, forced_cliente=None):
         almacen_id, almacen_nombre, is_almacen_explicit = resolver_almacen_fn(user, original_text)
         if not almacen_id:
             telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje o asigna uno por defecto a tu usuario.")
@@ -39,10 +39,10 @@ class VentaHandler:
         # Resolver Cliente
         phone = phone_match.group(1) if hasattr(phone_match, 'group') else phone_match
         ruc_val = ruc_match.group(1) if hasattr(ruc_match, 'group') else ruc_match
-        cliente = None
+        cliente = forced_cliente  # Si viene un cliente forzado (de un flujo anterior), usarlo
         warnings = []
 
-        if phone:
+        if not cliente and phone:
             cliente = buscar_cliente_db(nombre=None, telefono=phone, ruc=ruc_val)
             if cliente:
                 if ruc_val and not cliente.ruc:

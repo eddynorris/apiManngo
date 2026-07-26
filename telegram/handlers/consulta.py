@@ -1,9 +1,10 @@
 import logging
 from decimal import Decimal
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from extensions import db
-from models import Inventario, Venta, Cliente, Almacen
+from models import Inventario, Venta, Cliente, Almacen, PresentacionProducto
 from services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
@@ -31,10 +32,13 @@ class ConsultaHandler:
                 telegram_service.send_message(chat_id, "📦 Tu almacén actualmente no tiene stock registrado.")
                 return
 
+            # Precargar todas las presentaciones en una sola query (evita N+1)
+            pres_ids = [inv.presentacion_id for inv in inventarios]
+            presentaciones = {p.id: p for p in PresentacionProducto.query.filter(PresentacionProducto.id.in_(pres_ids)).all()}
+
             detalles = []
             for inv in inventarios:
-                from models import PresentacionProducto
-                pres = db.session.get(PresentacionProducto, inv.presentacion_id)
+                pres = presentaciones.get(inv.presentacion_id)
                 nombre_pres = pres.nombre if pres else f"Presentación #{inv.presentacion_id}"
                 detalles.append(f"• <b>{nombre_pres}:</b> {inv.stock_total} unidades")
 
@@ -120,9 +124,13 @@ class ConsultaHandler:
                 telegram_service.send_message(chat_id, "✅ No hay clientes con deudas pendientes registradas.")
                 return
 
+            # Precargar todos los clientes en una sola query (evita N+1)
+            cliente_ids = [item.cliente_id for item in clientes_con_deuda]
+            clientes_map = {c.id: c for c in Cliente.query.filter(Cliente.id.in_(cliente_ids)).all()}
+
             detalles = []
             for item in clientes_con_deuda:
-                cl = db.session.get(Cliente, item.cliente_id)
+                cl = clientes_map.get(item.cliente_id)
                 nombre_cl = cl.nombre if cl else f"Cliente #{item.cliente_id}"
                 detalles.append(f"• <b>{nombre_cl}:</b> S/ {item.deuda_total:.2f}")
 
