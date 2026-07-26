@@ -311,6 +311,34 @@ class GeminiService:
                         },
                         "required": ["almacen_origen_nombre", "almacen_destino_nombre", "items"]
                     }
+                },
+                {
+                    "name": "consultar_stock",
+                    "description": "Consulta el stock disponible de un producto específico o de todo el almacén del usuario.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "producto_nombre": {
+                                "type": "STRING",
+                                "description": "Nombre del producto a consultar (opcional). Si no se proporciona, consulta todo el stock del almacén."
+                            }
+                        },
+                        "required": []
+                    }
+                },
+                {
+                    "name": "consultar_deudas",
+                    "description": "Consulta las deudas pendientes de un cliente específico o muestra el top de clientes con deudas.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "cliente_nombre": {
+                                "type": "STRING",
+                                "description": "Nombre del cliente a consultar (opcional). Si no se proporciona, muestra el top 10 de clientes con deudas."
+                            }
+                        },
+                        "required": []
+                    }
                 }
             ]
         }
@@ -344,6 +372,8 @@ Mapeo de Herramientas:
 8. registrar_cliente (Crear o registrar cliente): "crear cliente Juan Perez celular 987654321"
 9. registrar_ventas_lote (Registrar múltiples ventas dictadas juntas): "Ventas 24/06/2026: Cliente A 4 sacos de 20kg, Cliente B 1 saco de 20kg"
 10. registrar_transferencia (Traslado físico de inventario entre almacenes): "traslado de planta a abancay 100 sacos de 20kg"
+11. consultar_stock (Consulta de inventario): "cuanto stock tengo de saco 20kg" o "stock disponible"
+12. consultar_deudas (Consulta de deudas de clientes): "deudas de juan perez" o "clientes con deudas"
 
 Restricción: NUNCA inventes información. Tu output DEBE ser únicamente el function call correspondiente sin texto adicional."""
 
