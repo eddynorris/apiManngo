@@ -53,7 +53,7 @@ class PresentacionSchema(SQLAlchemyAutoSchema):
     producto = fields.Nested("ProductoSchema", only=("id", "nombre"), dump_only=True)
     precio_venta = fields.Decimal(as_string=True)
     capacidad_kg = fields.Decimal(as_string=True)
-    foto_url = fields.String(dump_only=True)
+    url_foto = fields.String(dump_only=True)
     
     class Meta:
         model = PresentacionProducto
@@ -177,7 +177,7 @@ class PagoSchema(SQLAlchemyAutoSchema):
     monto = fields.Decimal(as_string=True)
     monto_depositado = fields.Decimal(as_string=True)
     monto_en_gerencia = fields.Decimal(as_string=True, dump_only=True)  # Propiedad calculada
-    comprobante_url = fields.String(dump_only=True)
+    url_comprobante = fields.String(dump_only=True)
 
     class Meta:
         model = Pago
