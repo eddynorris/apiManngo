@@ -1,5 +1,6 @@
 from flask import request
 from flask_restful import Resource
+from flask_jwt_extended import jwt_required
 import google.generativeai as genai
 from extensions import supabase # Importar cliente de Supabase centralizado
 import logging
@@ -16,6 +17,7 @@ def get_embedding(text):
     return genai.embed_content(model=EMBEDDING_MODEL, content=text)['embedding']
 
 class ChatResource(Resource):
+    @jwt_required()
     def post(self):
         data = request.get_json()
         user_question = data.get('question')

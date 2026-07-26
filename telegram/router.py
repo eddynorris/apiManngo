@@ -11,6 +11,7 @@ from services.telegram_service import telegram_service
 
 from telegram.resolvers import resolver_almacen, buscar_presentacion, intentar_vinculacion, buscar_cliente_db
 from telegram.context import set_user_context, clear_user_context, update_user_history
+from telegram.state_machine import StateMachine, ConversationState
 from telegram.handlers.venta import VentaHandler
 from telegram.handlers.pago import PagoHandler
 from telegram.handlers.transferencia import TransferenciaHandler
@@ -80,6 +81,21 @@ class TelegramRouter:
                 telegram_service.send_message(chat_id, msg)
                 return
 
+            # Comando /cancel para limpiar cualquier flujo activo (DEBE ir antes de verificar flujo)
+            if text.lower() in ["/cancel", "/cancelar"]:
+                StateMachine.clear_context(user)
+                telegram_service.send_message(chat_id, "✅ Operación cancelada. ¿En qué más puedo ayudarte?")
+                return
+
+            # === MÁQUINA DE ESTADOS: Verificar si hay un flujo activo ===
+            ctx = StateMachine.get_context(user)
+            if ctx.state not in (ConversationState.IDLE, ConversationState.AWAITING_CONFIRMATION):
+                # El usuario está en medio de un flujo conversacional
+                result = StateMachine.handle_user_response(user, text)
+                if result:
+                    TelegramRouter._handle_flow_response(chat_id, user, result)
+                    return
+
             if text.lower() in ["/start", "/help", "hola"]:
                 welcome_msg = (
                     f"👋 ¡Hola <b>{user.username}</b>!\n\n"
@@ -138,6 +154,117 @@ class TelegramRouter:
             telegram_service.send_message(chat_id, friendly_msg)
 
     @staticmethod
+    def _handle_flow_response(chat_id, user, result):
+        """Procesa la respuesta de un flujo conversacional activo."""
+        action = result.get("action")
+        
+        if action == "create_client":
+            # El usuario quiere crear el cliente, iniciar flujo de creación
+            client_name = result.get("client_name")
+            telegram_service.send_message(
+                chat_id, 
+                f"👤 <b>Crear Nuevo Cliente</b>\n\n"
+                f"Nombre: <b>{client_name}</b>\n\n"
+                f"Para crearlo, necesito al menos un número de teléfono de 9 dígitos.\n"
+                f"Ingresa el teléfono (o /cancel para cancelar):"
+            )
+            # Guardar contexto temporal para el siguiente mensaje
+            StateMachine.transition_to(
+                user, 
+                ConversationState.AWAITING_EXTRA_DATA,
+                action="creating_client",
+                data={"client_name": client_name, "step": "awaiting_phone"}
+            )
+            
+        elif action == "use_generic_client":
+            # Usar cliente genérico, reintentar la operación original
+            original_action = result.get("original_action")
+            original_data = result.get("original_data", {})
+            telegram_service.send_message(chat_id, "ℹ️ Usando cliente genérico. Procesando...")
+            # Re-ejecutar la acción original con cliente genérico
+            # (Se manejará en el handler correspondiente)
+            
+        elif action == "retry_with_correct_name":
+            # El usuario dio el nombre correcto, reintentar
+            correct_name = result.get("correct_name")
+            original_action = result.get("original_action")
+            original_data = result.get("original_data", {})
+            telegram_service.send_message(chat_id, f"🔄 Buscando '{correct_name}'...")
+            # Re-ejecutar con el nombre correcto
+            
+        elif action == "set_almacen":
+            almacen_name = result.get("almacen_name")
+            telegram_service.send_message(chat_id, f"🏪 Almacén seleccionado: {almacen_name}. Procesando...")
+            
+        elif action == "set_price":
+            price = result.get("price")
+            item_index = result.get("item_index")
+            telegram_service.send_message(chat_id, f"💲 Precio actualizado a S/ {price:.2f}")
+            
+        elif action == "invalid_price":
+            telegram_service.send_message(chat_id, f"❌ {result.get('message')}")
+            
+        elif action == "edit_response":
+            # Respuesta a una edición de campo
+            TelegramRouter._handle_edit_response(chat_id, user, result)
+            
+        else:
+            telegram_service.send_message(chat_id, "ℹ️ No entendí tu respuesta. Intenta de nuevo o escribe /cancel.")
+
+    @staticmethod
+    def _handle_edit_response(chat_id, user, result):
+        """Procesa la respuesta de edición de un campo."""
+        edit_action = result.get("edit_action")
+        value = result.get("value")
+        original_context = result.get("original_context", {})
+        message_id = result.get("message_id")
+        
+        if edit_action == "edit_cliente":
+            # Actualizar cliente en el contexto
+            original_context["cliente_nombre"] = value
+            user.telegram_context = original_context
+            db.session.commit()
+            telegram_service.send_message(chat_id, f"✅ Cliente actualizado a: <b>{value}</b>")
+            
+        elif edit_action == "edit_precio":
+            # Actualizar precio total
+            try:
+                new_price = float(value)
+                original_context["total"] = new_price
+                # Actualizar también los items si es necesario
+                user.telegram_context = original_context
+                db.session.commit()
+                telegram_service.send_message(chat_id, f"✅ Precio actualizado a: <b>S/ {new_price:.2f}</b>")
+            except ValueError:
+                telegram_service.send_message(chat_id, "❌ Precio inválido. Ingresa un número válido.")
+                return
+                
+        elif edit_action == "edit_gasto":
+            # Agregar gasto asociado
+            try:
+                gasto_monto = float(value)
+                original_context["gasto_asociado"] = {
+                    "monto": gasto_monto,
+                    "descripcion": "Gasto agregado desde Telegram"
+                }
+                user.telegram_context = original_context
+                db.session.commit()
+                telegram_service.send_message(chat_id, f"✅ Gasto agregado: <b>S/ {gasto_monto:.2f}</b>")
+            except ValueError:
+                telegram_service.send_message(chat_id, "❌ Monto inválido. Ingresa un número válido.")
+                return
+                
+        elif edit_action == "edit_almacen":
+            # Actualizar almacén
+            original_context["almacen_nombre"] = value
+            user.telegram_context = original_context
+            db.session.commit()
+            telegram_service.send_message(chat_id, f"✅ Almacén actualizado a: <b>{value}</b>")
+        
+        # Restaurar el contexto al estado de confirmación para que el usuario pueda seguir editando o confirmar
+        StateMachine.set_awaiting_confirmation(user, original_context.get("action", "venta"), original_context, message_id)
+
+    @staticmethod
     def handle_callback_query(callback_query):
         chat_id = callback_query["message"]["chat"]["id"]
         message_id = callback_query["message"]["message_id"]
@@ -151,6 +278,67 @@ class TelegramRouter:
         if data == "cancel":
             clear_user_context(user)
             telegram_service.edit_message(chat_id, message_id, "❌ <b>Operación cancelada.</b>")
+            return
+
+        # Manejar callbacks de edición
+        if data.startswith("edit:"):
+            field = data.split(":")[1]
+            context = user.telegram_context
+            if not context:
+                telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta operación expiró o ya fue procesada.</i>")
+                return
+            
+            # Iniciar flujo de edición según el campo
+            if field == "cliente":
+                StateMachine.transition_to(
+                    user,
+                    ConversationState.AWAITING_EXTRA_DATA,
+                    action="edit_cliente",
+                    data={"original_context": context, "message_id": message_id}
+                )
+                telegram_service.send_message(
+                    chat_id,
+                    "👤 <b>Cambiar Cliente</b>\n\n"
+                    "Ingresa el nombre del nuevo cliente:"
+                )
+            elif field == "precio":
+                StateMachine.transition_to(
+                    user,
+                    ConversationState.AWAITING_EXTRA_DATA,
+                    action="edit_precio",
+                    data={"original_context": context, "message_id": message_id}
+                )
+                telegram_service.send_message(
+                    chat_id,
+                    "💲 <b>Modificar Precio</b>\n\n"
+                    "Ingresa el nuevo precio total:"
+                )
+            elif field == "gasto":
+                StateMachine.transition_to(
+                    user,
+                    ConversationState.AWAITING_EXTRA_DATA,
+                    action="edit_gasto",
+                    data={"original_context": context, "message_id": message_id}
+                )
+                telegram_service.send_message(
+                    chat_id,
+                    "💸 <b>Agregar Gasto</b>\n\n"
+                    "Ingresa el monto del gasto:"
+                )
+            elif field == "almacen":
+                StateMachine.transition_to(
+                    user,
+                    ConversationState.AWAITING_EXTRA_DATA,
+                    action="edit_almacen",
+                    data={"original_context": context, "message_id": message_id}
+                )
+                telegram_service.send_message(
+                    chat_id,
+                    "🏪 <b>Cambiar Almacén</b>\n\n"
+                    "Ingresa el nombre del nuevo almacén:"
+                )
+            else:
+                telegram_service.send_message(chat_id, "❌ Campo de edición no reconocido.")
             return
 
         if data.startswith("confirm:"):

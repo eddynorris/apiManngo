@@ -131,8 +131,17 @@ class GastoResource(Resource):
     @jwt_required()
     @handle_db_errors
     def put(self, gasto_id):
-        """Actualiza gasto existente con validación de datos"""
+        """Actualiza gasto existente con validación de datos y ownership"""
         gasto = Gasto.query.get_or_404(gasto_id)
+        
+        # Verificar ownership (solo admin o el dueño pueden editar)
+        claims = get_jwt()
+        current_user_id = claims.get('sub')
+        rol = claims.get('rol')
+        
+        if rol != 'admin' and gasto.usuario_id != current_user_id:
+            return {"error": "No tienes permiso para editar este gasto"}, 403
+        
         data = gasto_schema.load(request.get_json(), partial=True)
         
         updated_gasto = gasto_schema.load(
@@ -147,8 +156,17 @@ class GastoResource(Resource):
     @jwt_required()
     @handle_db_errors
     def delete(self, gasto_id):
-        """Elimina registro de gasto"""
+        """Elimina registro de gasto con verificación de ownership"""
         gasto = Gasto.query.get_or_404(gasto_id)
+        
+        # Verificar ownership (solo admin o el dueño pueden eliminar)
+        claims = get_jwt()
+        current_user_id = claims.get('sub')
+        rol = claims.get('rol')
+        
+        if rol != 'admin' and gasto.usuario_id != current_user_id:
+            return {"error": "No tienes permiso para eliminar este gasto"}, 403
+        
         db.session.delete(gasto)
         db.session.commit()
         return {"message": "Gasto eliminado exitosamente"}, 200

@@ -9,6 +9,7 @@ from models import Users, Cliente, PresentacionProducto, Inventario, Lote, Venta
 from services.telegram_service import telegram_service
 from services.venta_service import VentaService
 from telegram.resolvers import buscar_cliente_db
+from telegram.state_machine import StateMachine, ConversationState
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +71,32 @@ class VentaHandler:
                 warnings.append(f"No se encontró cliente exacto '{cliente_nombre}', se asumió '{cliente.nombre}'.")
 
         if not cliente:
-            warnings.append(f"⚠️ Cliente '{cliente_nombre}' no encontrado. Se asociará al Cliente Genérico.")
-            cliente = Cliente.query.filter(Cliente.nombre.ilike("%genérico%")).first()
-            if not cliente:
-                cliente = Cliente.query.first()
+            # === MÁQUINA DE ESTADOS: Preguntar si crear cliente nuevo ===
+            # Guardar todos los datos de la venta en el contexto para reanudar después
+            venta_data = {
+                "almacen_id": almacen_id,
+                "almacen_nombre": almacen_nombre,
+                "items_raw": items_raw,
+                "cliente_nombre_original": cliente_nombre,
+                "phone": phone,
+                "ruc_val": ruc_val,
+                "original_text": original_text,
+                "args": args
+            }
+            
+            StateMachine.ask_for_client_creation(user, cliente_nombre, "venta", venta_data)
+            
+            msg = (
+                f"❓ <b>Cliente no encontrado</b>\n\n"
+                f"No encontré un cliente llamado '<b>{cliente_nombre}</b>'.\n\n"
+                f"¿Qué deseas hacer?\n\n"
+                f"1️⃣ Responde '<b>Sí</b>' para crear un nuevo cliente con ese nombre\n"
+                f"2️⃣ Responde con el <b>nombre correcto</b> del cliente\n"
+                f"3️⃣ Responde '<b>No</b>' para usar el cliente genérico\n\n"
+                f"(También puedes escribir /cancel para cancelar la venta)"
+            )
+            telegram_service.send_message(chat_id, msg)
+            return
 
         # Resolver Productos y Verificar Stock
         items_enriched = []
@@ -220,6 +243,14 @@ class VentaHandler:
 
         reply_markup = {
             "inline_keyboard": [
+                [
+                    {"text": "👤 Cambiar Cliente", "callback_data": "edit:cliente"},
+                    {"text": "💲 Modificar Precio", "callback_data": "edit:precio"}
+                ],
+                [
+                    {"text": "💸 Agregar Gasto", "callback_data": "edit:gasto"},
+                    {"text": "🏪 Cambiar Almacén", "callback_data": "edit:almacen"}
+                ],
                 [
                     {"text": f"✅ Confirmar {confirm_text.capitalize()}", "callback_data": "confirm:venta"},
                     {"text": "❌ Cancelar", "callback_data": "cancel"}

@@ -91,7 +91,27 @@ class MovimientoResource(Resource):
     @handle_db_errors
     def post(self):
         """Registra movimiento y actualiza inventario correspondiente"""
-        data = movimiento_schema.load(request.get_json())
+        json_data = request.get_json()
+        
+        # Validar que se proporcione almacen_id
+        almacen_id = json_data.get('almacen_id')
+        if not almacen_id:
+            return {"error": "Se requiere almacen_id para registrar un movimiento"}, 400
+        
+        # Validar permisos de almacén
+        claims = get_jwt()
+        current_user_id = claims.get('sub')
+        rol = claims.get('rol')
+        user_almacen_id = claims.get('almacen_id')
+        
+        # Solo admin puede mover inventario de cualquier almacén
+        if rol != 'admin' and user_almacen_id != almacen_id:
+            return {"error": "No tienes permiso para mover inventario de este almacén"}, 403
+        
+        # Validar que el almacén existe
+        Almacen.query.get_or_404(almacen_id)
+        
+        data = movimiento_schema.load(json_data)
         
         # --- Validación Adicional --- 
         # Validar que la presentación existe
@@ -99,19 +119,12 @@ class MovimientoResource(Resource):
         # Validar que el lote existe si se proporciona
         if data.lote_id:
             Lote.query.get_or_404(data.lote_id)
-        # Determinar almacen_id (podría venir en data o inferirse del lote/presentación? Asumimos que se necesita para buscar Inventario)
-        # Necesitamos saber el almacen_id para buscar el inventario
-        # Si no viene en data, ¿cómo se obtiene? ¿Quizás de la presentación o lote? 
-        # Por ahora, asumimos que el inventario se buscará por presentacion_id y lote_id si es necesario, o que almacen_id está implícito.
-        # Si Movimiento requiere almacen_id, añadir: Almacen.query.get_or_404(data.almacen_id)
-        # --------------------------
         
+        # Buscar inventario usando presentacion_id, almacen_id y lote_id
         inventario = Inventario.query.filter_by(
-            # Se necesita buscar inventario por presentacion_id y almacen_id.
-            # ¿Cómo obtener almacen_id aquí de forma segura?
-            # Asumiendo que se puede obtener de alguna forma o no es necesario para la lógica directa aquí
-            presentacion_id=data.presentacion_id 
-            # , almacen_id=obtenido_almacen_id 
+            presentacion_id=data.presentacion_id,
+            almacen_id=almacen_id,
+            lote_id=data.lote_id
         ).first()
         
         # Validar stock para movimientos de salida
@@ -120,23 +133,19 @@ class MovimientoResource(Resource):
             return {"error": "Stock insuficiente para este movimiento", "disponible": stock_disp}, 400
         
         # Asignar usuario actual
-        data.usuario_id = get_jwt().get('sub')
-        nuevo_movimiento = Movimiento(**data.to_dict()) # Asumiendo que data es un objeto con .to_dict() o similar tras load
+        data.usuario_id = current_user_id
+        nuevo_movimiento = Movimiento(**data.to_dict())
         db.session.add(nuevo_movimiento)
         
         # Actualizar inventario
-        if inventario: # Solo actualizar si el inventario existe
+        if inventario:
             if data.tipo == 'entrada':
                 inventario.cantidad += data.cantidad
             else: # tipo == 'salida'
                 inventario.cantidad -= data.cantidad
         else:
-            # Si es una entrada y no hay inventario, ¿debería crearse? 
-            # La lógica actual requiere que el inventario exista para salidas
-            # y no hace nada con él para entradas si no existe.
             if data.tipo == 'entrada':
-                 logger.warning(f"Movimiento de entrada para inventario inexistente: Presentación {data.presentacion_id}")
-                 # Considerar crear inventario aquí si es la lógica deseada
+                logger.warning(f"Movimiento de entrada para inventario inexistente: Presentación {data.presentacion_id}, Almacén {almacen_id}")
         
         db.session.commit()
         return movimiento_schema.dump(nuevo_movimiento), 201
