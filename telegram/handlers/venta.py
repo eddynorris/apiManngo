@@ -8,13 +8,14 @@ from extensions import db
 from models import Users, Cliente, PresentacionProducto, Inventario, Lote, Venta, VentaDetalle, Pago, Gasto, Movimiento, Almacen, Receta, ComponenteReceta
 from services.telegram_service import telegram_service
 from services.venta_service import VentaService
+from telegram.resolvers import buscar_cliente_db
 
 logger = logging.getLogger(__name__)
 
 class VentaHandler:
     @staticmethod
     def prepare_venta(chat_id, user, args, original_text, resolver_almacen_fn, buscar_presentacion_fn):
-        almacen_id, almacen_nombre = resolver_almacen_fn(user, original_text)
+        almacen_id, almacen_nombre, is_almacen_explicit = resolver_almacen_fn(user, original_text)
         if not almacen_id:
             telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje o asigna uno por defecto a tu usuario.")
             return
@@ -41,7 +42,7 @@ class VentaHandler:
         warnings = []
 
         if phone:
-            cliente = Cliente.query.filter_by(telefono=phone).first()
+            cliente = buscar_cliente_db(nombre=None, telefono=phone, ruc=ruc_val)
             if cliente:
                 if ruc_val and not cliente.ruc:
                     cliente.ruc = ruc_val
@@ -64,14 +65,9 @@ class VentaHandler:
                 warnings.append(f"👤 <b>Cliente Nuevo Creado</b>: Se registró automáticamente a '{nombre_nuevo}' con teléfono {phone}{extra_ruc_txt}.")
 
         if not cliente and cliente_nombre:
-            cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
-            if not cliente:
-                try:
-                    cliente = Cliente.query.filter(func.similarity(Cliente.nombre, cliente_nombre) > 0.3).order_by(func.similarity(Cliente.nombre, cliente_nombre).desc()).first()
-                    if cliente:
-                        warnings.append(f"No se encontró cliente '{cliente_nombre}', se asumió '{cliente.nombre}'.")
-                except Exception:
-                    pass
+            cliente = buscar_cliente_db(nombre=cliente_nombre)
+            if cliente and cliente.nombre.lower() != cliente_nombre.lower():
+                warnings.append(f"No se encontró cliente exacto '{cliente_nombre}', se asumió '{cliente.nombre}'.")
 
         if not cliente:
             warnings.append(f"⚠️ Cliente '{cliente_nombre}' no encontrado. Se asociará al Cliente Genérico.")
@@ -198,7 +194,7 @@ class VentaHandler:
         user.telegram_context = context_data
         db.session.commit()
 
-        items_txt = "\n".join([f"• {item['cantidad']}x {item['producto_nombre']} (S/ {item['precio_unitario']:.2f})" for item in items_enriched])
+        items_txt = "\n".join([f"• {item['cantidad']}x {item['producto_nombre']} (a S/ {item['precio_unitario']:.2f} c/u) = S/ {item['subtotal']:.2f}" for item in items_enriched])
         pagos_txt = "\n".join([f"• S/ {p['monto']:.2f} ({p['metodo_pago']})" for p in pagos]) if pagos else "• Al crédito"
         warnings_txt = "\n".join(warnings) if warnings else ""
 
@@ -283,10 +279,12 @@ class VentaHandler:
         db.session.commit()
 
         total_venta = Decimal(str(context["total"]))
+        items_detail = "\n".join([f"  • {item['cantidad']}x {item['producto_nombre']} (a S/ {item['precio_unitario']:.2f} c/u) = S/ {item['subtotal']:.2f}" for item in context.get("items", [])])
+        
         if estado == 'pedido':
-            telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Pedido registrado con éxito!</b>\n\n<b>Pedido ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Total Estimado:</b> S/ {total_venta:.2f}\n<b>Pagado/Abono:</b> S/ {monto_pago:.2f}")
+            telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Pedido registrado con éxito!</b>\n\n<b>Pedido ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Productos:</b>\n{items_detail}\n\n<b>Total Estimado:</b> S/ {total_venta:.2f}\n<b>Pagado/Abono:</b> S/ {monto_pago:.2f}")
         else:
-            telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {monto_pago:.2f}")
+            telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Productos:</b>\n{items_detail}\n\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {monto_pago:.2f}")
 
     @staticmethod
     def prepare_cliente(chat_id, user, args):
@@ -368,7 +366,7 @@ class VentaHandler:
         total_lote = Decimal("0")
         
         # Almacén por defecto
-        user_almacen_id, user_almacen_nombre = resolver_almacen_fn(user, original_text)
+        user_almacen_id, user_almacen_nombre, is_almacen_explicit = resolver_almacen_fn(user, original_text)
 
         for v in ventas_raw:
             cliente_nombre = v.get("cliente_nombre")
@@ -377,12 +375,14 @@ class VentaHandler:
                 continue
 
             # Buscar Cliente
-            cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
+            cliente = buscar_cliente_db(nombre=cliente_nombre)
+            if cliente and cliente.nombre.lower() != cliente_nombre.lower():
+                warnings.append(f"No se encontró cliente exacto '{cliente_nombre}', se asumió '{cliente.nombre}' para lote.")
             
             # Resolver Almacén
             almacen_id = user_almacen_id
             almacen_nombre = user_almacen_nombre
-            if cliente and cliente.almacen_preferido_id:
+            if not is_almacen_explicit and cliente and cliente.almacen_preferido_id:
                 almacen_preferido = Almacen.query.get(cliente.almacen_preferido_id)
                 if almacen_preferido:
                     almacen_id = almacen_preferido.id
@@ -461,8 +461,8 @@ class VentaHandler:
         # Construir tarjeta resumen
         resumen_txt = []
         for i, ev in enumerate(enriched_ventas, 1):
-            items_desc = ", ".join(f"{it['cantidad']}x {it['presentacion_nombre']}" for it in ev["items"])
-            resumen_txt.append(f"{i}. <b>{ev['cliente_nombre']}</b> ({ev['almacen_nombre']}): {items_desc} - S/ {ev['total']:.2f}")
+            items_desc = ", ".join(f"{it['cantidad']}x {it['presentacion_nombre']} (a S/ {it['precio_unitario']:.2f} c/u)" for it in ev["items"])
+            resumen_txt.append(f"{i}. <b>{ev['cliente_nombre']}</b> ({ev['almacen_nombre']}): {items_desc} = S/ {ev['total']:.2f}")
 
         resumen_str = "\n".join(resumen_txt)
         warnings_txt = "\n".join(warnings) if warnings else ""
@@ -550,10 +550,11 @@ class VentaHandler:
                 monto_pago=Decimal("0"),
                 metodo_pago="efectivo",
                 monto_gasto=Decimal("0"),
-                permitir_stock_negativo=True
+                permitir_stock_negativo=False
             )
 
-            ventas_registradas.append(f"• Venta #{nueva_venta.id} a <b>{cliente_nombre}</b> por S/ {total:.2f}")
+            items_desc = ", ".join(f"{it['cantidad']}x {it.get('presentacion_nombre', 'item')} (a S/ {float(it.get('precio_unitario', 0)):.2f} c/u)" for it in items)
+            ventas_registradas.append(f"• Venta #{nueva_venta.id} a <b>{cliente_nombre}</b>:\n  {items_desc} = S/ {total:.2f}")
 
         db.session.commit()
 

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 
 from extensions import db
-from models import Users, Almacen, PresentacionProducto
+from models import Users, Almacen, PresentacionProducto, Cliente
 from services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
@@ -15,16 +15,16 @@ def resolver_almacen(user, text):
         almacenes = Almacen.query.all()
         for al in almacenes:
             if al.nombre.lower() in text.lower():
-                return al.id, al.nombre
+                return al.id, al.nombre, True
         if user.almacen_id:
             al = db.session.get(Almacen, user.almacen_id)
-            return user.almacen_id, al.nombre if al else "Desconocido"
-        return None, None
+            return user.almacen_id, al.nombre if al else "Desconocido", False
+        return None, None, False
     else:
         if user.almacen_id:
             al = db.session.get(Almacen, user.almacen_id)
-            return user.almacen_id, al.nombre if al else "Desconocido"
-        return None, None
+            return user.almacen_id, al.nombre if al else "Desconocido", False
+        return None, None, False
 
 import difflib
 
@@ -163,3 +163,43 @@ def intentar_vinculacion(chat_id, text):
         f"Ya puedes empezar a registrar operaciones usando lenguaje natural."
     )
     return True
+
+def buscar_cliente_db(nombre: str, telefono: str = None, ruc: str = None):
+    """
+    Busca un cliente por teléfono, ruc, o realiza una búsqueda semántica por nombre.
+    Retorna el cliente encontrado o None.
+    """
+    if not nombre and not telefono and not ruc:
+        return None
+
+    if telefono:
+        cli = Cliente.query.filter_by(telefono=telefono).first()
+        if cli:
+            return cli
+
+    if ruc:
+        cli = Cliente.query.filter_by(ruc=ruc).first()
+        if cli:
+            return cli
+            
+    if nombre:
+        # Búsqueda exacta case-insensitive
+        cli = Cliente.query.filter(Cliente.nombre.ilike(f"{nombre.strip()}")).first()
+        if cli:
+            return cli
+            
+        # Búsqueda parcial (contiene)
+        cli = Cliente.query.filter(Cliente.nombre.ilike(f"%{nombre.strip()}%")).first()
+        if cli:
+            return cli
+
+        # Búsqueda por similitud léxica (Postgres pg_trgm)
+        try:
+            cli = Cliente.query.filter(func.similarity(Cliente.nombre, nombre) > 0.3).order_by(func.similarity(Cliente.nombre, nombre).desc()).first()
+            if cli:
+                return cli
+        except Exception as e:
+            logger.warning(f"Error en búsqueda por similitud de cliente '{nombre}': {e}")
+            pass
+
+    return None

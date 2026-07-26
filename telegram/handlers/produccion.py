@@ -32,7 +32,7 @@ class ProduccionHandler:
             almacen_id = planta.id
             almacen_nombre = planta.nombre
         else:
-            almacen_id, almacen_nombre = resolver_almacen_fn(user, original_text)
+            almacen_id, almacen_nombre, _ = resolver_almacen_fn(user, original_text)
             
         if not almacen_id:
             telegram_service.send_message(chat_id, "❌ Error: No se pudo determinar el almacén de producción ('Planta').")

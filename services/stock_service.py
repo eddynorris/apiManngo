@@ -13,11 +13,13 @@ class ConsumoLote:
     cantidad: Decimal
 
 class StockInsuficienteError(ValueError):
-    def __init__(self, presentacion_id: int, requerido: Decimal, disponible: Decimal):
+    def __init__(self, presentacion_id: int, requerido: Decimal, disponible: Decimal, presentacion_nombre: str = None):
         self.presentacion_id = presentacion_id
         self.requerido = requerido
         self.disponible = disponible
-        super().__init__(f"Stock insuficiente para presentación ID {presentacion_id}. Requerido: {requerido}, Disponible: {disponible}")
+        self.presentacion_nombre = presentacion_nombre
+        nombre_str = presentacion_nombre if presentacion_nombre else f"ID {presentacion_id}"
+        super().__init__(f"Stock insuficiente para '{nombre_str}'. Requerido: {requerido}, Disponible: {disponible}")
 
 class StockService:
     @staticmethod

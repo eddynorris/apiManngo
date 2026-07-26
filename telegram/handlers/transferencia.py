@@ -24,7 +24,7 @@ class TransferenciaHandler:
         if origen_nombre:
             almacen_origen = Almacen.query.filter(Almacen.nombre.ilike(f"%{origen_nombre}%")).first()
         else:
-            almacen_origen_id, _ = resolver_almacen_fn(user, original_text)
+            almacen_origen_id, _, _ = resolver_almacen_fn(user, original_text)
             almacen_origen = Almacen.query.get(almacen_origen_id) if almacen_origen_id else None
 
         if not almacen_origen:

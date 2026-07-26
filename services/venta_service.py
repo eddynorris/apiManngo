@@ -72,8 +72,11 @@ class VentaService:
                     raise ValueError(f"No se encontró inventario para presentación ID {presentacion_id} en este almacén.")
 
                 if stock_total < cantidad_solicitada and not permitir_stock_negativo:
-                    nombre = invs_disponibles[0].presentacion.nombre if invs_disponibles else str(presentacion_id)
-                    raise StockInsuficienteError(presentacion_id, cantidad_solicitada, stock_total)
+                    nombre = invs_disponibles[0].presentacion.nombre if invs_disponibles else None
+                    if not nombre:
+                        pres = db.session.get(PresentacionProducto, presentacion_id)
+                        nombre = pres.nombre if pres else str(presentacion_id)
+                    raise StockInsuficienteError(presentacion_id, cantidad_solicitada, stock_total, presentacion_nombre=nombre)
 
                 # Precio por unidad
                 pres = db.session.get(PresentacionProducto, presentacion_id)

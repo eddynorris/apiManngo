@@ -74,16 +74,15 @@ def run_tests():
             db.session.rollback()
             print(f"Nota limpieza updates/users: {e}")
 
-        # Lista simple para registrar los elementos creados explícitamente para las pruebas y eliminarlos al final
-        created_test_ids = {
-            "ventas": [],
-            "lotes": [],
-            "clientes": [],
-            "almacenes": [],
-            "gastos": [],
-            "pagos": [],
-            "movimientos": []
-        }
+        # Registrar los IDs existentes antes de la prueba para eliminar todo lo creado durante el test
+        initial_venta_ids = set(v.id for v in Venta.query.all())
+        initial_pago_ids = set(p.id for p in Pago.query.all())
+        initial_gasto_ids = set(g.id for g in Gasto.query.all())
+        initial_movimiento_ids = set(m.id for m in Movimiento.query.all())
+        initial_lote_ids = set(l.id for l in Lote.query.all())
+        initial_inventario_ids = set(i.id for i in Inventario.query.all())
+        initial_cliente_ids = set(c.id for c in Cliente.query.all())
+        initial_almacen_ids = set(a.id for a in Almacen.query.all())
 
         # 1. Asegurar que exista al menos un usuario en la BD para probar
         user = Users.query.first()
@@ -1174,22 +1173,48 @@ def run_tests():
             try:
                 db.session.rollback()
 
-                # Eliminar elementos registrados en created_test_ids
-                for entity_key, model_cls in [
-                    ("movimientos", Movimiento),
-                    ("pagos", Pago),
-                    ("gastos", Gasto),
-                    ("ventas", Venta),
-                    ("inventarios", Inventario),
-                    ("lotes", Lote),
-                    ("clientes", Cliente),
-                    ("almacenes", Almacen)
-                ]:
-                    ids = created_test_ids.get(entity_key, [])
-                    if ids:
-                        model_cls.query.filter(model_cls.id.in_(ids)).delete(synchronize_session=False)
+                # 1. Movimientos creados durante las pruebas
+                movs_del = [m.id for m in Movimiento.query.all() if m.id not in initial_movimiento_ids]
+                if movs_del:
+                    Movimiento.query.filter(Movimiento.id.in_(movs_del)).delete(synchronize_session=False)
 
-                # Restaurar datos del usuario de pruebas
+                # 2. Pagos y Gastos creados durante las pruebas
+                pagos_del = [p.id for p in Pago.query.all() if p.id not in initial_pago_ids]
+                if pagos_del:
+                    Pago.query.filter(Pago.id.in_(pagos_del)).delete(synchronize_session=False)
+
+                gastos_del = [g.id for g in Gasto.query.all() if g.id not in initial_gasto_ids]
+                if gastos_del:
+                    Gasto.query.filter(Gasto.id.in_(gastos_del)).delete(synchronize_session=False)
+
+                # 3. Ventas creadas durante las pruebas (eliminación completa incluyendo cascade)
+                ventas_del = [v.id for v in Venta.query.all() if v.id not in initial_venta_ids]
+                if ventas_del:
+                    for v_id in ventas_del:
+                        v = db.session.get(Venta, v_id)
+                        if v:
+                            db.session.delete(v)
+                    db.session.flush()
+
+                # 4. Inventarios y Lotes creados durante las pruebas
+                invs_del = [i.id for i in Inventario.query.all() if i.id not in initial_inventario_ids]
+                if invs_del:
+                    Inventario.query.filter(Inventario.id.in_(invs_del)).delete(synchronize_session=False)
+
+                lotes_del = [l.id for l in Lote.query.all() if l.id not in initial_lote_ids]
+                if lotes_del:
+                    Lote.query.filter(Lote.id.in_(lotes_del)).delete(synchronize_session=False)
+
+                # 5. Clientes y Almacenes creados durante las pruebas
+                clis_del = [c.id for c in Cliente.query.all() if c.id not in initial_cliente_ids]
+                if clis_del:
+                    Cliente.query.filter(Cliente.id.in_(clis_del)).delete(synchronize_session=False)
+
+                alms_del = [a.id for a in Almacen.query.all() if a.id not in initial_almacen_ids]
+                if alms_del:
+                    Almacen.query.filter(Almacen.id.in_(alms_del)).delete(synchronize_session=False)
+
+                # 6. Restaurar datos del usuario de pruebas
                 if user:
                     user.telegram_chat_id = orig_chat_id
                     user.telegram_context = orig_context
@@ -1198,7 +1223,7 @@ def run_tests():
                     user.almacen_id = orig_almacen_id
 
                 db.session.commit()
-                print("[OK] Limpieza completada: todos los datos creados por el test fueron eliminados.")
+                print(f"[OK] Limpieza completada: {len(ventas_del)} ventas de prueba y registros creados fueron eliminados.")
             except Exception as clean_err:
                 db.session.rollback()
                 print(f"Error durante la limpieza: {clean_err}")

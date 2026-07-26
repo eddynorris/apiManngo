@@ -151,7 +151,7 @@ class PagoHandler:
             telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar la descripción o el monto de los gastos.")
             return
 
-        almacen_id, almacen_nombre = resolver_almacen_fn(user, original_text)
+        almacen_id, almacen_nombre, _ = resolver_almacen_fn(user, original_text)
         if not almacen_id:
             telegram_service.send_message(chat_id, "❌ Error: Especifica el almacén en tu mensaje ya que no tienes uno por defecto asignado.")
             return
@@ -338,7 +338,7 @@ class PagoHandler:
             almacen_id = planta.id
             almacen_nombre = planta.nombre
         else:
-            almacen_id, almacen_nombre = resolver_almacen_fn(user, original_text)
+            almacen_id, almacen_nombre, _ = resolver_almacen_fn(user, original_text)
             
         if not almacen_id:
             telegram_service.send_message(chat_id, "❌ Error: No se pudo determinar el almacén de producción ('Planta').")

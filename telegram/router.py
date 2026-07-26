@@ -9,7 +9,7 @@ from models import Users
 from services.gemini_service import gemini_service
 from services.telegram_service import telegram_service
 
-from telegram.resolvers import resolver_almacen, buscar_presentacion, intentar_vinculacion
+from telegram.resolvers import resolver_almacen, buscar_presentacion, intentar_vinculacion, buscar_cliente_db
 from telegram.context import set_user_context, clear_user_context, update_user_history
 from telegram.handlers.venta import VentaHandler
 from telegram.handlers.pago import PagoHandler
@@ -158,6 +158,16 @@ class TelegramRouter:
             if not context:
                 telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta operación expiró o ya fue procesada.</i>")
                 return
+            
+            if context.get("status") == "processing":
+                return # Ignorar doble click
+
+            context["status"] = "processing"
+            user.telegram_context = context
+            db.session.commit()
+            
+            # Cambiar a estado de carga para dar feedback visual
+            telegram_service.edit_message(chat_id, message_id, "⏳ <i>Procesando operación... Por favor espera.</i>")
 
             action = context.get("action")
             try:
@@ -187,5 +197,6 @@ class TelegramRouter:
                 clear_user_context(user)
             except Exception as e:
                 db.session.rollback()
+                clear_user_context(user)
                 friendly_msg = format_user_friendly_error(e)
                 telegram_service.edit_message(chat_id, message_id, friendly_msg)
