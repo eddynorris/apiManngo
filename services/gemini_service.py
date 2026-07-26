@@ -20,7 +20,7 @@ def _to_native(obj):
 
 
 class GeminiService:
-    MODEL_NAME = "gemini-2.0-flash"
+    MODEL_NAME = "gemini-flash-lite-latest"
     MAX_INPUT_LENGTH = 2000
     REQUEST_TIMEOUT_S = 20          # evita requests colgados indefinidamente
     MAX_HISTORY_TURNS = 12          # ~6 intercambios user/model, evita crecimiento ilimitado de tokens
