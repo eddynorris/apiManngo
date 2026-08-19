@@ -1,6 +1,6 @@
-# Project Context & AI Guidelines: apiFlaskManngo
+# Project Context & AI Guidelines: apiFlaskManngo (AGENTS.md)
 
-Este documento es la referencia canónica y exhaustiva del backend **apiFlaskManngo**. Ha sido diseñado para que cualquier modelo de Inteligencia Artificial o desarrollador comprenda a profundidad la arquitectura, reglas de negocio, modelos de datos, endpoints, convenciones y flujos operativos del sistema.
+Este documento es la referencia canónica y exhaustiva del backend **apiFlaskManngo**. Ha sido diseñado para que cualquier agente de Inteligencia Artificial (Claude, Gemini, GPT, DeepSeek, Cursor, Trae, Roo, etc.) o desarrollador comprenda a profundidad la arquitectura, reglas de negocio, modelos de datos, endpoints, convenciones y flujos operativos del sistema.
 
 ---
 
@@ -236,48 +236,6 @@ El sistema utiliza archivos `.env` según el entorno de ejecución:
 | `.env.production` | `production` | Despliegue en producción con PostgreSQL (Supabase/RDS), S3, CORS estricto |
 | `.env.example` | Plantilla | Documentación de todas las variables requeridas |
 
-### Variables de Entorno Clave
-```env
-# Flask
-FLASK_APP=app.py
-FLASK_ENV=development  # development | production | testing
-FLASK_DEBUG=1          # Desactivado (0) en producción (SEG-07)
-PORT=5000
-
-# Base de datos & Pooling
-DATABASE_URL=postgresql://user:password@host:5432/manngo_db
-DB_POOL_SIZE=5
-DB_MAX_OVERFLOW=10
-DB_POOL_RECYCLE=300
-
-# Seguridad JWT & CORS
-JWT_SECRET_KEY=clave_secreta_minimo_32_caracteres
-JWT_EXPIRES_SECONDS=43200
-ALLOWED_ORIGINS=http://localhost:5173,https://app.manngo.pe
-
-# Almacenamiento AWS S3
-S3_BUCKET=manngo-bucket
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=tu_access_key
-AWS_SECRET_ACCESS_KEY=tu_secret_key
-
-# Integración Telegram
-TELEGRAM_BOT_TOKEN=tu_bot_token
-TELEGRAM_BOT_SECRET_TOKEN=tu_secret_token_header
-TELEGRAM_WEBHOOK_SECRET=token_para_la_url_del_webhook
-
-# IA Google Gemini
-GOOGLE_API_KEY=tu_google_gemini_api_key
-
-# Integración SUNAT (Guías de Remisión)
-MANNGO_ID_SUNAT=tu_client_id_sunat
-MANNGO_CLAVE_SUNAT=tu_client_secret_sunat
-SUNAT_RUC=20XXXXXXXXX
-SUNAT_USUARIO_SOL=MODDATOS
-SUNAT_CLAVE_SOL=MODDATOS
-SUNAT_AMBIENTE=beta # beta | produccion
-```
-
 ---
 
 ## 8. Comandos de Desarrollo y Operación
@@ -307,9 +265,6 @@ gunicorn --bind 0.0.0.0:8080 app:app --workers 4 --threads 2
 
 ### Migraciones de Base de Datos
 ```bash
-# Inicializar migraciones (si no existe carpeta)
-flask db init
-
 # Generar nueva migración tras modificar models.py
 flask db migrate -m "Descripcion del cambio"
 
@@ -327,22 +282,4 @@ pytest
 
 # Ejecutar tests con reporte detallado
 pytest -v -s
-
-# Ejecutar un módulo específico de tests
-pytest tests/test_compra_insumo_resource.py
-```
-
-### Comandos Personalizados de CLI
-```bash
-# Sincronizar esquemas o buckets de Supabase
-flask sync-supabase
-```
-
-### Despliegue con Docker
-```bash
-# Construir imagen Docker
-docker build -t api-manngo .
-
-# Ejecutar contenedor
-docker run -p 8080:8080 --env-file .env.production api-manngo
 ```

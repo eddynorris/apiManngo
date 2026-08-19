@@ -18,7 +18,7 @@ from .producto_resource import ProductoResource
 from .proveedor_resource import ProveedorResource
 from .receta_resource import RecetaResource
 from .reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource, ReporteUnificadoResource, DepositosHistorialResource
-from .reporte_produccion_resource import ReporteProduccionBriquetasResource, ReporteProduccionGeneralResource
+from .reporte_produccion_resource import ReporteProduccionBriquetasResource, ReporteProduccionGeneralResource, ReporteProduccionEntradasResource
 from .user_resource import UserResource
 from .venta_resource import VentaResource, VentaFormDataResource, VentaExportResource, VentaFilterDataResource
 from .ventadetalle_resource import VentaDetalleResource
@@ -145,6 +145,7 @@ def init_resources(api, limiter=None):
     api.add_resource(DepositosHistorialResource, '/reportes/depositos-historial')
     api.add_resource(ReporteProduccionBriquetasResource, '/reportes/produccion-briquetas')
     api.add_resource(ReporteProduccionGeneralResource, '/reportes/produccion-general')
+    api.add_resource(ReporteProduccionEntradasResource, '/reportes/produccion-entradas', '/reportes/movimientos-entrada')
     
     # Chat
     api.add_resource(ChatResource, '/chat')

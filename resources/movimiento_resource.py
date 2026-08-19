@@ -55,20 +55,16 @@ class MovimientoResource(Resource):
         fecha_fin = request.args.get('fecha_fin')
         if fecha_inicio:
             try:
-                from utils.date_parser import parse_telegram_date
-                fecha_inicio_dt = parse_telegram_date(fecha_inicio)
+                fecha_inicio_dt = datetime.strptime(fecha_inicio.strip(), "%Y-%m-%d")
                 query = query.filter(Movimiento.fecha >= fecha_inicio_dt)
-            except ValueError:
+            except (ValueError, TypeError):
                 return {"error": "Formato de fecha_inicio inválido. Use YYYY-MM-DD."}, 400
         if fecha_fin:
             try:
-                from utils.date_parser import parse_telegram_date
-                fecha_fin_dt = parse_telegram_date(fecha_fin)
-                # Para incluir todo el día, sumamos un día y filtramos menor a esa fecha
                 from datetime import timedelta
-                fecha_fin_dt = fecha_fin_dt + timedelta(days=1)
+                fecha_fin_dt = datetime.strptime(fecha_fin.strip(), "%Y-%m-%d") + timedelta(days=1)
                 query = query.filter(Movimiento.fecha < fecha_fin_dt)
-            except ValueError:
+            except (ValueError, TypeError):
                 return {"error": "Formato de fecha_fin inválido. Use YYYY-MM-DD."}, 400
 
         # Ordenar por fecha descendente (historial lógico óptimo)

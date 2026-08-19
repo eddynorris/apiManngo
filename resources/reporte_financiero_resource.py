@@ -354,13 +354,14 @@ class DepositosHistorialResource(Resource):
         # 3. Aplicar Filtro de Fechas (Si el front las envía)
         if fecha_inicio_str and fecha_fin_str:
             try:
-                from utils.date_parser import parse_telegram_date_only
-                fecha_inicio = parse_telegram_date_only(fecha_inicio_str)
-                fecha_fin = parse_telegram_date_only(fecha_fin_str)
+                fecha_inicio = datetime.strptime(fecha_inicio_str.strip(), "%Y-%m-%d").date()
+                fecha_fin = datetime.strptime(fecha_fin_str.strip(), "%Y-%m-%d").date()
+                if fecha_inicio > fecha_fin:
+                    return {'error': 'La fecha de inicio no puede ser mayor a la fecha fin.'}, 400
                 
                 # Filtrar por rango de fecha de depósito
                 query = query.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))
-            except ValueError:
+            except (ValueError, TypeError):
                 return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
 
         query = query.group_by(
