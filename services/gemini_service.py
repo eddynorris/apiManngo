@@ -1,10 +1,12 @@
-import google.generativeai as genai
-import os
 import json
 import logging
+import os
 import re
 import time
+
+import google.generativeai as genai
 from google.api_core.exceptions import GoogleAPICallError, RetryError
+
 from utils.date_utils import get_peru_now
 
 logger = logging.getLogger(__name__)

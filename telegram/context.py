@@ -1,4 +1,5 @@
 import logging
+
 from extensions import db
 
 logger = logging.getLogger(__name__)

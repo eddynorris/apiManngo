@@ -1,15 +1,15 @@
 # Core Flask dependencies
-Flask==2.3.2
-Flask-Cors==5.0.0
-Flask-JWT-Extended==4.5.2
-Flask-Limiter==3.1.0
+Flask==3.1.3
+Flask-Cors==6.0.5
+Flask-JWT-Extended==4.7.4
+Flask-Limiter==4.1.1
 flask-marshmallow==1.3.0
 Flask-Migrate==4.1.0
 Flask-RESTful==0.3.10
-Flask-SQLAlchemy==3.0.5
+Flask-SQLAlchemy==3.1.1
 flask-talisman==1.1.0
 flask-compress==1.17
-Werkzeug==2.3.6
+Werkzeug==3.1.9
 
 # Database
 SQLAlchemy==2.0.38
@@ -17,7 +17,7 @@ psycopg2-binary==2.9.10
 alembic==1.15.2
 
 # Serialization
-marshmallow==3.26.1
+marshmallow==3.26.2
 marshmallow-sqlalchemy==1.4.1
 
 # AWS and S3
@@ -25,10 +25,10 @@ boto3==1.37.37
 botocore==1.37.37
 
 # Image processing
-Pillow==11.3.0
+Pillow==13.0.0
 
 # Environment and configuration
-python-dotenv==1.0.1
+python-dotenv==1.2.4
 click==8.1.8
 
 # AI and Supabase (compatible versions)
@@ -36,25 +36,29 @@ google-generativeai==0.8.5
 supabase==2.17.0
 
 # Security and authentication
-PyJWT==2.10.1
-cryptography==44.0.2
+PyJWT==2.15.1
+cryptography==50.0.2
+
+# XML / SUNAT GRE preparation (structural only; not an emission validation)
+lxml==6.1.3
+signxml==5.2.0
 
 # Utilities
-requests==2.32.3
-PyYAML==6.0.1
-Jinja2==3.1.4
+requests==2.34.2
+PyYAML==6.0.3
+Jinja2==3.1.6
 MarkupSafe==3.0.2
 itsdangerous==2.2.0
 blinker==1.9.0
 packaging==24.2
-setuptools==75.6.0
+setuptools==84.2.1
 
 # Data export
 pandas>=2.2.3
-openpyxl==3.1.2
+openpyxl==3.1.5
 
 # Production server
-gunicorn==21.2.0
+gunicorn==26.2.0
 pytz==2025.1
 flasgger==0.9.7.1
 

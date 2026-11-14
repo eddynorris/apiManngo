@@ -1,49 +1,89 @@
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt
-from flask import request
-import json
-from models import Movimiento, Inventario, PresentacionProducto, Lote, Almacen, Receta, ComponenteReceta
-from extensions import db
-from common import handle_db_errors
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
-from sqlalchemy.orm import joinedload, selectinload
 import logging
 import uuid
+from decimal import Decimal, InvalidOperation
+
+from flask import request
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource
+from sqlalchemy.orm import selectinload
+from werkzeug.exceptions import BadRequest, HTTPException
+
+from common import handle_db_errors
+from extensions import db
+from models import (
+    ComponenteReceta,
+    Receta,
+)
+from services.authorization import autorizar_almacen, normalizar_ids
 from services.produccion_service import ProduccionService, ProduccionValidationError
 
 logger = logging.getLogger(__name__)
 
+
+def _id_estricto(valor, alias):
+    try:
+        return normalizar_ids({alias: valor})[alias]
+    except BadRequest as exc:
+        raise ValueError(f"{alias} inválido") from exc
+
+
+def _id_opcional(valor, alias):
+    if valor is None or valor == '':
+        return None
+    return _id_estricto(valor, alias)
+
+
+def _cantidad_positiva_finita(valor):
+    if valor is None or isinstance(valor, bool):
+        raise ValueError("cantidad inválida")
+    try:
+        cantidad = Decimal(str(valor))
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        raise ValueError("cantidad inválida") from exc
+    if not cantidad.is_finite() or cantidad <= 0:
+        raise ValueError("cantidad inválida")
+    return cantidad
 
 
 class ProduccionResource(Resource):
     @jwt_required()
     @handle_db_errors
     def post(self):
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return {"error": "Se requiere un cuerpo JSON para registrar la producción."}, 400
+
         required_fields = ["almacen_id", "presentacion_id", "cantidad_a_producir", "lotes_seleccionados"]
         for field in required_fields:
             if field not in data:
                 return {"error": f"Campo requerido: {field}"}, 400
 
         try:
-            almacen_id = int(str(data['almacen_id']))
-            presentacion_final_id = int(str(data['presentacion_id']))
-            cantidad_a_producir = Decimal(str(data['cantidad_a_producir']))
-            lote_destino_id = data.get('lote_destino_id')
-            if lote_destino_id is not None:
-                lote_destino_id = int(str(lote_destino_id))
-            if cantidad_a_producir <= 0:
-                return {"error": "La cantidad a producir debe ser mayor a cero."}, 400
+            almacen_id = _id_estricto(data.get('almacen_id'), 'almacen_id')
+            presentacion_final_id = _id_estricto(data.get('presentacion_id'), 'presentacion_id')
+            cantidad_a_producir = _cantidad_positiva_finita(data.get('cantidad_a_producir'))
+            lote_destino_id = _id_opcional(data.get('lote_destino_id'), 'lote_id')
+
+            lotes_seleccionados = data.get('lotes_seleccionados')
+            if not isinstance(lotes_seleccionados, list):
+                return {"error": "lotes_seleccionados debe ser una lista."}, 400
+
             lotes_seleccionados_clean = []
-            for item in data['lotes_seleccionados']:
+            for item in lotes_seleccionados:
+                if not isinstance(item, dict):
+                    raise ValueError("lote seleccionado inválido")
                 lotes_seleccionados_clean.append({
-                    'componente_presentacion_id': int(str(item['componente_presentacion_id'])),
-                    'lote_id': int(str(item['lote_id']))
+                    'componente_presentacion_id': _id_estricto(
+                        item.get('componente_presentacion_id'), 'presentacion_id'
+                    ),
+                    'lote_id': _id_estricto(item.get('lote_id'), 'lote_id')
                 })
         except (ValueError, TypeError, InvalidOperation) as e:
             logger.error(f"Error de formato en ProduccionResource: {e}", exc_info=True)
-            return {"error": "Formato de datos inválido. Asegúrese de que todos los IDs y cantidades sean números válidos."}, 400
+            return {"error": "Formato de datos inválido. Asegúrese de que todos los IDs y cantidades sean válidos."}, 400
+
+        # Autorizar el almacén de producción antes de consultar receta, bloquear o mutar.
+        actor = autorizar_almacen(get_jwt().get('sub'), almacen_id)
 
         receta = Receta.query.options(
             selectinload(Receta.componentes).joinedload(ComponenteReceta.componente_presentacion)
@@ -91,12 +131,14 @@ class ProduccionResource(Resource):
             "salidas": salidas
         }
 
-        claims = get_jwt()
-        usuario_id = claims.get('sub')
+        usuario_id = actor.id
         try:
             res = ProduccionService.ejecutar_ensamblaje(usuario_id, ensamblaje_payload)
             db.session.commit()
             return res, 201
+        except HTTPException:
+            db.session.rollback()
+            raise
         except ProduccionValidationError as e:
             db.session.rollback()
             return {"error": str(e)}, 400
@@ -118,6 +160,9 @@ class ProduccionEnsamblajeResource(Resource):
             res = ProduccionService.ejecutar_ensamblaje(usuario_id, data)
             db.session.commit()
             return res, 201
+        except HTTPException:
+            db.session.rollback()
+            raise
         except ProduccionValidationError as e:
             db.session.rollback()
             return {"error": str(e)}, 400

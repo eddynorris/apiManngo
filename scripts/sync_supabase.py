@@ -1,15 +1,28 @@
-import os
 import time
+
 import click
+import google.generativeai as genai
 from flask.cli import with_appcontext
+from sqlalchemy.orm import joinedload
+
 from extensions import db, supabase
 from models import (
-    Venta, Cliente, Producto, VentaDetalle, Gasto, Pago, Movimiento, 
-    Inventario, Lote, Merma, Proveedor, Pedido, PedidoDetalle, 
-    PresentacionProducto, Almacen, Users
+    Almacen,
+    Cliente,
+    Gasto,
+    Inventario,
+    Lote,
+    Merma,
+    Movimiento,
+    Pago,
+    Pedido,
+    PedidoDetalle,
+    PresentacionProducto,
+    Producto,
+    Proveedor,
+    Venta,
+    VentaDetalle,
 )
-import google.generativeai as genai
-from sqlalchemy.orm import joinedload
 
 # Configuración del modelo de embedding (debe ser la misma que en chat_resource.py)
 EMBEDDING_MODEL = "models/text-embedding-004"
@@ -251,14 +264,14 @@ def sync_supabase_command(models):
             continue
 
         print(f"--- Sincronizando modelo: {model_name} ---")
-        
+
         config = MODEL_FORMATTERS[model_name]
         query = db.session.query(config['model'])
         if config['options']:
             query = query.options(*config['options'])
-        
+
         records = query.all()
-        
+
         documents_to_upsert = []
         for i, record in enumerate(records):
             # Añadir un pequeño retardo para evitar la limitación de velocidad de la API de embedding
@@ -268,7 +281,7 @@ def sync_supabase_command(models):
 
             content = config['formatter'](record)
             embedding = get_embedding(content)
-            
+
             if content and embedding:
                 documents_to_upsert.append({
                     'content': content,

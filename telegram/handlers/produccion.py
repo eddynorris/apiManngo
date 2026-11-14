@@ -1,9 +1,15 @@
 import logging
+from datetime import UTC, datetime
 from decimal import Decimal
-from datetime import datetime, timezone
 
 from extensions import db
-from models import Almacen, PresentacionProducto, Inventario, Lote, Movimiento, Receta, ComponenteReceta
+from models import (
+    Almacen,
+    Inventario,
+    Lote,
+    Movimiento,
+    Receta,
+)
 from services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
@@ -12,14 +18,14 @@ class ProduccionHandler:
     @staticmethod
     def prepare_produccion(chat_id, user, args, original_text, resolver_almacen_fn, buscar_presentacion_fn):
         producciones_raw = args.get("producciones")
-        
+
         # Fallback si es unitario
         if not producciones_raw:
             prod_name = args.get("producto_nombre")
             cant = args.get("cantidad_a_producir")
             if prod_name and cant:
                 producciones_raw = [{"producto_nombre": prod_name, "cantidad_a_producir": cant}]
-                
+
         if not producciones_raw:
             telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar el producto o la cantidad a producir.")
             return
@@ -27,13 +33,13 @@ class ProduccionHandler:
         planta = Almacen.query.filter_by(es_planta=True).first()
         if not planta:
             planta = Almacen.query.filter(Almacen.nombre.ilike("%planta%")).first()
-            
+
         if planta:
             almacen_id = planta.id
             almacen_nombre = planta.nombre
         else:
             almacen_id, almacen_nombre, _ = resolver_almacen_fn(user, original_text)
-            
+
         if not almacen_id:
             telegram_service.send_message(chat_id, "❌ Error: No se pudo determinar el almacén de producción ('Planta').")
             return
@@ -45,7 +51,7 @@ class ProduccionHandler:
         for p_item in producciones_raw:
             producto_nombre = p_item.get("producto_nombre")
             cantidad_a_producir = Decimal(str(p_item.get("cantidad_a_producir", 0)))
-            
+
             if cantidad_a_producir <= 0 or not producto_nombre:
                 continue
 
@@ -62,17 +68,17 @@ class ProduccionHandler:
             lotes_seleccionados = []
             inherited_lote_desc = "Ninguno"
             inherited_lote_id = None
-            
+
             for componente in receta.componentes:
                 cantidad_req = Decimal(str(componente.cantidad_necesaria)) * cantidad_a_producir
-                
+
                 if componente.tipo_consumo == 'materia_prima':
                     lotes_disponibles = Lote.query.filter(
                         Lote.producto_id == componente.componente_presentacion.producto_id,
                         Lote.cantidad_disponible_kg > 0,
                         Lote.is_active == True
                     ).order_by(Lote.created_at.desc()).all()
-                    
+
                     cantidad_acumulada = Decimal("0")
                     for lote in lotes_disponibles:
                         lote_disponible = Decimal(str(lote.cantidad_disponible_kg))
@@ -81,26 +87,26 @@ class ProduccionHandler:
                             "lote_id": lote.id,
                             "cantidad_req_kg": float(cantidad_req)
                         })
-                        
+
                         if inherited_lote_id is None:
                             inherited_lote_id = lote.id
                             inherited_lote_desc = lote.descripcion or lote.codigo_lote or f"Lote #{lote.id}"
-                            
+
                         cantidad_acumulada += lote_disponible
                         detalles_consumo.append(f"• Consumir de '{componente.componente_presentacion.nombre}': Lote '{lote.descripcion or lote.codigo_lote or lote.id}' (Disp: {lote_disponible}kg)")
                         if cantidad_acumulada >= cantidad_req:
                             break
-                            
+
                     if cantidad_acumulada < cantidad_req:
                         warnings.append(f"⚠️ Stock de materia prima '{componente.componente_presentacion.nombre}' es insuficiente. Req: {cantidad_req}kg, Disp: {cantidad_acumulada}kg.")
-                
+
                 elif componente.tipo_consumo == 'insumo':
                     invs_insumo = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=componente.componente_presentacion_id).all()
                     insumo_disponible = sum(Decimal(str(i.cantidad)) for i in invs_insumo) if invs_insumo else Decimal("0")
                     detalles_consumo.append(f"• Consumir insumo '{componente.componente_presentacion.nombre}': {cantidad_req} unidades (Disp: {insumo_disponible})")
                     if insumo_disponible < cantidad_req:
                         warnings.append(f"⚠️ Stock de insumo '{componente.componente_presentacion.nombre}' es insuficiente. Req: {cantidad_req}, Disp: {insumo_disponible}.")
-            
+
             producciones_enriched.append({
                 "presentacion_id": presentacion.id,
                 "presentacion_nombre": presentacion.nombre,
@@ -148,7 +154,7 @@ class ProduccionHandler:
     @staticmethod
     def execute_produccion(chat_id, user, context, message_id):
         producciones_list = context.get("producciones")
-        
+
         if not producciones_list:
             producciones_list = [{
                 "presentacion_id": context["presentacion_id"],
@@ -161,10 +167,10 @@ class ProduccionHandler:
 
         almacen_id = context.get("almacen_id", user.almacen_id)
         almacen_nombre = context.get("almacen_nombre", "Desconocido")
-        fecha_operacion = datetime.now(timezone.utc)
-        
+        fecha_operacion = datetime.now(UTC)
+
         fabricados = []
-        
+
         for p in producciones_list:
             final_id = p["presentacion_id"]
             cant = Decimal(str(p["cantidad_a_producir"]))
@@ -183,7 +189,7 @@ class ProduccionHandler:
                 componente_pres_id = item["componente_presentacion_id"]
                 lote_id = item["lote_id"]
                 cantidad_req_kg = Decimal(str(item.get("cantidad_req_kg", 0)))
-                
+
                 if cantidad_req_kg <= 0:
                     comp = next(c for c in receta.componentes if c.componente_presentacion_id == componente_pres_id)
                     cantidad_req_kg = comp.cantidad_necesaria * cant
@@ -252,7 +258,7 @@ class ProduccionHandler:
                 usuario_id=user.id,
                 tipo_operacion='ensamblaje'
             ))
-            
+
             fabricados.append(f"• {cant}x {p['presentacion_nombre']} (Asociado a lote '{lote_dest_desc}')")
 
         db.session.commit()

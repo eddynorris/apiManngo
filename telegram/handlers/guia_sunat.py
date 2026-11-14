@@ -1,13 +1,13 @@
+import logging
 import os
 import time
-import logging
+from datetime import UTC, datetime
 from decimal import Decimal
-from datetime import datetime, timezone
 
 from extensions import db
-from models import Cliente, Almacen
-from services.telegram_service import telegram_service
+from models import Almacen, Cliente
 from services.sunat_service import sunat_service
+from services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class GuiaSunatHandler:
         for item in items_raw:
             prod_name = item.get("producto_nombre")
             cant = Decimal(str(item.get("cantidad", 1)))
-            
+
             presentacion = buscar_presentacion_fn(prod_name, ['procesado', 'briqueta'])
             if not presentacion:
                 warnings.append(f"⚠️ No se encontró la presentación '{prod_name}'. Se usará el nombre crudo.")
@@ -50,7 +50,7 @@ class GuiaSunatHandler:
         cliente = Cliente.query.filter_by(ruc=dest_doc).first()
         if not cliente:
             cliente = Cliente.query.filter(
-                (Cliente.telefono.ilike(f"%{dest_doc}%")) | 
+                (Cliente.telefono.ilike(f"%{dest_doc}%")) |
                 (Cliente.direccion.ilike(f"%{dest_doc}%"))
             ).first()
 
@@ -128,9 +128,9 @@ class GuiaSunatHandler:
         dest_doc = context["destinatario_documento"]
         dest_nombre = context["destinatario_nombre"]
         dir_llegada = context["direccion_llegada"]
-        ciudad_llegada = context["ciudad_llegada"]
+        _ciudad_llegada = context["ciudad_llegada"]  # exige la clave aunque no se use
         dir_partida = context["direccion_partida"]
-        ciudad_partida = context["ciudad_partida"]
+        _ciudad_partida = context["ciudad_partida"]  # exige la clave aunque no se use
         motivo = context["motivo_traslado"]
         placa = context["placa_vehiculo"]
         chofer_dni = context["conductor_documento"]
@@ -158,7 +158,7 @@ class GuiaSunatHandler:
         cod_motivo = motivo_map.get(motivo.lower(), "13")
 
         numero_correlativo = int(time.time()) % 1000000
-        fecha_emision = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fecha_emision = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         tipo_doc_dest = "6" if len(dest_doc) == 11 else "1"
         peso_bruto_total = sum(item["peso_total_kg"] for item in items)
 
@@ -214,27 +214,27 @@ class GuiaSunatHandler:
         }
 
         telegram_service.edit_message(chat_id, message_id, "📡 <i>Transmitiendo Guía de Remisión a la SUNAT...</i>")
-        
+
         try:
             res = sunat_service.emitir_guia_remision(payload)
             ticket = res.get("numTicket")
-            
+
             if ticket:
                 telegram_service.edit_message(chat_id, message_id, f"✅ <b>Guía enviada. Ticket:</b> {ticket}\n⏳ <i>Consultando estado en SUNAT...</i>")
-                
+
                 time.sleep(2)
-                
+
                 status_res = sunat_service.consultar_estado_ticket(ticket)
                 cod_estado = status_res.get("codRespuesta")
                 mensaje = status_res.get("desRespuesta", "Procesado")
-                
+
                 if cod_estado == "99":
                     err_msg = status_res.get("error", {}).get("desError", "Error desconocido")
                     raise RuntimeError(f"SUNAT rechazó la guía: {err_msg}")
                 elif cod_estado == "0" or "aceptada" in mensaje.lower() or "procesado" in mensaje.lower():
                     telegram_service.edit_message(
-                        chat_id, 
-                        message_id, 
+                        chat_id,
+                        message_id,
                         f"✅ <b>Guía de Remisión Emitida y Aceptada por SUNAT</b>\n\n"
                         f"<b>Nro de Guía:</b> T001-{numero_correlativo:08d}\n"
                         f"<b>Ticket:</b> {ticket}\n"
@@ -244,8 +244,8 @@ class GuiaSunatHandler:
                     )
                 else:
                     telegram_service.edit_message(
-                        chat_id, 
-                        message_id, 
+                        chat_id,
+                        message_id,
                         f"⏳ <b>Guía Enviada (Procesamiento Asíncrono)</b>\n\n"
                         f"<b>Nro de Guía:</b> T001-{numero_correlativo:08d}\n"
                         f"<b>Ticket:</b> {ticket}\n"

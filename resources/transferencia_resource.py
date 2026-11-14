@@ -1,22 +1,41 @@
 # ARCHIVO: resources/transferencia_resource.py
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from flask import request
 from flask_jwt_extended import get_jwt, jwt_required
 from flask_restful import Resource
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import HTTPException
 
 from common import handle_db_errors
 from extensions import db
 from models import Almacen, Inventario, Movimiento, PresentacionProducto
+
 # Imports agregados para el método GET
 from schemas import almacenes_schema
+from services.authorization import autorizar_almacen, normalizar_ids
 from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
+
+
+def _id_almacen_estricto(valor):
+    return normalizar_ids({'almacen_id': valor})['almacen_id']
+
+
+def _cantidad_positiva_finita(valor):
+    if valor is None or isinstance(valor, bool):
+        raise ValueError('la cantidad debe ser un número positivo')
+    try:
+        cantidad = Decimal(str(valor))
+    except (ValueError, TypeError, InvalidOperation):
+        raise ValueError('la cantidad debe ser un número positivo') from None
+    if not cantidad.is_finite() or cantidad <= 0:
+        raise ValueError('la cantidad debe ser un número positivo')
+    return cantidad
 
 
 # --- CAPA DE SERVICIO PARA LA LÓGICA DE NEGOCIO ---
@@ -29,7 +48,7 @@ class TransferenciaService:
         self.claims = get_jwt()
         self.usuario_id = self.claims.get('sub')
         self.id_operacion = str(uuid.uuid4())[:8]
-        self.fecha_operacion = datetime.now(timezone.utc)
+        self.fecha_operacion = datetime.now(UTC)
         self.transferencias_validadas = []
 
     def ejecutar_transferencia(self):
@@ -37,7 +56,7 @@ class TransferenciaService:
         Orquesta el proceso completo de validación y ejecución de la transferencia.
         """
         self._validar_y_preparar_datos()
-        
+
         # --- LOCK IN CONSISTENT ORDER TO PREVENT DEADLOCKS ---
         if self.almacen_origen_id < self.almacen_destino_id:
             inventarios_origen = self._obtener_inventarios(self.almacen_origen_id)
@@ -51,7 +70,7 @@ class TransferenciaService:
         transferencias_realizadas = self._actualizar_inventarios_y_crear_movimientos(
             inventarios_origen, inventarios_destino
         )
-        
+
         return {
             "mensaje": "Transferencia realizada con éxito",
             "id_operacion": self.id_operacion,
@@ -62,43 +81,59 @@ class TransferenciaService:
         }
 
     def _validar_y_preparar_datos(self):
-        """Valida el formato de la solicitud y prepara los datos iniciales."""
+        """Valida el formato, autoriza ambos extremos y prepara los datos iniciales."""
+        if not isinstance(self.data, dict):
+            raise ValueError("Se requiere un cuerpo JSON para la transferencia.")
         if 'transferencias' not in self.data or not isinstance(self.data['transferencias'], list):
             raise ValueError("El campo 'transferencias' debe ser una lista.")
-        
-        self.almacen_origen_id = self.data.get('almacen_origen_id')
-        self.almacen_destino_id = self.data.get('almacen_destino_id')
 
-        if not all([self.almacen_origen_id, self.almacen_destino_id]):
+        origen_raw = self.data.get('almacen_origen_id')
+        destino_raw = self.data.get('almacen_destino_id')
+        if origen_raw in (None, '') or destino_raw in (None, ''):
             raise ValueError("Los campos 'almacen_origen_id' y 'almacen_destino_id' son requeridos.")
-        
+
+        self.almacen_origen_id = _id_almacen_estricto(origen_raw)
+        self.almacen_destino_id = _id_almacen_estricto(destino_raw)
+
         if self.almacen_origen_id == self.almacen_destino_id:
             raise ValueError("El almacén de origen y destino no pueden ser el mismo.")
+
+        # Autorizar ambos extremos antes de consultar stock, bloquear o mutar.
+        # Un no-admin no puede cruzar almacenes; el admin vigente en BD sí.
+        actor = autorizar_almacen(self.usuario_id, self.almacen_origen_id)
+        autorizar_almacen(self.usuario_id, self.almacen_destino_id)
+        self.usuario_id = actor.id
 
         self.almacen_origen = Almacen.query.get_or_404(self.almacen_origen_id)
         self.almacen_destino = Almacen.query.get_or_404(self.almacen_destino_id)
 
-        for i, transfer in enumerate(self.data['transferencias']):
+        transferencias = normalizar_ids(self.data['transferencias'])
+        for i, transfer in enumerate(transferencias):
+            if not isinstance(transfer, dict):
+                raise ValueError(f"Transferencia {i+1}: formato de datos inválido.")
             try:
-                cantidad = Decimal(transfer['cantidad'])
-                if cantidad <= 0:
-                    raise ValueError(f"Transferencia {i+1}: la cantidad debe ser positiva.")
-                
+                presentacion_raw = transfer.get('presentacion_id')
+                if presentacion_raw in (None, ''):
+                    raise ValueError("presentacion_id requerido")
+                presentacion_id = normalizar_ids({
+                    'presentacion_id': presentacion_raw
+                })['presentacion_id']
+                cantidad = _cantidad_positiva_finita(transfer.get('cantidad'))
                 self.transferencias_validadas.append({
-                    'presentacion_id': int(transfer['presentacion_id']),
+                    'presentacion_id': presentacion_id,
                     'cantidad': cantidad
                 })
             except (ValueError, TypeError, InvalidOperation) as e:
-                raise ValueError(f"Transferencia {i+1}: formato de datos inválido. {e}")
+                raise ValueError(f"Transferencia {i+1}: formato de datos inválido. {e}") from e
 
     def _obtener_inventarios(self, almacen_id):
         """
-        Obtiene todos los registros de inventario necesarios de un almacén 
+        Obtiene todos los registros de inventario necesarios de un almacén
         y los agrupa en una lista por presentacion_id para procesarlos en FIFO.
         """
         from models import Lote
         ids_presentaciones = {t['presentacion_id'] for t in self.transferencias_validadas}
-        
+
         inventarios = Inventario.query.with_for_update(of=Inventario).options(
             joinedload(Inventario.presentacion),
             joinedload(Inventario.lote)
@@ -108,33 +143,44 @@ class TransferenciaService:
             Inventario.almacen_id == almacen_id,
             Inventario.presentacion_id.in_(ids_presentaciones)
         ).order_by(
-            Inventario.presentacion_id, 
+            Inventario.presentacion_id,
             Lote.fecha_ingreso.asc(), # FIFO by lot date
             Inventario.id.asc()       # Fallback FIFO
         ).all()
-        
+
         agrupados = {}
         for inv in inventarios:
             if inv.presentacion_id not in agrupados:
                 agrupados[inv.presentacion_id] = []
             agrupados[inv.presentacion_id].append(inv)
-            
+
         return agrupados
 
     def _validar_stock(self, inventarios_origen):
-        """Valida que haya stock suficiente para todas las transferencias sumarizando los lotes disponibles."""
-        for transfer in self.transferencias_validadas:
-            invs_origen = inventarios_origen.get(transfer['presentacion_id'], [])
-            
-            stock_disponible = sum(inv.cantidad for inv in invs_origen)
+        """Valida el total agregado por presentación antes de mutar cualquier lote.
 
-            if stock_disponible < transfer['cantidad']:
-                nombre_presentacion = f"ID {transfer['presentacion_id']}"
+        Agregar evita que varias líneas duplicadas pasen individualmente y en
+        conjunto dejen el inventario negativo.
+        """
+        requerido_por_presentacion = {}
+        for transfer in self.transferencias_validadas:
+            presentacion_id = transfer['presentacion_id']
+            requerido_por_presentacion[presentacion_id] = (
+                requerido_por_presentacion.get(presentacion_id, Decimal('0'))
+                + transfer['cantidad']
+            )
+
+        for presentacion_id, cantidad_requerida in requerido_por_presentacion.items():
+            invs_origen = inventarios_origen.get(presentacion_id, [])
+            stock_disponible = sum((inv.cantidad for inv in invs_origen), Decimal('0'))
+
+            if stock_disponible < cantidad_requerida:
+                nombre_presentacion = f"ID {presentacion_id}"
                 if invs_origen and invs_origen[0].presentacion:
-                     nombre_presentacion = invs_origen[0].presentacion.nombre
+                    nombre_presentacion = invs_origen[0].presentacion.nombre
                 raise ValueError(
                     f"Stock insuficiente para '{nombre_presentacion}'. "
-                    f"Requerido: {transfer['cantidad']}, Disponible: {stock_disponible}"
+                    f"Requerido: {cantidad_requerida}, Disponible: {stock_disponible}"
                 )
 
     def _actualizar_inventarios_y_crear_movimientos(self, inventarios_origen, inventarios_destino):
@@ -153,19 +199,20 @@ class TransferenciaService:
             for inv_orig in invs_origen_disponibles:
                 if cantidad_restante <= 0:
                     break
-                
+
                 if inv_orig.cantidad <= 0:
                     continue
-                    
+
                 cantidad_a_tomar = min(inv_orig.cantidad, cantidad_restante)
-                
+
                 # Descontar del origen
                 inv_orig.cantidad -= cantidad_a_tomar
+                inv_orig.ultima_actualizacion = self.fecha_operacion
                 cantidad_restante -= cantidad_a_tomar
-                
+
                 # Buscar o crear inventario destino CON EL MISMO LOTE
                 inv_dest = next((inv for inv in invs_destino_existentes if inv.lote_id == inv_orig.lote_id), None)
-                
+
                 if inv_dest:
                     inv_dest.cantidad += cantidad_a_tomar
                     inv_dest.ultima_actualizacion = self.fecha_operacion
@@ -185,20 +232,20 @@ class TransferenciaService:
                 motivo_entrada = f"Transferencia desde {self.almacen_origen.nombre} (Op: {self.id_operacion})"
 
                 movimientos_a_crear.append(Movimiento(
-                    tipo='salida', motivo=motivo_salida, 
+                    tipo='salida', motivo=motivo_salida,
                     presentacion_id=transfer['presentacion_id'],
                     lote_id=inv_orig.lote_id,
                     cantidad=cantidad_a_tomar,
                     usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
                 ))
                 movimientos_a_crear.append(Movimiento(
-                    tipo='entrada', motivo=motivo_entrada, 
+                    tipo='entrada', motivo=motivo_entrada,
                     presentacion_id=transfer['presentacion_id'],
                     lote_id=inv_orig.lote_id,
                     cantidad=cantidad_a_tomar,
                     usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
                 ))
-                
+
                 transferencias_realizadas_info.append({
                     "presentacion_nombre": inv_orig.presentacion.nombre,
                     "cantidad": str(cantidad_a_tomar),
@@ -221,7 +268,7 @@ class TransferenciaInventarioResource(Resource):
         inventario disponible agrupado.
         """
         almacen_id_filtro = request.args.get('almacen_id', type=int)
-        
+
         try:
             # 1. Obtener todos los almacenes para los selectores del frontend
             almacenes = Almacen.query.order_by(Almacen.nombre).all()
@@ -241,14 +288,14 @@ class TransferenciaInventarioResource(Resource):
 
             if almacen_id_filtro:
                 query = query.filter(Inventario.almacen_id == almacen_id_filtro)
-            
+
             inventario_disponible = query.all()
 
             # 3. Procesar y agrupar los datos eficientemente en Python sumando los stocks de diferentes lotes
             presentaciones_agrupadas = {}
             for inv in inventario_disponible:
                 pres_id = inv.presentacion.id
-                
+
                 # Si es la primera vez que vemos esta presentación, creamos su objeto base
                 if pres_id not in presentaciones_agrupadas:
                     presentaciones_agrupadas[pres_id] = {
@@ -267,19 +314,22 @@ class TransferenciaInventarioResource(Resource):
                         "lote_id": None,  # Mantenemos para compatibilidad con schemas viejos
                         "lote_info": None # Mantenemos para compatibilidad
                     }
-                
+
                 # Sumamos el total de inventario (FIFO se encarga de los lotes internamente al transferir)
                 presentaciones_agrupadas[pres_id]["inventarios_dict"][alm_id]["stock_disponible"] += float(inv.cantidad)
 
             # Extraemos la lista plana de inventarios para la respuesta
             for pres_data in presentaciones_agrupadas.values():
                 pres_data["inventarios"] = list(pres_data.pop("inventarios_dict").values())
-            
+
             return {
                 "almacenes": almacenes_schema.dump(almacenes),
                 "presentaciones_disponibles": list(presentaciones_agrupadas.values())
             }, 200
 
+        except HTTPException:
+            db.session.rollback()
+            raise
         except Exception as e:
             logger.error(f"Error al obtener datos para formulario de transferencia: {str(e)}", exc_info=True)
             return {"error": "Error interno al obtener datos para transferencias."}, 500
@@ -304,6 +354,9 @@ class TransferenciaInventarioResource(Resource):
             resultado = servicio.ejecutar_transferencia()
             db.session.commit()
             return resultado, 200
+        except HTTPException:
+            db.session.rollback()
+            raise
         except ValueError as e:
             db.session.rollback()
             return {"error": str(e)}, 400

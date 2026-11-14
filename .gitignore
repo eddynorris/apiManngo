@@ -33,6 +33,7 @@ MANIFEST
 
 # Logs and databases
 *.log
+logs/
 *.sqlite3
 *.db
 
@@ -41,8 +42,8 @@ instance/
 .flaskenv
 
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
 
 # Unit test / coverage reports
 htmlcov/
@@ -57,8 +58,13 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Directorio de pruebas unitarias
-tests/
+# Pruebas: se versiona el código y los fixtures públicos, no artefactos ni datos privados
+tests/__pycache__/
+tests/**/__pycache__/
+tests/fixtures/private/
+tests/fixtures/*.db
+tests/fixtures/*.sqlite3
+tests/fixtures/*.sql
 
 # Translations
 *.mo
@@ -78,13 +84,36 @@ Thumbs.db
 .cursor/rules
 .claude/
 
+# Artefactos locales de agentes y evidencias de verificación (se conservan en disco, no en git)
+.archify/
+.hermes/
+docs/verificacion/
+
 # Uploads directory
 uploads/
 uploads/presentaciones/
 uploads/comprobantes/
 database.sql
 migration_view.sql
-migrations/
+*.dump
+*.backup
+*.sql.gz
+data.sql
+backups/
+migrations/__pycache__/
+migrations/**/__pycache__/
+
+# Certificados y secretos locales
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+certs/
+certificados/
+secrets/
 
 #supabase
 

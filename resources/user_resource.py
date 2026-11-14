@@ -1,60 +1,82 @@
 # Archivo: resources/user_resource.py
-from typing import Dict, Tuple, Union, Any, List
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt
-from flask import request
-from models import Users, Almacen
-from schemas import user_schema, users_schema
-from extensions import db
-from common import handle_db_errors, rol_requerido, validate_pagination_params, create_pagination_response, validate_password
-from werkzeug.security import generate_password_hash
 import logging
+from typing import Any
+
+from flask import request
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource
+from marshmallow import ValidationError
+from werkzeug.exceptions import HTTPException
+from werkzeug.security import generate_password_hash
+
 import config
+from common import (
+    create_pagination_response,
+    handle_db_errors,
+    rol_requerido,
+    validate_pagination_params,
+    validate_password,
+)
+from extensions import db
+from models import Almacen, Users
+from schemas import user_schema, users_schema
 
 # Configurar logging
 logger = logging.getLogger(__name__)
+
+CAMPOS_TEXTO = ('username', 'password', 'rol')
+
+
+def _error_campos_no_texto(data: dict[str, Any]) -> tuple[dict[str, Any], int] | None:
+    """400 si username/password/rol vienen con un tipo distinto de texto (p. ej. lista o número)."""
+    invalidos = [campo for campo in CAMPOS_TEXTO if campo in data and not isinstance(data[campo], str)]
+    if invalidos:
+        return {"error": f"Los campos {', '.join(invalidos)} deben ser texto"}, 400
+    return None
 
 class UserResource(Resource):
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede listar usuarios
     @handle_db_errors
-    def get(self, user_id: int = None) -> Tuple[Union[Dict[str, Any], List[Dict[str, Any]]], int]:
+    def get(self, user_id: int = None) -> tuple[dict[str, Any] | list[dict[str, Any]], int]:
         try:
             # Si se solicita un usuario específico
             if user_id:
                 usuario = Users.query.get_or_404(user_id)
                 return user_schema.dump(usuario), 200
-            
+
             # Construir query con filtros
             query = Users.query
-            
+
             # Filtrar por rol si se especifica
             if rol := request.args.get('rol'):
                 # Validar que sea un rol válido
                 roles_validos = ['admin', 'gerente', 'usuario']
                 if rol not in roles_validos:
                     return {"error": f"Rol inválido. Debe ser uno de: {', '.join(roles_validos)}"}, 400
-                    
+
                 query = query.filter(Users.rol == rol)
-            
+
             # Filtrar por almacén si se especifica
             if almacen_id := request.args.get('almacen_id'):
                 try:
                     query = query.filter(Users.almacen_id == int(almacen_id))
                 except ValueError:
                     return {"error": "ID de almacén inválido"}, 400
-            
+
             # Búsqueda por username
             if username := request.args.get('username'):
                 query = query.filter(Users.username.ilike(f'%{username}%'))
-            
+
             # Paginación con validación
             page, per_page = validate_pagination_params()
             usuarios = query.paginate(page=page, per_page=per_page)
-            
+
             # Respuesta estandarizada
             return create_pagination_response(users_schema.dump(usuarios.items), usuarios), 200
-            
+
+        except (HTTPException, ValidationError):
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             logger.error(f"[{self.__class__.__name__}] Error al obtener usuarios: {str(e)}", exc_info=True)
             return {"error": "Error al procesar la solicitud"}, 500
@@ -62,37 +84,39 @@ class UserResource(Resource):
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede crear usuarios
     @handle_db_errors
-    def post(self) -> Tuple[Dict[str, Any], int]:
+    def post(self) -> tuple[dict[str, Any], int]:
         try:
             # Validar formato de entrada
             if not request.is_json:
                 return {"error": "Se esperaba contenido JSON"}, 400
-                
+
             data = request.get_json()
-            if not data:
+            if not data or not isinstance(data, dict):
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
-            
+            if error_tipos := _error_campos_no_texto(data):
+                return error_tipos
+
             # Validaciones preliminares
             if not data.get('username') or len(data.get('username', '')) < config.MIN_USERNAME_LENGTH:
                 return {"error": f"El nombre de usuario debe tener al menos {config.MIN_USERNAME_LENGTH} caracteres"}, 400
-                
+
             # Validar complejidad de contraseña
             password = data.get('password', '').strip()
             is_valid, error_msg = validate_password(password)
             if not is_valid:
                 return {"error": error_msg}, 400
-            
+
             # Verificar que el username no exista (case insensitive)
             username = data.get('username').strip().lower()  # Convertir a minúsculas
             if Users.query.filter(Users.username.ilike(username)).first():
                 return {"error": "El nombre de usuario ya existe"}, 400
-            
+
             # Validar rol
             rol = data.get('rol', 'usuario').strip()
             roles_validos = ['admin', 'gerente', 'usuario']
             if rol not in roles_validos:
                 return {"error": f"Rol inválido. Debe ser uno de: {', '.join(roles_validos)}"}, 400
-            
+
             # Validar almacén si se proporciona
             if almacen_id := data.get('almacen_id'):
                 try:
@@ -102,23 +126,26 @@ class UserResource(Resource):
                         return {"error": "El almacén especificado no existe"}, 400
                 except (ValueError, TypeError):
                     return {"error": "ID de almacén inválido"}, 400
-            
+
             # Hashear la contraseña de forma segura
             data['password'] = generate_password_hash(password, method='pbkdf2:sha256:150000')
-            
+
             # Crear usuario
             nuevo_usuario = user_schema.load(data)
             db.session.add(nuevo_usuario)
             db.session.commit()
-            
+
             logger.info(f"Usuario creado: {username}, rol: {rol}")
-            
+
             # Devolver respuesta sin la contraseña
             result = user_schema.dump(nuevo_usuario)
             result.pop('password', None)  # Remover password del resultado
-            
+
             return result, 201
-            
+
+        except (HTTPException, ValidationError):
+            db.session.rollback()
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             db.session.rollback()
             logger.error(f"[{self.__class__.__name__}] Error al crear usuario: {str(e)}", exc_info=True)
@@ -127,70 +154,84 @@ class UserResource(Resource):
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede actualizar usuarios
     @handle_db_errors
-    def put(self, user_id: int) -> Tuple[Dict[str, Any], int]:
+    def put(self, user_id: int) -> tuple[dict[str, Any], int]:
         try:
             if not user_id:
                 return {"error": "Se requiere ID de usuario"}, 400
-                
+
             usuario = Users.query.get_or_404(user_id)
-            
+
             # Validar formato de entrada
             if not request.is_json:
                 return {"error": "Se esperaba contenido JSON"}, 400
-                
+
             data = request.get_json()
-            if not data:
+            if not data or not isinstance(data, dict):
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
-            
+            if error_tipos := _error_campos_no_texto(data):
+                return error_tipos
+
             # Si se cambia el username, verificar que no exista (case insensitive)
             if 'username' in data and data['username'] != usuario.username:
                 username = data['username'].strip().lower()  # Convertir a minúsculas
                 if len(username) < config.MIN_USERNAME_LENGTH:
                     return {"error": f"El nombre de usuario debe tener al menos {config.MIN_USERNAME_LENGTH} caracteres"}, 400
-                    
+
                 if Users.query.filter(Users.username.ilike(username)).first():
                     return {"error": "El nombre de usuario ya existe"}, 400
-            
+
+            cambios_sensibles = False
+
             # Si se cambia la contraseña, verificar complejidad
             if 'password' in data:
                 password = data['password'].strip()
                 is_valid, error_msg = validate_password(password)
                 if not is_valid:
                     return {"error": error_msg}, 400
-                    
+
                 # Hashear la contraseña
                 data['password'] = generate_password_hash(password, method='pbkdf2:sha256:150000')
-            
+                cambios_sensibles = True
+
             # Validar rol si se proporciona
             if 'rol' in data:
                 rol = data['rol'].strip()
                 roles_validos = ['admin', 'gerente', 'usuario']
                 if rol not in roles_validos:
                     return {"error": f"Rol inválido. Debe ser uno de: {', '.join(roles_validos)}"}, 400
-            
+                if rol != usuario.rol:
+                    cambios_sensibles = True
+
             # Validar almacén si se proporciona
             if 'almacen_id' in data:
                 try:
-                    if data['almacen_id'] is not None:
-                        almacen_id = int(data['almacen_id'])
+                    almacen_id = None if data['almacen_id'] is None else int(data['almacen_id'])
+                    if almacen_id is not None:
                         almacen = Almacen.query.get(almacen_id)
                         if not almacen:
                             return {"error": "El almacén especificado no existe"}, 400
+                    if almacen_id != usuario.almacen_id:
+                        cambios_sensibles = True
                 except (ValueError, TypeError):
                     return {"error": "ID de almacén inválido"}, 400
-            
+
             # Actualizar usuario
             updated_usuario = user_schema.load(data, instance=usuario, partial=True)
+            if cambios_sensibles:
+                updated_usuario.auth_version = int(usuario.auth_version or 0) + 1
             db.session.commit()
-            
+
             logger.info(f"Usuario actualizado: {usuario.id} - {usuario.username}")
-            
+
             # Devolver respuesta sin la contraseña
             result = user_schema.dump(updated_usuario)
             result.pop('password', None)  # Remover password del resultado
-            
+
             return result, 200
-            
+
+        except (HTTPException, ValidationError):
+            db.session.rollback()
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             db.session.rollback()
             logger.error(f"[{self.__class__.__name__}] Error al actualizar usuario: {str(e)}", exc_info=True)
@@ -199,34 +240,37 @@ class UserResource(Resource):
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede eliminar usuarios
     @handle_db_errors
-    def delete(self, user_id: int) -> Tuple[Dict[str, Any], int]:
+    def delete(self, user_id: int) -> tuple[dict[str, Any], int]:
         try:
             if not user_id:
                 return {"error": "Se requiere ID de usuario"}, 400
-                
+
             usuario = Users.query.get_or_404(user_id)
-            
+
             # No permitir eliminar al usuario que hace la petición
             claims = get_jwt()
             if str(usuario.id) == claims.get('sub'):
                 return {"error": "No puedes eliminar tu propio usuario"}, 400
-            
+
             # No permitir eliminar el último usuario admin
             if usuario.rol == 'admin':
                 admin_count = Users.query.filter_by(rol='admin').count()
                 if admin_count <= 1:
                     return {"error": "No se puede eliminar el último usuario administrador"}, 400
-            
+
             # Verificar si tiene movimientos u otras dependencias
             # Se puede implementar verificación de dependencias adicionales aquí
-            
+
             username = usuario.username  # Guardar para el log
             db.session.delete(usuario)
             db.session.commit()
-            
+
             logger.info(f"Usuario eliminado: {user_id} - {username}")
             return {"message": "Usuario eliminado correctamente"}, 200
-            
+
+        except (HTTPException, ValidationError):
+            db.session.rollback()
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             db.session.rollback()
             logger.error(f"[{self.__class__.__name__}] Error al eliminar usuario: {str(e)}", exc_info=True)

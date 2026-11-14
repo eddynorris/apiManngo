@@ -1,9 +1,11 @@
-from flask import request
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required
-import google.generativeai as genai
-from extensions import supabase # Importar cliente de Supabase centralizado
 import logging
+
+import google.generativeai as genai
+from flask import request
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+
+from extensions import supabase  # Importar cliente de Supabase centralizado
 
 logger = logging.getLogger(__name__)
 

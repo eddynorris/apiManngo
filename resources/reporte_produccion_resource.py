@@ -1,13 +1,16 @@
 import logging
-from flask import request
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required
-from sqlalchemy import func, and_
+import re
 from datetime import datetime, timedelta
 from decimal import Decimal
-import re
-from models import db, Movimiento, PresentacionProducto, Producto, Almacen, Users, Lote
+
+from flask import request
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+from sqlalchemy import and_, func
+
 from common import handle_db_errors
+from models import Almacen, Lote, Movimiento, PresentacionProducto, Producto, Users, db
+from utils.date_utils import dia_peru_sql, get_peru_now, rango_utc_de_dias_peru, to_peru_time
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +33,10 @@ class ReporteProduccionBriquetasResource(Resource):
             almacen_id = request.args.get('almacen_id', type=int)
             presentacion_id = request.args.get('presentacion_id', type=int)
             periodo = request.args.get('periodo', 'dia')  # 'dia', 'semana', 'mes'
-            
+
             # Si no se especifican fechas, usar el último mes
             if not fecha_inicio_str or not fecha_fin_str:
-                fecha_fin = datetime.now().date()
+                fecha_fin = get_peru_now().date()
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
@@ -42,11 +45,12 @@ class ReporteProduccionBriquetasResource(Resource):
                     fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
-            
+            inicio_utc, fin_utc = rango_utc_de_dias_peru(fecha_inicio, fecha_fin)
+
             # Validar período
             if periodo not in ['dia', 'semana', 'mes']:
                 return {'error': 'Período debe ser: dia, semana o mes'}, 400
-            
+
             # --- Consulta base para movimientos de producción de briquetas ---
             query = db.session.query(
                 PresentacionProducto.id.label('presentacion_id'),
@@ -61,32 +65,30 @@ class ReporteProduccionBriquetasResource(Resource):
             ).join(
                 Producto, PresentacionProducto.producto_id == Producto.id
             ).join(
-                Almacen, Movimiento.usuario_id.in_(
-                    db.session.query(db.text('users.id')).select_from(db.text('users')).filter(
-                        db.text('users.almacen_id') == Almacen.id
-                    )
-                )
+                Users, Movimiento.usuario_id == Users.id
+            ).join(
+                Almacen, Users.almacen_id == Almacen.id  # almacén del usuario que registró
             ).filter(
                 and_(
                     Movimiento.tipo == 'entrada',
                     Movimiento.tipo_operacion == 'ensamblaje',
                     PresentacionProducto.tipo == 'briqueta',
-                    func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                    Movimiento.fecha >= inicio_utc,
+                    Movimiento.fecha < fin_utc
                 )
             )
-            
+
             # Aplicar filtros opcionales
             if presentacion_id:
                 query = query.filter(PresentacionProducto.id == presentacion_id)
-            
+
             # Para filtro de almacén, necesitamos una aproximación diferente
             # ya que no hay relación directa entre Movimiento y Almacen
             if almacen_id:
                 # Filtrar por usuarios que pertenecen al almacén específico
-                from models import Users
                 usuarios_almacen = db.session.query(Users.id).filter(Users.almacen_id == almacen_id).subquery()
                 query = query.filter(Movimiento.usuario_id.in_(usuarios_almacen))
-            
+
             # Agrupar por presentación
             query = query.group_by(
                 PresentacionProducto.id,
@@ -94,19 +96,19 @@ class ReporteProduccionBriquetasResource(Resource):
                 Producto.nombre,
                 Almacen.nombre
             )
-            
+
             # Ejecutar consulta
             resultados = query.all()
-            
+
             # --- Formatear respuesta ---
             reporte_data = []
             total_unidades = 0
             total_kg = Decimal('0.00')
-            
+
             for r in resultados:
                 unidades = int(r.unidades_producidas or 0)
                 kg = Decimal(str(r.kg_producidos or 0))
-                
+
                 reporte_data.append({
                     'presentacion_id': r.presentacion_id,
                     'presentacion_nombre': r.presentacion_nombre,
@@ -116,16 +118,17 @@ class ReporteProduccionBriquetasResource(Resource):
                     'numero_producciones': int(r.numero_producciones or 0),
                     'almacen_nombre': r.almacen_nombre or 'No especificado'
                 })
-                
+
                 total_unidades += unidades
                 total_kg += kg
-            
+
             # --- Consulta adicional para resumen por período ---
             resumen_temporal = []
             if periodo == 'dia':
-                # Agrupar por día
+                # Agrupar por día de Perú
+                dia_peru = dia_peru_sql(Movimiento.fecha, db.session.get_bind().dialect.name)
                 query_temporal = db.session.query(
-                    func.date(Movimiento.fecha).label('fecha'),
+                    dia_peru.label('fecha'),
                     func.sum(Movimiento.cantidad).label('unidades_dia'),
                     func.sum(Movimiento.cantidad * PresentacionProducto.capacidad_kg).label('kg_dia')
                 ).join(
@@ -135,20 +138,21 @@ class ReporteProduccionBriquetasResource(Resource):
                         Movimiento.tipo == 'entrada',
                         Movimiento.tipo_operacion == 'ensamblaje',
                         PresentacionProducto.tipo == 'briqueta',
-                        func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                        Movimiento.fecha >= inicio_utc,
+                        Movimiento.fecha < fin_utc
                     )
-                ).group_by(func.date(Movimiento.fecha)).order_by(func.date(Movimiento.fecha))
-                
+                ).group_by(dia_peru).order_by(dia_peru)
+
                 if presentacion_id:
                     query_temporal = query_temporal.filter(PresentacionProducto.id == presentacion_id)
-                
+
                 resultados_temporales = query_temporal.all()
                 resumen_temporal = [{
                     'fecha': r.fecha.isoformat(),
                     'unidades_producidas': int(r.unidades_dia or 0),
                     'kg_producidos': float(r.kg_dia or 0)
                 } for r in resultados_temporales]
-            
+
             # Respuesta final
             respuesta = {
                 'periodo': {
@@ -165,9 +169,9 @@ class ReporteProduccionBriquetasResource(Resource):
                 'detalle_por_presentacion': reporte_data,
                 'resumen_temporal': resumen_temporal
             }
-            
+
             return respuesta, 200
-            
+
         except Exception as e:
             db.session.rollback()
             return {'error': 'Error interno del servidor', 'details': str(e)}, 500
@@ -189,10 +193,10 @@ class ReporteProduccionGeneralResource(Resource):
             fecha_fin_str = request.args.get('fecha_fin')
             almacen_id = request.args.get('almacen_id', type=int)
             tipo_presentacion = request.args.get('tipo_presentacion')
-            
+
             # Si no se especifican fechas, usar el último mes
             if not fecha_inicio_str or not fecha_fin_str:
-                fecha_fin = datetime.now().date()
+                fecha_fin = get_peru_now().date()
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
@@ -201,7 +205,8 @@ class ReporteProduccionGeneralResource(Resource):
                     fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
-            
+            inicio_utc, fin_utc = rango_utc_de_dias_peru(fecha_inicio, fecha_fin)
+
             # --- Consulta base para todos los movimientos de producción ---
             query = db.session.query(
                 PresentacionProducto.tipo.label('tipo_presentacion'),
@@ -218,38 +223,38 @@ class ReporteProduccionGeneralResource(Resource):
                 and_(
                     Movimiento.tipo == 'entrada',
                     Movimiento.tipo_operacion == 'ensamblaje',
-                    func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                    Movimiento.fecha >= inicio_utc,
+                    Movimiento.fecha < fin_utc
                 )
             )
-            
+
             # Aplicar filtros opcionales
             if tipo_presentacion:
                 query = query.filter(PresentacionProducto.tipo == tipo_presentacion)
-            
+
             if almacen_id:
-                from models import Users
                 usuarios_almacen = db.session.query(Users.id).filter(Users.almacen_id == almacen_id).subquery()
                 query = query.filter(Movimiento.usuario_id.in_(usuarios_almacen))
-            
+
             # Agrupar por tipo y presentación
             query = query.group_by(
                 PresentacionProducto.tipo,
                 PresentacionProducto.nombre,
                 Producto.nombre
             ).order_by(PresentacionProducto.tipo, PresentacionProducto.nombre)
-            
+
             # Ejecutar consulta
             resultados = query.all()
-            
+
             # --- Formatear respuesta ---
             reporte_data = []
             resumen_por_tipo = {}
-            
+
             for r in resultados:
                 tipo = r.tipo_presentacion
                 unidades = int(r.unidades_producidas or 0)
                 kg = Decimal(str(r.kg_producidos or 0))
-                
+
                 # Agregar al detalle
                 reporte_data.append({
                     'tipo_presentacion': tipo,
@@ -259,7 +264,7 @@ class ReporteProduccionGeneralResource(Resource):
                     'kg_producidos': float(kg),
                     'numero_producciones': int(r.numero_producciones or 0)
                 })
-                
+
                 # Agregar al resumen por tipo
                 if tipo not in resumen_por_tipo:
                     resumen_por_tipo[tipo] = {
@@ -267,11 +272,11 @@ class ReporteProduccionGeneralResource(Resource):
                         'kg_totales': Decimal('0.00'),
                         'producciones_totales': 0
                     }
-                
+
                 resumen_por_tipo[tipo]['unidades_totales'] += unidades
                 resumen_por_tipo[tipo]['kg_totales'] += kg
                 resumen_por_tipo[tipo]['producciones_totales'] += int(r.numero_producciones or 0)
-            
+
             # Convertir resumen a formato de respuesta
             resumen_formateado = [{
                 'tipo': tipo,
@@ -279,7 +284,7 @@ class ReporteProduccionGeneralResource(Resource):
                 'kg_totales': float(datos['kg_totales']),
                 'producciones_totales': datos['producciones_totales']
             } for tipo, datos in resumen_por_tipo.items()]
-            
+
             # Respuesta final
             respuesta = {
                 'periodo': {
@@ -289,9 +294,9 @@ class ReporteProduccionGeneralResource(Resource):
                 'resumen_por_tipo': resumen_formateado,
                 'detalle_completo': reporte_data
             }
-            
+
             return respuesta, 200
-            
+
         except Exception as e:
             db.session.rollback()
             return {'error': 'Error interno del servidor', 'details': str(e)}, 500
@@ -308,7 +313,7 @@ class ReporteProduccionEntradasResource(Resource):
     @handle_db_errors
     def get(self):
         try:
-            
+
 
             # --- 1. Filtros de Consulta ---
             fecha_inicio_str = request.args.get('fecha_inicio')
@@ -321,7 +326,7 @@ class ReporteProduccionEntradasResource(Resource):
 
             # Validar y parsear fechas
             if not fecha_inicio_str or not fecha_fin_str:
-                fecha_fin = datetime.now().date()
+                fecha_fin = get_peru_now().date()
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
@@ -331,6 +336,7 @@ class ReporteProduccionEntradasResource(Resource):
                         return {'error': 'La fecha de inicio no puede ser mayor a la fecha de fin.'}, 400
                 except (ValueError, TypeError):
                     return {'error': 'Formato de fecha inválido. Use YYYY-MM-DD.'}, 400
+            inicio_utc, fin_utc = rango_utc_de_dias_peru(fecha_inicio, fecha_fin)
 
             # --- 2. Consulta Base de Movimientos de Entrada ---
             # Unimos Movimiento con PresentacionProducto, Producto, Lote, Users y Almacen
@@ -353,7 +359,8 @@ class ReporteProduccionEntradasResource(Resource):
                 Almacen, Users.almacen_id == Almacen.id
             ).filter(
                 Movimiento.tipo == 'entrada',
-                func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                Movimiento.fecha >= inicio_utc,
+                Movimiento.fecha < fin_utc
             )
 
             # Filtro por tipo de operación
@@ -395,7 +402,7 @@ class ReporteProduccionEntradasResource(Resource):
                 cant = Decimal(str(mov.cantidad or 0))
                 cap_kg = Decimal(str(pres.capacidad_kg if pres and pres.capacidad_kg else 1.0))
                 kg_total_mov = cant * cap_kg
-                fecha_str = mov.fecha.strftime('%Y-%m-%d') if mov.fecha else ''
+                fecha_str = to_peru_time(mov.fecha).strftime('%Y-%m-%d') if mov.fecha else ''
                 fecha_iso = mov.fecha.isoformat() if mov.fecha else None
 
                 # Inicializar mapa temporal

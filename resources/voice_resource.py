@@ -1,17 +1,32 @@
-from flask import request
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from services.gemini_service import gemini_service
-from common import handle_db_errors
-from models import Cliente, Inventario, PresentacionProducto, ComandoVozLog
-from extensions import db
-from sqlalchemy import func
 import logging
 import time
 
+from flask import request
+from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_restful import Resource
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from common import handle_db_errors
+from extensions import db
+from models import Cliente, ComandoVozLog, Inventario, PresentacionProducto
+from services.gemini_service import gemini_service
+
 logger = logging.getLogger(__name__)
 
-class VoiceCommandResource(Resource):   
+
+def _persistir_log_comando_voz(**valores):
+    """Persiste la auditoría en su propia sesión y transacción.
+
+    No usa la sesión del request para no confirmar ni revertir operaciones
+    comerciales ajenas y para que el log quede guardado aunque la petición no
+    ejecute ninguna operación de base de datos.
+    """
+    with Session(db.engine) as audit_session:
+        audit_session.add(ComandoVozLog(**valores))
+        audit_session.commit()
+
+class VoiceCommandResource(Resource):
     @jwt_required()
     @handle_db_errors
     def post(self):
@@ -19,21 +34,21 @@ class VoiceCommandResource(Resource):
         Procesa un comando de voz, interpreta la intención con Gemini,
         resuelve entidades (Cliente, Productos) y verifica stock.
         Retorna un JSON enriquecido para confirmación del usuario.
-        
+
         Rate limited: 20/minute (aplicado en init_resources)
         """
         start_time = time.time()  # Inicio de tracking de latencia
-        
+
         data = request.get_json()
         command_text = data.get('text')
-        
+
         if not command_text:
             return {"message": "Se requiere el campo 'text'"}, 400
-            
+
         current_user_id = get_jwt_identity()
         claims = get_jwt()
         almacen_id = claims.get('almacen_id')
-        
+
         # Obtener nombre del almacén para feedback
         almacen_nombre = "Desconocido"
         if almacen_id:
@@ -41,16 +56,17 @@ class VoiceCommandResource(Resource):
             almacen_obj = Almacen.query.get(almacen_id)
             if almacen_obj:
                 almacen_nombre = almacen_obj.nombre
-        
+
         logger.info(f"Usuario {current_user_id} (Almacen {almacen_id} - {almacen_nombre}) envió comando: {command_text}")
-        
+
         # 1. Procesar con Gemini (ya incluye sanitización interna)
         result = gemini_service.process_command(command_text)
-        
-        # Auditoría: Guardar log independientemente del resultado
+
+        # Auditoría: persistir con una sesión independiente, sin depender de que
+        # otra operación comercial confirme la sesión del request.
         try:
             duration_ms = int((time.time() - start_time) * 1000)
-            log_entry = ComandoVozLog(
+            _persistir_log_comando_voz(
                 usuario_id=current_user_id,
                 almacen_id=almacen_id,
                 texto_original=command_text[:500],  # Truncar por seguridad
@@ -59,15 +75,9 @@ class VoiceCommandResource(Resource):
                 exito=(result.get('action') not in ['error', 'security_block', 'none']),
                 latencia_ms=duration_ms
             )
-            db.session.add(log_entry)
-            # Usar flush() en lugar de commit() para minimizar latencia
-            # El commit se hará al final del request o con la venta
-            db.session.flush()
         except Exception as e:
             logger.error(f"Error al registrar log de auditoría (ComandoVozLog): {e}")
-            # No bloqueamos el flujo principal si falla el log, pero hacemos rollback de esa inserción fallida
-            db.session.rollback()
-        
+
         if result['action'] != 'interpretar_operacion':
             return {
                 "status": "success",
@@ -94,7 +104,7 @@ class VoiceCommandResource(Resource):
         if cliente_nombre:
             # Búsqueda insensible a mayúsculas/minúsculas
             cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{cliente_nombre}%")).first()
-            
+
             if not cliente:
                 # Intento de búsqueda difusa con PostgreSQL similarity
                 # Requiere la extensión pg_trgm
@@ -104,7 +114,7 @@ class VoiceCommandResource(Resource):
                     ).order_by(
                         func.similarity(Cliente.nombre, cliente_nombre).desc()
                     ).first()
-                    
+
                     if cliente:
                         enriched_data['warnings'].append(f"No se encontró '{cliente_nombre}', se asumió '{cliente.nombre}'.")
                 except Exception as e:
@@ -123,7 +133,7 @@ class VoiceCommandResource(Resource):
 
         # 3. Resolver Productos y Verificar Stock con PostgreSQL Similarity Search
         items_raw = args.get('items', [])
-        
+
         for item in items_raw:
             prod_nombre = item.get('producto_nombre')
             cantidad = item.get('cantidad', 0)
@@ -155,40 +165,40 @@ class VoiceCommandResource(Resource):
                     ).order_by(
                         func.similarity(PresentacionProducto.nombre, prod_nombre_safe).desc()
                     ).first()
-                    
+
                     if presentacion:
                         match_method = "similarity"
                 except Exception as e:
                     # Si pg_trgm no está disponible, log y continuar con búsqueda por tokens
                     logger.warning(f"PostgreSQL similarity search no disponible para productos: {e}")
-                    
+
                     # C. Fallback: Búsqueda por Tokens (si similarity falla)
                     all_products = db.session.query(
-                        PresentacionProducto.id, 
-                        PresentacionProducto.nombre, 
+                        PresentacionProducto.id,
+                        PresentacionProducto.nombre,
                         PresentacionProducto.precio_venta
                     ).filter(PresentacionProducto.tipo == 'procesado').all()
-                    
+
                     # Tokenizar búsqueda (ej: "saco de 20 kg" -> ["saco", "20", "kg"])
                     search_tokens = set(prod_nombre.lower().replace('kg', ' kg').split())
                     best_score = 0
                     best_candidate = None
-                    
+
                     for prod in all_products:
                         prod_tokens = set(prod.nombre.lower().replace('kg', ' kg').split())
                         # Calcular intersección
                         common_tokens = search_tokens.intersection(prod_tokens)
                         score = len(common_tokens)
-                        
+
                         # Boost masivo si hay números coincidentes (ej: "20") - CRÍTICO para este negocio
                         for token in common_tokens:
                             if token.isdigit():
                                 score += 3  # Peso x3 para números (kilos)
-                        
+
                         if score > best_score:
                             best_score = score
                             best_candidate = prod
-                    
+
                     # Umbral mínimo de coincidencia
                     if best_candidate and best_score >= 1:
                         presentacion = PresentacionProducto.query.get(best_candidate.id)
@@ -207,13 +217,13 @@ class VoiceCommandResource(Resource):
             if presentacion:
                 item_enriched['producto_id'] = presentacion.id
                 item_enriched['producto_nombre'] = presentacion.nombre
-                
+
                 if not precio_explicito:
                     item_enriched['precio_unitario'] = float(presentacion.precio_venta)
-                
+
                 # Calcular subtotal
                 item_enriched['subtotal'] = item_enriched['cantidad'] * item_enriched['precio_unitario']
-                
+
                 if match_method != "exact":
                      enriched_data['warnings'].append(f"No se encontró '{prod_nombre}', se asumió '{presentacion.nombre}' ({match_method}).")
 
@@ -223,11 +233,11 @@ class VoiceCommandResource(Resource):
                         almacen_id=almacen_id,
                         presentacion_id=presentacion.id
                     ).first()
-                    
+
                     if inventario:
                         item_enriched['stock_actual'] = float(inventario.cantidad)
                         item_enriched['lote_id'] = inventario.lote_id
-                        
+
                         if inventario.cantidad < cantidad:
                             enriched_data['warnings'].append(f"Stock insuficiente para '{presentacion.nombre}'. Solicitado: {cantidad}, Disponible: {inventario.cantidad}")
                     else:
@@ -237,20 +247,20 @@ class VoiceCommandResource(Resource):
 
             else:
                 enriched_data['warnings'].append(f"Producto '{prod_nombre}' no encontrado en el catálogo.")
-            
+
             enriched_data['items'].append(item_enriched)
 
         # 4. Lógica de Pago Automático (Pago Completo o Relativo)
         condicion_pago = args.get('condicion_pago', 'parcial')
         porcentaje_abono = args.get('porcentaje_abono')
         total_estimado = sum(item['subtotal'] for item in enriched_data['items'])
-        
+
         if condicion_pago == 'completo':
             # Si hay un pago parcial (ej: "pago completo con yape"), usar ese método
             metodo = "efectivo"  # Default
             if enriched_data['pagos']:
                 metodo = enriched_data['pagos'][0].get('metodo_pago', 'efectivo')
-            
+
             # Sobreescribir pagos con el total
             enriched_data['pagos'] = [{
                 "monto": total_estimado,
@@ -258,12 +268,12 @@ class VoiceCommandResource(Resource):
                 "es_deposito": False  # Default, salvo que se diga lo contrario
             }]
             enriched_data['warnings'].append(f"Se generó un pago automático por el total: S/ {total_estimado}")
-            
+
         elif porcentaje_abono and isinstance(porcentaje_abono, (int, float)) and porcentaje_abono > 0:
             # Lógica para pago relativo (ej: "mitad" -> 50%, "30%")
             monto_abono = (total_estimado * porcentaje_abono) / 100
             monto_abono = round(monto_abono, 2)
-            
+
             metodo = "efectivo"
             if enriched_data['pagos']:
                  metodo = enriched_data['pagos'][0].get('metodo_pago', 'efectivo')
@@ -298,5 +308,5 @@ class VoiceCommandResource(Resource):
                 "latency_ms": duration_ms
             }
         }
-        
+
         return make_json_serializable(response_data), 200

@@ -1,45 +1,103 @@
-# VCS
+# VCS y metadatos del repositorio
 .git
 .gitignore
+.github/
+.gitattributes
 
-# Entornos y configuración local
+# Entornos reales: NUNCA deben entrar al contexto de build.
 .env
 .env.*
+**/.env
+**/.env.*
+# La plantilla sin valores privados sí puede quedar disponible.
+!.env.example
+
+# Entornos virtuales y artefactos de Python
 venv/
+.venv/
+env/
+ENV/
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 .python-version
-.coverage
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.egg-info/
+build/
+dist/
 
-# Archivos IDEs
+# Dumps, respaldos y datos privados
+*.sql
+# Las migraciones SQL versionadas sí se incluyen para revisión (no se ejecutan).
+!migrations/**/*.sql
+*.dump
+*.backup
+*.bak
+*.sql.gz
+*.sql.bz2
+*.sql.xz
+database/
+backups/
+legacy_migrations/
+tests/
+test.md
+
+# Certificados, claves y secretos
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+certs/
+certificates/
+secrets/
+.ssh/
+
+# Herramientas de agentes, planes y artefactos locales
+.hermes/
+.archify/
+.claude/
+.agents/
+.cursor/
+.trae/
+.kombai/
+.vercel/
+.playwright/
+
+# Logs, temporales y cargas locales
+*.log
+logs/
+tmp/
+uploads/
+*.tmp
+*.swp
+*~
+
+# Sistema operativo / IDE
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
-
-# Archivos de sistema operativo
 .DS_Store
 Thumbs.db
-*.swp
-*~
 
-# Archivos temporales y de registro
-*.log
-logs/
-tmp/
-
-# Archivos subidos (serán manejados por Cloud Storage)
-uploads/*
-!uploads/.gitkeep
-
-# Documentación
+# Documentación y configuración de despliegue no necesaria en la imagen
+docs/
 README.md
 CHANGELOG.md
-docs/
 *.md
-
-# Configuración de Docker y CI/CD
-docker-compose.yml
+Dockerfile
 Dockerfile.*
+docker-compose*.yml
+docker-compose*.yaml
+.dockerignore

@@ -1,0 +1,93 @@
+{
+  "publisher": "OASIS",
+  "standard": "UBL 2.1",
+  "limitation": "Structural schema only; not SUNAT business validation or fiscal acceptance",
+  "files": [
+    {
+      "path": "maindoc/UBL-DespatchAdvice-2.1.xsd",
+      "sha256": "a15a064c98c6a04548e2d594da20167025ecea3271fc0eb2b4a6853fc8838473",
+      "bytes": 29161
+    },
+    {
+      "path": "common/UBL-CommonExtensionComponents-2.1.xsd",
+      "sha256": "ad7a4e490978adfbcfc5ec0bb20941cf11ac960ccf0c4de8791a7c731a8dbe87",
+      "bytes": 9491
+    },
+    {
+      "path": "common/UBL-ExtensionContentDataType-2.1.xsd",
+      "sha256": "fcee77a11870208e6377ea6311b9f2a050bca24bdad8606ea02d71e9f9e72f8d",
+      "bytes": 4314
+    },
+    {
+      "path": "common/UBL-CommonSignatureComponents-2.1.xsd",
+      "sha256": "3db472305f029bba5c1ae157bfd0178f715c3f9b94bd8e6c557dbce5e88da874",
+      "bytes": 5548
+    },
+    {
+      "path": "common/UBL-SignatureAggregateComponents-2.1.xsd",
+      "sha256": "17bb6b62d709b4fd81449a37655af36aa6a1276ad4fdb1b2e249a5ed4b7c2172",
+      "bytes": 7784
+    },
+    {
+      "path": "common/UBL-XAdESv141-2.1.xsd",
+      "sha256": "1fa4625e9cefcb7a9abb5ac1b64315547450031eece8a55bd584e4ba4b79dbc1",
+      "bytes": 1316
+    },
+    {
+      "path": "common/UBL-XAdESv132-2.1.xsd",
+      "sha256": "a4f726bcf8cc3f7d9ffa4dab99e005535a8e8b60dced1e5d94578d2e05afa96e",
+      "bytes": 21664
+    },
+    {
+      "path": "common/UBL-xmldsig-core-schema-2.1.xsd",
+      "sha256": "101909c9f06456d61ddcc4fb982f1d40dc357b439f393b1a2eb46e42acd60809",
+      "bytes": 10750
+    },
+    {
+      "path": "common/UBL-CommonBasicComponents-2.1.xsd",
+      "sha256": "bd4ad043ee1d9da1c7f8018dabf739cfafdfb59143d0d16b9ef769e6b7c408a7",
+      "bytes": 219895
+    },
+    {
+      "path": "common/UBL-UnqualifiedDataTypes-2.1.xsd",
+      "sha256": "09052d406b4293e2a5f9c2bfee6df10ad4d8d5f0b36e24a6349d7f7936d89eb6",
+      "bytes": 27300
+    },
+    {
+      "path": "common/CCTS_CCT_SchemaModule-2.1.xsd",
+      "sha256": "dd546e4809df86b6445589f69f0d6c9df162840ae386574ddfc1da7638103e15",
+      "bytes": 45268
+    },
+    {
+      "path": "common/UBL-QualifiedDataTypes-2.1.xsd",
+      "sha256": "7dcb156e610239c97ae70940cf4653b88e48c3595bf5f56a2204a32e2893e6cf",
+      "bytes": 3590
+    },
+    {
+      "path": "common/UBL-SignatureBasicComponents-2.1.xsd",
+      "sha256": "cef924d7ba3d1d8ade14469325cde1364f8c174e46f0198ec02da8e9e748a489",
+      "bytes": 4207
+    },
+    {
+      "path": "common/UBL-CommonAggregateComponents-2.1.xsd",
+      "sha256": "939172ad8dd057cd403e7f763f6532184dd5ed4b9de24c42ebb35db4792ba613",
+      "bytes": 2420444
+    }
+  ],
+  "sources": [
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/maindoc/UBL-DespatchAdvice-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-CommonExtensionComponents-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-ExtensionContentDataType-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-CommonSignatureComponents-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-SignatureAggregateComponents-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-XAdESv141-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-XAdESv132-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-xmldsig-core-schema-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-CommonBasicComponents-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-UnqualifiedDataTypes-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/CCTS_CCT_SchemaModule-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-QualifiedDataTypes-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-SignatureBasicComponents-2.1.xsd",
+    "https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/common/UBL-CommonAggregateComponents-2.1.xsd"
+  ]
+}

@@ -1,8 +1,11 @@
 # SQLAlchemy instance is imported from extensions.py via `db`
-from sqlalchemy import CheckConstraint, UniqueConstraint, Index, func
-from datetime import datetime, timezone
-from extensions import db
+from datetime import UTC, datetime
 from decimal import Decimal
+
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint, func
+
+from extensions import db
+
 
 class Users(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -10,15 +13,16 @@ class Users(db.Model):
     password = db.Column(db.String(256), nullable=False)
     rol = db.Column(db.String(20), nullable=False, default='usuario')
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='SET NULL'))
+    auth_version = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
-    
+
     telegram_chat_id = db.Column(db.BigInteger, unique=True, nullable=True)
     telegram_context = db.Column(db.JSON, nullable=True)
     telegram_history = db.Column(db.JSON, nullable=True)
     telegram_linking_code = db.Column(db.String(10), unique=True, nullable=True)
     telegram_linking_expires = db.Column(db.DateTime(timezone=True), nullable=True)
-    
+
     movimientos = db.relationship('Movimiento', back_populates='usuario')
     almacen = db.relationship('Almacen', backref=db.backref('usuarios', lazy=True))
 
@@ -32,7 +36,7 @@ class Producto(db.Model):
     descripcion = db.Column(db.Text)
     precio_compra = db.Column(db.Numeric(12, 2), nullable=False)  # Precio por tonelada al proveedor
     activo = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     def __repr__(self):
@@ -62,7 +66,7 @@ class PresentacionProducto(db.Model):
 class Lote(db.Model):
     __tablename__ = 'lotes'
     id = db.Column(db.Integer, primary_key=True)
-    
+
     # Campos existentes
     producto_id = db.Column(db.Integer, db.ForeignKey('productos.id', ondelete='CASCADE'), nullable=True)
     proveedor_id = db.Column(db.Integer, db.ForeignKey('proveedores.id', ondelete='SET NULL'), nullable=True)
@@ -71,7 +75,7 @@ class Lote(db.Model):
     peso_seco_kg = db.Column(db.Numeric(10, 2), nullable=True)
     cantidad_disponible_kg = db.Column(db.Numeric(10, 2))
     fecha_ingreso = db.Column(db.DateTime(timezone=True))
-    
+
     # Nuevos campos para Lotes de Producción
     codigo_lote = db.Column(db.String(100), unique=True, nullable=True)
     es_produccion = db.Column(db.Boolean, default=False, nullable=False)
@@ -86,7 +90,7 @@ class Lote(db.Model):
     # Relaciones
     producto = db.relationship('Producto', backref=db.backref('lotes', lazy=True))
     proveedor = db.relationship('Proveedor', backref=db.backref('lotes', lazy=True))
-    
+
     lote_origen = db.relationship('Lote', remote_side=[id], backref='lotes_derivados')
 
 class Almacen(db.Model):
@@ -98,7 +102,7 @@ class Almacen(db.Model):
     es_planta = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
-    
+
     # Relaciones existentes (se mantienen)
     inventario = db.relationship('Inventario', backref='almacen', lazy=True)
     ventas = db.relationship('Venta', backref='almacen', lazy=True)
@@ -118,8 +122,8 @@ class Inventario(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     ultima_actualizacion = db.Column(
         db.DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         server_default=db.func.now()
     )
 
@@ -130,7 +134,7 @@ class Inventario(db.Model):
     __table_args__ = (
         # Garantizar que no haya duplicados para la combinación de estos tres campos
         UniqueConstraint('presentacion_id', 'almacen_id', 'lote_id', name='uq_inventario_compuesto'),
-        
+
         # Índices para mejorar el rendimiento de consultas comunes
         Index('idx_inventario_almacen', 'almacen_id', 'presentacion_id'),
     )
@@ -232,7 +236,7 @@ class Proveedor(db.Model):
     nombre = db.Column(db.String(255), nullable=False, unique=True)
     telefono = db.Column(db.String(20))
     direccion = db.Column(db.Text)
-    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
 class Cliente(db.Model):
@@ -274,12 +278,12 @@ class Pago(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     venta_id = db.Column(db.Integer, db.ForeignKey("ventas.id", ondelete="CASCADE"), nullable=False)
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
-    monto = db.Column(db.Numeric(12, 2), nullable=False) 
+    monto = db.Column(db.Numeric(12, 2), nullable=False)
     fecha = db.Column(db.DateTime(timezone=True))
     metodo_pago = db.Column(db.String(20), nullable=False)  # "efectivo", "transferencia", "tarjeta"
     referencia = db.Column(db.String(50))  # Número de transacción o comprobante
     url_comprobante = db.Column(db.String(255))
-    
+
     # Campos para rastreo de depósitos directos a cuenta corporativa
     monto_depositado = db.Column(db.Numeric(12, 2), nullable=True)  # Monto realmente depositado en cuenta corporativa
     depositado = db.Column(db.Boolean, default=False, nullable=False)  # Si se realizó el depósito
@@ -305,39 +309,74 @@ class Pago(db.Model):
         CheckConstraint("(depositado = true AND monto_depositado IS NOT NULL AND fecha_deposito IS NOT NULL) OR (depositado = false)"),
         Index('idx_pago_fecha_deposito', 'fecha_deposito'),
         Index('idx_pago_depositado_fecha', 'depositado', 'fecha_deposito'),
+        Index('idx_pagos_venta', 'venta_id'),
     )
 
+class StorageCleanupTask(db.Model):
+    """Cola durable de borrados de Storage pendientes de reintento."""
+    __tablename__ = 'storage_cleanup_tasks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    storage_key = db.Column(db.String(512), nullable=False)
+    reason = db.Column(db.String(50), nullable=False, default='replaced')
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.String(255))
+    next_attempt_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
+
+    __table_args__ = (
+        UniqueConstraint('storage_key', name='uq_storage_cleanup_storage_key'),
+        Index('idx_storage_cleanup_next_attempt', 'next_attempt_at'),
+    )
+
+
 class TelegramUpdate(db.Model):
+    """Bandeja de entrada duradera del webhook de Telegram (A08).
+
+    estado: recibido -> procesando -> procesado | fallido | abandonado.
+    """
     __tablename__ = 'telegram_updates'
-    
+
     update_id = db.Column(db.BigInteger, primary_key=True)
     recibido_en = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    estado = db.Column(db.String(20), nullable=False, default='recibido', server_default='procesado')
+    chat_id = db.Column(db.BigInteger, nullable=True)
+    payload = db.Column(db.JSON, nullable=True)
+    intentos = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    ultimo_error = db.Column(db.String(300), nullable=True)
+    actualizado_en = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index('idx_telegram_updates_chat_estado', 'chat_id', 'estado'),
+        Index('idx_telegram_updates_estado', 'estado'),
+    )
 
 class Movimiento(db.Model):
     __tablename__ = 'movimientos'
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(10), nullable=False)
-    
+
     # Relación con PresentacionProducto (1) - Nullable para materias primas
     presentacion_id = db.Column(db.Integer, db.ForeignKey('presentaciones_producto.id', ondelete='CASCADE'), nullable=True)
     presentacion = db.relationship('PresentacionProducto')
-    
+
     # Relación con Lote (2)
     lote_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='SET NULL'))
     lote = db.relationship('Lote', foreign_keys=[lote_id])
-    
+
     # Relación con Usuario (3)
     usuario_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
     usuario = db.relationship('Users', back_populates='movimientos')  # Nombre del modelo en singular
-    
+
     # Relación con Venta (BD-03)
     venta_id = db.Column(db.Integer, db.ForeignKey('ventas.id', ondelete='SET NULL'), index=True, nullable=True)
     venta = db.relationship('Venta')
-    
+
     cantidad = db.Column(db.Numeric(12, 2), nullable=False)
     fecha = db.Column(db.DateTime(timezone=True))
     motivo = db.Column(db.String(255))
-    
+
     # Campos adicionales para trazabilidad de producción
     tipo_operacion = db.Column(db.String(20))  # "produccion", "venta", "ajuste", "merma", "transferencia"
     lote_origen_id = db.Column(db.Integer, db.ForeignKey('lotes.id', ondelete='SET NULL'))  # Para conversiones
@@ -345,7 +384,7 @@ class Movimiento(db.Model):
     cantidad_kg_procesados = db.Column(db.Numeric(10, 2))  # Kg de materia prima utilizados
     eficiencia_conversion = db.Column(db.Numeric(5, 2))  # % de eficiencia en la conversión
     turno_produccion = db.Column(db.String(10))  # "mañana", "tarde", "noche"
-    
+
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
@@ -399,22 +438,22 @@ class Pedido(db.Model):
     cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='CASCADE'), nullable=False)
     vendedor_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
-    fecha_creacion = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fecha_creacion = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(UTC))
     fecha_entrega = db.Column(db.DateTime(timezone=True), nullable=False)
     estado = db.Column(db.String(20), default='programado')  # programado, confirmado, entregado, cancelado
     notas = db.Column(db.Text)
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
-    
+
     # Relaciones
     cliente = db.relationship('Cliente', backref=db.backref('pedidos', lazy=True))
     almacen = db.relationship('Almacen')
     vendedor = db.relationship('Users')
     detalles = db.relationship('PedidoDetalle', backref='pedido', lazy=True, cascade="all, delete-orphan")
-    
+
     @property
     def total_estimado(self):
         return sum(detalle.cantidad * detalle.precio_estimado for detalle in self.detalles)
-    
+
     __table_args__ = (
         CheckConstraint("estado IN ('programado', 'confirmado', 'entregado', 'cancelado')"),
     )
@@ -428,7 +467,7 @@ class PedidoDetalle(db.Model):
     precio_estimado = db.Column(db.Numeric(12, 2), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
-    
+
     # Relación
     presentacion = db.relationship('PresentacionProducto')
 
@@ -469,7 +508,7 @@ class ComandoVozLog(db.Model):
     detección de ataques y análisis de uso.
     """
     __tablename__ = 'comandos_voz_logs'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     usuario_id = db.Column(db.Integer, nullable=False)  # Relación lógica con Users
     almacen_id = db.Column(db.Integer, nullable=True)
@@ -479,7 +518,7 @@ class ComandoVozLog(db.Model):
     exito = db.Column(db.Boolean, default=False)
     latencia_ms = db.Column(db.Integer, nullable=True)  # Tiempo de procesamiento
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    
+
     __table_args__ = (
         Index('idx_comandos_voz_usuario', 'usuario_id'),
         Index('idx_comandos_voz_created', 'created_at'),

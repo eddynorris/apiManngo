@@ -1,14 +1,13 @@
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt
-from flask import request
-from models import Venta, Pedido, Inventario, Cliente, PresentacionProducto, Almacen, Lote, Pago
-from extensions import db
-from common import handle_db_errors, rol_requerido
-from datetime import datetime, timezone, timedelta
-from sqlalchemy import func, case
-from sqlalchemy.orm import subqueryload, joinedload
-from decimal import Decimal
 import logging
+from decimal import Decimal
+
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource
+from sqlalchemy.orm import joinedload, subqueryload
+
+from common import handle_db_errors, rol_requerido
+from extensions import db
+from models import Almacen, Inventario, PresentacionProducto, Venta
 
 logger = logging.getLogger(__name__)
 
@@ -39,19 +38,6 @@ class DashboardResource(Resource):
          .join(Almacen, Inventario.almacen_id == Almacen.id)\
          .filter(Inventario.cantidad <= Inventario.stock_minimo) # Alerta de stock bajo
 
-        # Lotes con cantidad baja (SIN filtro de fecha)
-        # Ajusta el umbral (e.g., 500) según sea necesario
-        UMBRAL_LOTE_BAJO_KG = 500
-        lotes_query = db.session.query(
-            Lote.id.label('lote_id'),
-            Lote.descripcion.label('lote_descripcion'),
-            Lote.cantidad_disponible_kg,
-            Lote.producto_id, # Para posible referencia futura
-            # Si necesitas el nombre del producto, añade un join:
-            # .join(Producto, Lote.producto_id == Producto.id)
-            # y selecciona Producto.nombre
-        ).filter(Lote.cantidad_disponible_kg < UMBRAL_LOTE_BAJO_KG) # Alerta de lote bajo
-
         # --- NUEVA QUERY ÚNICA PARA CLIENTES CON SALDO PENDIENTE ---
         # 1. Obtener todas las ventas pendientes o parciales, cargando eficientemente
         #    el cliente y los pagos asociados para evitar el problema N+1.
@@ -70,35 +56,12 @@ class DashboardResource(Resource):
             # Aplicar filtro a las queries que tienen relación directa con almacén
             inventario_query = inventario_query.filter(Inventario.almacen_id == user_almacen_id)
             ventas_pendientes_query = ventas_pendientes_query.filter(Venta.almacen_id == user_almacen_id)
-        
+
         # La query de lotes (lotes_query) no se filtra por almacén aquí.
 
         # --- Ejecutar Queries y Formatear Resultados ---
         try:
-            # Alertas de stock bajo (siempre se calculan)
-            stock_bajo_items = inventario_query.order_by(Almacen.nombre, PresentacionProducto.nombre).all()
-            stock_bajo_data = [
-                {
-                    "presentacion_id": item.presentacion_id,
-                    "nombre": item.presentacion_nombre,
-                    "cantidad": float(item.cantidad),
-                    "stock_minimo": item.stock_minimo,
-                    "almacen_id": item.almacen_id,
-                    "almacen_nombre": item.almacen_nombre
-                } for item in stock_bajo_items
-            ]
-
-            # Alertas de lotes bajos (siempre se calculan)
-            lotes_bajos_items = lotes_query.order_by(Lote.cantidad_disponible_kg).all()
-            lotes_alerta_data = [
-                {
-                    "lote_id": item.lote_id,
-                    "descripcion": item.lote_descripcion,
-                    "cantidad_disponible_kg": float(item.cantidad_disponible_kg or 0),
-                    "producto_id": item.producto_id
-                    # Añadir más detalles si es necesario
-                } for item in lotes_bajos_items
-            ]
+            # Las alertas de stock y lotes bajos se retiraron de la respuesta; ya no se consultan.
 
             # --- Procesar y Agrupar los resultados de la nueva query de ventas ---
             ventas_con_deuda = ventas_pendientes_query.order_by(Venta.fecha.asc()).all()
@@ -126,7 +89,7 @@ class DashboardResource(Resource):
                         "saldo_pendiente_total": Decimal('0'),
                         "ventas_pendientes": []
                     }
-                
+
                 # Formatear los pagos de esta venta
                 pagos_data = [
                     {
@@ -148,7 +111,7 @@ class DashboardResource(Resource):
                     "pagos": pagos_data
                 }
                 clientes_con_saldo_map[cliente.id]["ventas_pendientes"].append(venta_data)
-                
+
                 # Acumular el saldo total del cliente
                 clientes_con_saldo_map[cliente.id]["saldo_pendiente_total"] += saldo_pendiente_venta
 
@@ -156,7 +119,7 @@ class DashboardResource(Resource):
             clientes_saldo_data = list(clientes_con_saldo_map.values())
             for cliente_data in clientes_saldo_data:
                 cliente_data["saldo_pendiente_total"] = float(cliente_data["saldo_pendiente_total"])
-                
+
             # Calcular la sumatoria total de la deuda de todos los clientes
             total_deuda_clientes = sum(c["saldo_pendiente_total"] for c in clientes_saldo_data)
 

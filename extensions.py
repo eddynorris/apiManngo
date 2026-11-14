@@ -1,9 +1,10 @@
 import os
-from flask_sqlalchemy import SQLAlchemy
+
+from flasgger import Swagger
 from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
-from supabase import create_client, Client
-from flasgger import Swagger
+from flask_sqlalchemy import SQLAlchemy
+from supabase import Client, create_client
 
 # Crear instancias de extensiones
 db = SQLAlchemy()
@@ -14,7 +15,8 @@ swagger = Swagger()
 # Inicializar cliente de Supabase
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
-if supabase_url and supabase_key:
+testing_env = os.getenv("FLASK_ENV") == "testing" or os.getenv("MANNGO_OFFLINE_TESTS") == "1"
+if not testing_env and supabase_url and supabase_key:
     supabase: Client = create_client(supabase_url, supabase_key)
 else:
     supabase = None

@@ -1,14 +1,37 @@
-from marshmallow import Schema, fields, EXCLUDE
+from marshmallow import EXCLUDE, ValidationError, fields
 from marshmallow_sqlalchemy import SQLAlchemyAutoSchema
-from models import (
-    Users, Producto, Almacen, Cliente, Gasto, Movimiento, 
-    Venta, VentaDetalle, Proveedor, Pago, Inventario,
-    PresentacionProducto, Lote, Merma, PedidoDetalle, Pedido,
-    Receta, ComponenteReceta, ComandoVozLog  # Added for voice command audit
-)
+
 from extensions import db
-from decimal import Decimal, InvalidOperation
-import logging
+from models import (
+    Almacen,
+    Cliente,
+    ComandoVozLog,
+    ComponenteReceta,
+    Gasto,
+    Inventario,
+    Lote,
+    Merma,
+    Movimiento,
+    Pago,
+    Pedido,
+    PedidoDetalle,
+    PresentacionProducto,
+    Producto,
+    Proveedor,
+    Receta,  # Added for voice command audit
+    Users,
+    Venta,
+    VentaDetalle,
+)
+from services.money import monto_decimal_positivo
+
+
+def _validar_monto_positivo(value):
+    """Rechaza montos no finitos, no positivos o no numéricos."""
+    try:
+        monto_decimal_positivo(value)
+    except ValueError as error:
+        raise ValidationError(str(error)) from None
 
 # ------------------------- ESQUEMAS BASE -------------------------
 class AlmacenSchema(SQLAlchemyAutoSchema):
@@ -16,25 +39,34 @@ class AlmacenSchema(SQLAlchemyAutoSchema):
         model = Almacen
         load_instance = True
         unknown = EXCLUDE
-        sqla_session = db.session 
+        sqla_session = db.session
         exclude = ("inventario", "ventas")  # Excluir relaciones recursivas
 
 class UserSchema(SQLAlchemyAutoSchema):
     almacen = fields.Nested(AlmacenSchema, only=("id", "nombre"))
+    password = fields.String(load_only=True)
 
     class Meta:
         model = Users
         load_instance = True
         unknown = EXCLUDE
-        sqla_session = db.session 
-        exclude = ("movimientos",)
+        sqla_session = db.session
+        exclude = (
+            "movimientos",
+            "auth_version",
+            "telegram_chat_id",
+            "telegram_context",
+            "telegram_history",
+            "telegram_linking_code",
+            "telegram_linking_expires",
+        )
         include_fk = True
 
 class ProveedorSchema(SQLAlchemyAutoSchema):
     class Meta:
         model = Proveedor
         load_instance = True
-        sqla_session = db.session 
+        sqla_session = db.session
         unknown = EXCLUDE
 
 
@@ -46,7 +78,7 @@ class ProductoSchema(SQLAlchemyAutoSchema):
         model = Producto
         load_instance = True
         unknown = EXCLUDE
-        sqla_session = db.session 
+        sqla_session = db.session
 
 
 class PresentacionSchema(SQLAlchemyAutoSchema):
@@ -54,12 +86,12 @@ class PresentacionSchema(SQLAlchemyAutoSchema):
     precio_venta = fields.Decimal(as_string=True)
     capacidad_kg = fields.Decimal(as_string=True)
     url_foto = fields.String(dump_only=True)
-    
+
     class Meta:
         model = PresentacionProducto
         load_instance = True
         unknown = EXCLUDE
-        sqla_session = db.session 
+        sqla_session = db.session
         include_fk = True  # Incluir producto_id
 
 class LoteSchema(SQLAlchemyAutoSchema):
@@ -68,7 +100,7 @@ class LoteSchema(SQLAlchemyAutoSchema):
     peso_humedo_kg = fields.Decimal(as_string=True)
     peso_seco_kg = fields.Decimal(as_string=True)
     cantidad_disponible_kg = fields.Decimal(as_string=True)
-    
+
     # Nuevos campos
     lote_origen = fields.Nested("LoteSchema", only=("id", "codigo_lote", "descripcion"), dump_only=True)
 
@@ -90,7 +122,7 @@ class MermaSchema(SQLAlchemyAutoSchema):
         model = Merma
         load_instance = True
         unknown = EXCLUDE
-        sqla_session = db.session 
+        sqla_session = db.session
         include_fk = True
 
 class InventarioSchema(SQLAlchemyAutoSchema):
@@ -118,7 +150,7 @@ class ClienteSchema(SQLAlchemyAutoSchema):
         load_instance = True
         unknown = EXCLUDE
         include_fk = True
-        sqla_session = db.session 
+        sqla_session = db.session
 
 
 class MovimientoSchema(SQLAlchemyAutoSchema):
@@ -129,7 +161,7 @@ class MovimientoSchema(SQLAlchemyAutoSchema):
     cantidad = fields.Decimal(as_string=True)
     cantidad_kg_procesados = fields.Decimal(as_string=True)
     eficiencia_conversion = fields.Decimal(as_string=True)
-    
+
     # Campo calculado para mostrar el total en kg
     total_kg = fields.Decimal(as_string=True, dump_only=True)
 
@@ -149,8 +181,8 @@ class VentaDetalleSchema(SQLAlchemyAutoSchema):
     class Meta:
         model = VentaDetalle
         load_instance = True
-        unknown = EXCLUDE   
-        sqla_session = db.session 
+        unknown = EXCLUDE
+        sqla_session = db.session
         include_fk = True
         exclude = ("venta_id",)
 
@@ -168,22 +200,28 @@ class VentaSchema(SQLAlchemyAutoSchema):
         load_instance = True
         sqla_session = db.session
         include_relationships = True
-        include_fk = True 
+        include_fk = True
         unknown = EXCLUDE
 
 class PagoSchema(SQLAlchemyAutoSchema):
     venta = fields.Nested(VentaSchema, only=("id", "total","cliente"), dump_only=True)
     usuario = fields.Nested(UserSchema, only=("id", "username"), dump_only=True)
-    monto = fields.Decimal(as_string=True)
-    monto_depositado = fields.Decimal(as_string=True)
+    id = fields.Integer(dump_only=True)
+    venta_id = fields.Integer()
+    monto = fields.Decimal(as_string=True, validate=_validar_monto_positivo)
+    # Campos de servidor: se serializan pero nunca se cargan desde el cliente.
+    usuario_id = fields.Integer(dump_only=True)
+    monto_depositado = fields.Decimal(as_string=True, dump_only=True)
     monto_en_gerencia = fields.Decimal(as_string=True, dump_only=True)  # Propiedad calculada
+    depositado = fields.Boolean(dump_only=True)
+    fecha_deposito = fields.DateTime(dump_only=True)
     url_comprobante = fields.String(dump_only=True)
 
     class Meta:
         model = Pago
         load_instance = True
         unknown = EXCLUDE
-        sqla_session = db.session 
+        sqla_session = db.session
         include_fk = True
 
 class GastoSchema(SQLAlchemyAutoSchema):
@@ -213,7 +251,7 @@ class PedidoDetalleSchema(SQLAlchemyAutoSchema):
         exclude = ("pedido_id",)
 
 class PedidoSchema(SQLAlchemyAutoSchema):
-    cliente = fields.Nested(ClienteSchema, only=("id", "nombre"))   
+    cliente = fields.Nested(ClienteSchema, only=("id", "nombre"))
     almacen = fields.Nested(AlmacenSchema, only=("id", "nombre"))
     vendedor = fields.Nested(UserSchema, only=("id", "username"))
     detalles = fields.List(fields.Nested(PedidoDetalleSchema))

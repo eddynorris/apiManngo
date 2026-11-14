@@ -1,13 +1,16 @@
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt
-from flask import request
-from models import Lote, Proveedor, Producto, Merma, Inventario, Movimiento, PresentacionProducto
-from schemas import lote_schema, lotes_schema, merma_schema
-from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido
-from sqlalchemy import asc, desc
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timezone
+
+from flask import request
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+from sqlalchemy import asc, desc
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, rol_requerido
+from extensions import db
+from models import Lote, Producto, Proveedor
+from schemas import lote_schema, lotes_schema
+
 
 class LoteResource(Resource):
     @jwt_required()
@@ -16,7 +19,7 @@ class LoteResource(Resource):
         if lote_id:
             lote = Lote.query.get_or_404(lote_id)
             return lote_schema.dump(lote), 200
-        
+
         sort_by = request.args.get('sort_by', 'created_at')
         sort_order = request.args.get('sort_order', 'desc').lower()
 
@@ -56,7 +59,7 @@ class LoteResource(Resource):
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         lotes = query.paginate(page=page, per_page=per_page, error_out=False)
-        
+
         return {
             "data": lotes_schema.dump(lotes.items),
             "pagination": {
@@ -84,7 +87,7 @@ class LoteResource(Resource):
         for field in required_fields:
             if field not in json_data:
                 return {"error": f"El campo '{field}' es requerido."}, 400
-        
+
         try:
             peso_humedo = Decimal(json_data['peso_humedo_kg'])
             if peso_humedo <= 0:
@@ -95,22 +98,22 @@ class LoteResource(Resource):
         # 2. Validar existencia de entidades relacionadas
         Producto.query.get_or_404(json_data['producto_id'])
         Proveedor.query.get_or_404(json_data['proveedor_id'])
-        
+
         # 3. Crear el Lote
         nuevo_lote = lote_schema.load(json_data)
-        
+
         # Establecer valores por defecto si no se proporcionan
         if not nuevo_lote.fecha_ingreso:
-            nuevo_lote.fecha_ingreso = datetime.now(timezone.utc)
-        
+            nuevo_lote.fecha_ingreso = datetime.now(UTC)
+
         # Si no se proporciona peso seco, usar el húmedo como inicial
         if not nuevo_lote.peso_seco_kg:
             nuevo_lote.peso_seco_kg = peso_humedo
-        
+
         # Establecer is_active como True por defecto si no se proporciona
         if not hasattr(nuevo_lote, 'is_active') or nuevo_lote.is_active is None:
             nuevo_lote.is_active = True
-        
+
         # La cantidad disponible inicialmente es el peso húmedo
         nuevo_lote.cantidad_disponible_kg = peso_humedo
 

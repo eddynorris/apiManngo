@@ -1,29 +1,57 @@
 from .almacen_resource import AlmacenResource
 from .auth_resource import AuthResource
 from .chat_resource import ChatResource
-from .cliente_resource import ClienteExportResource, ClienteResource, ClienteProyeccionResource, ClienteProyeccionExportResource
+from .cliente_resource import (
+    ClienteExportResource,
+    ClienteProyeccionExportResource,
+    ClienteProyeccionResource,
+    ClienteResource,
+)
+from .compra_insumo_resource import CompraInsumoResource, InsumoAlertaResource
 from .dashboard_resource import DashboardResource
-from .gasto_resource import GastoResource, GastoExportResource
-from .produccion_resource import ProduccionResource, ProduccionEnsamblajeResource
-from .compra_insumo_resource import InsumoAlertaResource, CompraInsumoResource
-from .inventario_resource import InventarioResource, InventarioGlobalResource
-from .transferencia_resource import TransferenciaInventarioResource # <-- Importado desde el nuevo archivo
+from .gasto_resource import GastoExportResource, GastoResource
+from .inventario_resource import InventarioGlobalResource, InventarioResource
 from .lote_resource import LoteResource
 from .merma_resource import MermaResource
 from .movimiento_resource import MovimientoResource
-from .pago_resource import PagoResource, PagosPorVentaResource, PagoBatchResource, DepositoBancarioResource as PagoDepositoBancarioResource, PagoExportResource, CierreCajaResource
-from .pedido_resource import PedidoResource, PedidoConversionResource, PedidoFormDataResource
+from .pago_resource import (
+    CierreCajaResource,
+    PagoBatchResource,
+    PagoExportResource,
+    PagoResource,
+    PagosPorVentaResource,
+)
+from .pago_resource import DepositoBancarioResource as PagoDepositoBancarioResource
+from .pedido_resource import PedidoConversionResource, PedidoFormDataResource, PedidoResource
 from .presentacion_resource import PresentacionResource
+from .produccion_resource import ProduccionEnsamblajeResource, ProduccionResource
 from .producto_resource import ProductoResource
 from .proveedor_resource import ProveedorResource
 from .receta_resource import RecetaResource
-from .reporte_financiero_resource import ReporteVentasPresentacionResource, ResumenFinancieroResource, ReporteUnificadoResource, DepositosHistorialResource
-from .reporte_produccion_resource import ReporteProduccionBriquetasResource, ReporteProduccionGeneralResource, ReporteProduccionEntradasResource
+from .reporte_financiero_resource import (
+    DepositosHistorialResource,
+    ReporteUnificadoResource,
+    ReporteVentasPresentacionResource,
+    ResumenFinancieroResource,
+)
+from .reporte_produccion_resource import (
+    ReporteProduccionBriquetasResource,
+    ReporteProduccionEntradasResource,
+    ReporteProduccionGeneralResource,
+)
+from .telegram_webhook_resource import TelegramLinkResource, TelegramWebhookResource
+from .transferencia_resource import (
+    TransferenciaInventarioResource,  # <-- Importado desde el nuevo archivo
+)
 from .user_resource import UserResource
-from .venta_resource import VentaResource, VentaFormDataResource, VentaExportResource, VentaFilterDataResource
+from .venta_resource import (
+    VentaExportResource,
+    VentaFilterDataResource,
+    VentaFormDataResource,
+    VentaResource,
+)
 from .ventadetalle_resource import VentaDetalleResource
 from .voice_resource import VoiceCommandResource
-from .telegram_webhook_resource import TelegramWebhookResource, TelegramLinkResource
 
 __all__ = [
     'AlmacenResource',
@@ -76,6 +104,7 @@ __all__ = [
 
 from resources.transaccion_resource import TransaccionCompletaResource
 
+
 def init_resources(api, limiter=None):
     # ... (existing resources)
     api.add_resource(TransaccionCompletaResource, '/transacciones/venta-completa')
@@ -83,7 +112,7 @@ def init_resources(api, limiter=None):
     # Autenticación y Usuarios
     api.add_resource(AuthResource, '/auth')
     api.add_resource(UserResource, '/usuarios', '/usuarios/<int:user_id>')
-    
+
     # Recursos Principales
     api.add_resource(ProductoResource, '/productos', '/productos/<int:producto_id>')
     api.add_resource(PresentacionResource, '/presentaciones', '/presentaciones/<int:presentacion_id>')
@@ -94,7 +123,7 @@ def init_resources(api, limiter=None):
     api.add_resource(ClienteProyeccionExportResource, '/clientes/proyecciones/exportar')
     api.add_resource(ProveedorResource, '/proveedores', '/proveedores/<int:proveedor_id>')
     api.add_resource(LoteResource, '/lotes', '/lotes/<int:lote_id>')
-    
+
     # Inventario y Movimientos
     api.add_resource(InventarioResource, '/inventarios', '/inventarios/<int:inventario_id>')
     api.add_resource(InventarioGlobalResource, '/inventario/reporte-global')
@@ -102,7 +131,7 @@ def init_resources(api, limiter=None):
     api.add_resource(InsumoAlertaResource, '/inventario/alertas-insumos')
 
     api.add_resource(MovimientoResource, '/movimientos', '/movimientos/<int:movimiento_id>')
-    
+
     # Ventas
     api.add_resource(VentaResource, '/ventas', '/ventas/<int:venta_id>')
     api.add_resource(VentaFormDataResource, '/ventas/form-data')
@@ -117,18 +146,18 @@ def init_resources(api, limiter=None):
     api.add_resource(PagoDepositoBancarioResource, '/pagos/depositos')
     api.add_resource(PagoExportResource, '/pagos/exportar')
     api.add_resource(CierreCajaResource, '/pagos/cierrecaja')
-    
+
     # Gastos
     api.add_resource(GastoResource, '/gastos', '/gastos/<int:gasto_id>')
     api.add_resource(CompraInsumoResource, '/compras/insumos')
     api.add_resource(GastoExportResource, '/gastos/exportar')
-    
+
     # Otros
     api.add_resource(MermaResource, '/mermas', '/mermas/<int:merma_id>')
     api.add_resource(PedidoResource, '/pedidos', '/pedidos/<int:pedido_id>')
     api.add_resource(PedidoConversionResource, '/pedidos/<int:pedido_id>/convertir')
     api.add_resource(PedidoFormDataResource, '/pedidos/form-data')
-    
+
     # --- Producción y Recetas ---
     # Gestión de Recetas (Admin)
     api.add_resource(RecetaResource, '/recetas', '/recetas/<int:id>')
@@ -146,16 +175,16 @@ def init_resources(api, limiter=None):
     api.add_resource(ReporteProduccionBriquetasResource, '/reportes/produccion-briquetas')
     api.add_resource(ReporteProduccionGeneralResource, '/reportes/produccion-general')
     api.add_resource(ReporteProduccionEntradasResource, '/reportes/produccion-entradas', '/reportes/movimientos-entrada')
-    
+
     # Chat
     api.add_resource(ChatResource, '/chat')
-    
+
     # Voice Commands (Gemini) - Rate limited: 20/minute & Auth: 10/minute
     if limiter:
         limiter.limit("10/minute", error_message="Demasiados intentos de autenticación. Intenta nuevamente en un minuto.")(AuthResource)
         limiter.limit("20/minute", error_message="Demasiados comandos de voz. Espera un momento.")(VoiceCommandResource)
         limiter.exempt(TelegramWebhookResource)
-    
+
     api.add_resource(VoiceCommandResource, '/voice/command')
     api.add_resource(TelegramWebhookResource, '/telegram/webhook/<string:webhook_token>')
     api.add_resource(TelegramLinkResource, '/telegram/vincular')

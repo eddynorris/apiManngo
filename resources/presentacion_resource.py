@@ -1,13 +1,16 @@
 # ARCHIVO: resources/presentacion_resource.py
+from flask import request  # Eliminado jsonify de nuevo
+from flask_jwt_extended import jwt_required  # get_jwt no usado aquí
 from flask_restful import Resource
-from flask_jwt_extended import jwt_required # get_jwt no usado aquí
-from flask import request, jsonify # Eliminado jsonify de nuevo
-from models import PresentacionProducto, Inventario, VentaDetalle
-from models import Almacen
-from schemas import presentacion_schema, presentaciones_schema # Asegúrate que existan y sean correctos
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, rol_requerido
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido
-from utils.file_handlers import save_file, delete_file, get_presigned_url
+from models import Almacen, Inventario, PresentacionProducto, VentaDetalle
+from schemas import (  # Asegúrate que existan y sean correctos
+    presentacion_schema,
+)
+from utils.file_handlers import delete_file, get_presigned_url, save_file
+
 # import os # No usado directamente aquí
 # from werkzeug.datastructures import FileStorage # No usado directamente aquí
 # from flask import current_app # No usado directamente aquí
@@ -39,7 +42,7 @@ class PresentacionResource(Resource):
         query = PresentacionProducto.query
         if producto_id := request.args.get('producto_id'):
             query = query.filter_by(producto_id=producto_id)
-        
+
         # Filtro por tipo mejorado para aceptar múltiples valores separados por coma
         if tipos_str := request.args.get('tipo'):
             tipos = [t.strip() for t in tipos_str.split(',') if t.strip()]
@@ -125,7 +128,7 @@ class PresentacionResource(Resource):
                 if not almacen:
                     db.session.rollback()
                     return {"error": f"El almacén con ID {almacen_id} no existe."}, 404
-                
+
                 inv = Inventario(
                     presentacion_id=nueva_presentacion.id,
                     almacen_id=almacen.id,
@@ -138,7 +141,7 @@ class PresentacionResource(Resource):
                 if not almacenes:
                     db.session.rollback()
                     return {"error": "No se encontraron almacenes para crear el inventario."}, 404
-                
+
                 for almacen in almacenes:
                     inv = Inventario(
                         presentacion_id=nueva_presentacion.id,
@@ -206,7 +209,7 @@ class PresentacionResource(Resource):
                 if not almacen:
                     db.session.rollback()
                     return {"error": f"El almacén con ID {almacen_id} no existe."}, 404
-                
+
                 inv = Inventario(
                     presentacion_id=nueva_presentacion.id,
                     almacen_id=almacen.id,
@@ -228,7 +231,7 @@ class PresentacionResource(Resource):
                     )
                     db.session.add(inv)
             # ------------------------------------
-            
+
             db.session.commit()
 
             return presentacion_schema.dump(nueva_presentacion), 201

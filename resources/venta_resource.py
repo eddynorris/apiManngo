@@ -1,21 +1,71 @@
-from flask_restful import Resource, reqparse
-from flask_jwt_extended import jwt_required, get_jwt
-from flask import request, send_file
-from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Lote, Users, Gasto, Pago
-from schemas import venta_schema, ventas_schema, clientes_schema, almacenes_schema, presentacion_schema
-from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
-from utils.file_handlers import get_presigned_url
-from services.pago_service import PagoService
-from services.venta_service import VentaService, StockInsuficienteError
-from datetime import datetime, timezone
-from decimal import Decimal
-import logging
-from sqlalchemy import asc, desc, orm
-import pandas as pd
 import io
+import logging
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+
+import pandas as pd
+from flask import current_app, request, send_file
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource, reqparse
+from sqlalchemy import asc, desc, orm
+from werkzeug.exceptions import HTTPException
+
+from common import (
+    MAX_ITEMS_PER_PAGE,
+    handle_db_errors,
+    obtener_payload_normalizado,
+    parse_iso_datetime,
+)
+from extensions import db
+from models import (
+    Almacen,
+    Cliente,
+    Inventario,
+    PresentacionProducto,
+    Users,
+    Venta,
+    VentaDetalle,
+)
+from schemas import (
+    almacenes_schema,
+    clientes_schema,
+    presentacion_schema,
+    venta_schema,
+    ventas_schema,
+)
+from services.authorization import autorizar_venta, normalizar_lista_ids
+from services.storage_cleanup_service import (
+    commit_with_storage_finalization,
+    rollback_and_compensate,
+)
+from services.venta_service import StockInsuficienteError, VentaService
+from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
+
+
+def _opciones_carga_ventas():
+    """Carga relaciones escalares y colecciones de venta sin N+1."""
+    return (
+        orm.joinedload(Venta.cliente),
+        orm.joinedload(Venta.almacen),
+        orm.joinedload(Venta.vendedor),
+        orm.selectinload(Venta.detalles).joinedload(VentaDetalle.presentacion),
+        orm.selectinload(Venta.pagos),
+    )
+
+
+def _limite_ventas_configurado(nombre):
+    """Valida en request el tope configurado para respuestas masivas."""
+    crudo = current_app.config.get(nombre)
+    try:
+        valor = int(crudo)
+    except (TypeError, ValueError):
+        raise ValueError(f"Configuración inválida para {nombre}") from None
+    if not 1 <= valor <= 1_000_000:
+        raise ValueError(f"Configuración fuera de rango para {nombre}")
+    return valor
+
 
 class VentaResource(Resource):
     @jwt_required()
@@ -26,21 +76,20 @@ class VentaResource(Resource):
         is_admin = user_rol == 'admin'
 
         if venta_id:
-            venta = Venta.query.get_or_404(venta_id)
-            if not is_admin and str(venta.vendedor_id) != str(current_user_id):
-                return {"error": "No tienes permiso para ver esta venta"}, 403
-            
+            venta = Venta.query.options(*_opciones_carga_ventas()).filter_by(id=venta_id).first_or_404()
+            autorizar_venta(current_user_id, venta)
+
             result = venta_schema.dump(venta)
-            
+
             if 'detalles' in result and result['detalles']:
                 for detalle in result['detalles']:
                     if 'presentacion' in detalle and detalle['presentacion'] and 'url_foto' in detalle['presentacion']:
                         s3_key = detalle['presentacion']['url_foto']
                         if s3_key:
                             detalle['presentacion']['url_foto'] = get_presigned_url(s3_key)
-            
+
             return result, 200
-        
+
         filters = {
             "cliente_id": request.args.get('cliente_id'),
             "almacen_id": request.args.get('almacen_id'),
@@ -51,18 +100,18 @@ class VentaResource(Resource):
         }
 
         get_all = request.args.get('all', 'false').lower() == 'true'
-        query = Venta.query
+        query = Venta.query.options(*_opciones_carga_ventas())
 
         if not is_admin:
             query = query.filter_by(vendedor_id=current_user_id)
         elif filters["vendedor_id"]:
             query = query.filter_by(vendedor_id=filters["vendedor_id"])
-        
+
         if filters["cliente_id"]:
             query = query.filter_by(cliente_id=filters["cliente_id"])
         if filters["almacen_id"]:
             query = query.filter_by(almacen_id=filters["almacen_id"])
-        
+
         if filters["estado_pago"]:
             statuses = [status.strip() for status in filters["estado_pago"].split(',') if status.strip()]
             if statuses:
@@ -75,7 +124,7 @@ class VentaResource(Resource):
                 query = query.filter(Venta.fecha.between(fecha_inicio, fecha_fin))
             except ValueError:
                 return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400
-        
+
         sort_by = request.args.get('sort_by', 'fecha')
         sort_order = request.args.get('sort_order', 'desc').lower()
 
@@ -87,17 +136,31 @@ class VentaResource(Resource):
 
         if sort_by == 'cliente_nombre':
             query = query.join(Cliente, Venta.cliente_id == Cliente.id)
-        
+
         query = query.order_by(order_func(column_to_sort))
 
         if get_all:
+            try:
+                limite = _limite_ventas_configurado('MAX_VENTAS_ALL')
+            except ValueError as e:
+                return {"error": str(e)}, 400
+
+            total = query.count()
+            if total > limite:
+                return {
+                    "error": "El número de ventas solicitadas excede el límite permitido",
+                    "limite": limite,
+                    "total": total,
+                    "sugerencia": "Usa paginación (page/per_page) o reduce los filtros.",
+                }, 413
+
             ventas_items = query.all()
             return {"data": ventas_schema.dump(ventas_items)}, 200
 
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         ventas = query.paginate(page=page, per_page=per_page)
-        
+
         return {
             "data": ventas_schema.dump(ventas.items),
             "pagination": {
@@ -106,24 +169,14 @@ class VentaResource(Resource):
         }, 200
 
     @jwt_required()
-    @mismo_almacen_o_admin
     @handle_db_errors
     def post(self):
         """
         Crea una nueva venta delegando la lógica al VentaService.
         """
-        import json
-        if request.content_type and 'multipart/form-data' in request.content_type:
-            data_from_request = request.form.to_dict()
-            file_comprobante = request.files.get('comprobante')
-            if 'detalles' in data_from_request and isinstance(data_from_request['detalles'], str):
-                try:
-                    data_from_request['detalles'] = json.loads(data_from_request['detalles'])
-                except json.JSONDecodeError:
-                    return {"error": "Formato de detalles inválido"}, 400
-        else:
-            data_from_request = request.get_json()
-            file_comprobante = None
+        data_from_request, file_comprobante = obtener_payload_normalizado()
+        if not isinstance(data_from_request, dict):
+            return {"error": "Datos inválidos"}, 400
 
         detalles_data = data_from_request.get('detalles', [])
         if not detalles_data:
@@ -135,11 +188,14 @@ class VentaResource(Resource):
             return {"error": str(e)}, 400
 
         claims = get_jwt()
-        vendedor_id = claims.get('sub')
-        estado = data_from_request.get('estado', 'completado').lower()
-        monto_pago = Decimal(str(data_from_request.get('monto_pago') or 0))
-        metodo_pago = (data_from_request.get('metodo_pago') or 'efectivo').lower()
-        monto_gasto = Decimal(str(data_from_request.get('monto_gasto') or 0))
+        vendedor_id = int(claims.get('sub'))
+        estado = str(data_from_request.get('estado') or 'completado').lower()
+        metodo_pago = str(data_from_request.get('metodo_pago') or 'efectivo').lower()
+        try:
+            monto_pago = Decimal(str(data_from_request.get('monto_pago') or 0))
+            monto_gasto = Decimal(str(data_from_request.get('monto_gasto') or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            return {"error": "Monto de pago o gasto inválido"}, 400
 
         try:
             nueva_venta = VentaService.crear_venta(
@@ -153,105 +209,98 @@ class VentaResource(Resource):
                 metodo_pago=metodo_pago,
                 monto_gasto=monto_gasto,
                 file_comprobante=file_comprobante,
-                estado_pago=data_from_request.get('estado_pago')
+                estado_pago=data_from_request.get('estado_pago'),
+                actor_id=vendedor_id
             )
-            db.session.commit()
+            commit_with_storage_finalization()
             return venta_schema.dump(nueva_venta), 201
+        except HTTPException:
+            rollback_and_compensate()
+            raise
         except StockInsuficienteError as e:
-            db.session.rollback()
+            rollback_and_compensate()
             return {"error": str(e)}, 400
         except ValueError as e:
-            db.session.rollback()
+            rollback_and_compensate()
             return {"error": str(e)}, 400
         except Exception as e:
-            db.session.rollback()
+            rollback_and_compensate()
             logger.error(f"Error al crear venta: {e}", exc_info=True)
             return {"error": "Error interno al procesar la venta."}, 500
 
     @jwt_required()
-    @mismo_almacen_o_admin
     @handle_db_errors
     def put(self, venta_id):
         """
         Actualiza una venta existente delegando en el servicio.
         """
-        import json
-        if request.content_type and 'multipart/form-data' in request.content_type:
-            data = request.form.to_dict()
-            file_comprobante = request.files.get('comprobante')
-            if 'detalles' in data and isinstance(data['detalles'], str):
-                try:
-                    data['detalles'] = json.loads(data['detalles'])
-                except json.JSONDecodeError:
-                    return {"error": "Formato de detalles inválido"}, 400
-        else:
-            data = request.get_json()
-            file_comprobante = None
+        data, file_comprobante = obtener_payload_normalizado()
+        if not isinstance(data, dict):
+            return {"error": "Datos inválidos"}, 400
 
         claims = get_jwt()
-        vendedor_id = claims.get('sub')
+        vendedor_id = int(claims.get('sub'))
 
         try:
             venta_actualizada = VentaService.actualizar_venta(
                 venta_id=venta_id,
                 vendedor_id=vendedor_id,
                 data=data,
-                file_comprobante=file_comprobante
+                file_comprobante=file_comprobante,
+                actor_id=vendedor_id
             )
 
-            db.session.commit()
+            commit_with_storage_finalization()
             return venta_schema.dump(venta_actualizada), 200
+        except HTTPException:
+            rollback_and_compensate()
+            raise
         except StockInsuficienteError as e:
-            db.session.rollback()
+            rollback_and_compensate()
             return {"error": str(e)}, 400
         except ValueError as e:
-            db.session.rollback()
+            rollback_and_compensate()
             return {"error": str(e)}, 400
         except Exception as e:
-            db.session.rollback()
+            rollback_and_compensate()
             logger.error(f"Error al actualizar venta {venta_id}: {e}", exc_info=True)
             return {"error": "Error interno al actualizar la venta."}, 500
 
     @jwt_required()
-    @mismo_almacen_o_admin
     @handle_db_errors
     def delete(self, venta_id=None):
+        claims = get_jwt()
+        actor_id = int(claims.get('sub'))
+
         if venta_id is not None:
             try:
-                VentaService.eliminar_venta(venta_id)
+                VentaService.eliminar_venta(venta_id, actor_id=actor_id)
                 db.session.commit()
                 return {"message": "Venta eliminada con éxito"}, 200
+            except HTTPException:
+                db.session.rollback()
+                raise
             except Exception as e:
                 db.session.rollback()
                 logger.error(f"Error al eliminar venta {venta_id}: {e}", exc_info=True)
                 return {"error": "Error al eliminar la venta"}, 500
 
         # Lógica tipo batch para eliminar varias ventas
-        data = request.get_json() or {}
-        venta_ids = data.get("ids", [])
-        if not venta_ids or not isinstance(venta_ids, list):
-            return {"error": "Debes proporcionar una lista de ids en la propiedad 'ids'"}, 400
-        
+        data = request.get_json(silent=True) or {}
         try:
-            venta_ids = [int(vid) for vid in venta_ids]
+            venta_ids = normalizar_lista_ids(data.get("ids", []))
+        except HTTPException:
+            raise
         except (ValueError, TypeError):
             return {"error": "Todos los IDs en la lista 'ids' deben ser números enteros válidos"}, 400
 
-        # Verificar permisos (si no es admin, solo eliminar de su propio almacén)
-        claims = get_jwt()
-        user_rol = claims.get('rol')
-        user_almacen_id = claims.get('almacen_id')
-        if user_rol != 'admin':
-            # Obtener ventas para chequear almacén antes de eliminar
-            ventas = Venta.query.filter(Venta.id.in_(venta_ids)).all()
-            for v in ventas:
-                if int(v.almacen_id) != int(user_almacen_id or 0):
-                    return {"error": f"No tienes permisos para eliminar la venta #{v.id} de otro almacén"}, 403
-
         try:
-            count = VentaService.eliminar_ventas_en_lote(venta_ids)
+            count = VentaService.eliminar_ventas_en_lote(venta_ids, actor_id=actor_id)
             db.session.commit()
             return {"message": f"{count} ventas eliminadas con éxito"}, 200
+        except HTTPException:
+            db.session.rollback()
+            raise
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error al eliminar ventas en lote: {e}", exc_info=True)
@@ -317,17 +366,17 @@ class VentaFormDataResource(Resource):
             for inventario in inventario_disponible:
                 presentacion = inventario.presentacion
                 pres_id = presentacion.id
-                
+
                 if pres_id not in presentaciones_agrupadas:
                     dumped_presentacion = presentacion_schema.dump(presentacion)
-                    
+
                     # Generar URL pre-firmada para la foto
                     if presentacion.url_foto:
                         dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
-                    
+
                     dumped_presentacion['stock_disponible'] = 0.0
                     presentaciones_agrupadas[pres_id] = dumped_presentacion
-                
+
                 # Sumar el stock de este lote al total de la presentación
                 presentaciones_agrupadas[pres_id]['stock_disponible'] += float(inventario.cantidad)
 
@@ -397,6 +446,20 @@ class VentaExportResource(Resource):
                 except ValueError:
                     return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400
 
+            try:
+                limite = _limite_ventas_configurado('MAX_VENTAS_EXPORT')
+            except ValueError as e:
+                return {"error": str(e)}, 400
+
+            total = query.count()
+            if total > limite:
+                return {
+                    "error": "El número de ventas a exportar excede el límite permitido",
+                    "limite": limite,
+                    "total": total,
+                    "sugerencia": "Reduce el rango de fechas o los filtros de exportación.",
+                }, 413
+
             ventas = query.order_by(desc(Venta.fecha)).all()
 
             if not ventas:
@@ -433,7 +496,7 @@ class VentaExportResource(Resource):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, sheet_name='Ventas')
-            
+
             output.seek(0)
 
             return send_file(
@@ -466,7 +529,7 @@ class VentaFilterDataResource(Resource):
                 Cliente.id,
                 Cliente.nombre
             ).order_by(Cliente.nombre)
-            
+
             clientes = [{
                 'id': cliente.id,
                 'nombre': cliente.nombre
@@ -484,7 +547,7 @@ class VentaFilterDataResource(Resource):
                     Almacen.id,
                     Almacen.nombre
                 ).filter(Almacen.id == user_almacen_id).order_by(Almacen.nombre)
-            
+
             almacenes = [{
                 'id': almacen.id,
                 'nombre': almacen.nombre
@@ -508,7 +571,7 @@ class VentaFilterDataResource(Resource):
                     Users.rol.in_(['usuario', 'gerente']),
                     Users.almacen_id == user_almacen_id
                 ).order_by(Users.username)
-            
+
             vendedores = [{
                 'id': vendedor.id,
                 'username': vendedor.username

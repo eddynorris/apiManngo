@@ -1,10 +1,10 @@
 import logging
 from decimal import Decimal
+
 from sqlalchemy import func
-from sqlalchemy.orm import joinedload
 
 from extensions import db
-from models import Inventario, Venta, Cliente, Almacen, PresentacionProducto
+from models import Almacen, Cliente, Inventario, PresentacionProducto, Venta
 from services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class ConsultaHandler:
             detalles_txt = "\n".join(detalles)
             almacen = db.session.get(Almacen, almacen_id)
             nombre_almacen = almacen.nombre if almacen else "Desconocido"
-            
+
             telegram_service.send_message(
                 chat_id,
                 f"📊 <b>Stock Actual - {nombre_almacen}</b>\n\n{detalles_txt}"
@@ -96,7 +96,7 @@ class ConsultaHandler:
             ).all()
 
             saldo_total = sum(v.saldo_pendiente for v in ventas_pendientes)
-            
+
             if not ventas_pendientes:
                 telegram_service.send_message(chat_id, f"✅ El cliente <b>{cliente.nombre}</b> no tiene deudas pendientes.")
                 return
