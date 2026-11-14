@@ -19,6 +19,33 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+
+def _positive_telegram_id(value) -> bool:
+    """Acepta solo IDs positivos reales (excluye bool, strings y negativos)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _private_chat_sender_id(chat, sender):
+    """Devuelve el ID del remitente solo para un chat privado 1:1 verificable.
+
+    El bot es personal: exige ``chat.type == 'private'``, IDs positivos y que
+    el remitente sea exactamente el dueño del chat. Grupos, canales, chats
+    negativos y remitentes ausentes no tienen identidad válida.
+    """
+    if not isinstance(chat, dict) or not isinstance(sender, dict):
+        return None
+    if chat.get("type") != "private":
+        return None
+
+    chat_id = chat.get("id")
+    sender_id = sender.get("id")
+    if not _positive_telegram_id(chat_id) or not _positive_telegram_id(sender_id):
+        return None
+    if chat_id != sender_id:
+        return None
+    return sender_id
+
+
 def format_user_friendly_error(e: Exception) -> str:
     """Transforma excepciones internas o de BD en mensajes seguros y amigables para la interfaz de Telegram."""
     err_str = str(e)
@@ -57,13 +84,23 @@ class TelegramRouter:
     @staticmethod
     def handle_message(message):
         try:
-            chat_id = message["chat"]["id"]
+            if not isinstance(message, dict):
+                return
+
+            sender_id = _private_chat_sender_id(message.get("chat"), message.get("from"))
+            if sender_id is None:
+                logger.warning(
+                    "Mensaje de Telegram rechazado: se requiere chat privado con remitente positivo"
+                )
+                return
+
+            chat_id = sender_id
             text = message.get("text", "").strip()
 
             if not text:
                 return
 
-            user = Users.query.filter_by(telegram_chat_id=chat_id).first()
+            user = Users.query.filter_by(telegram_chat_id=sender_id).first()
             if not user:
                 if intentar_vinculacion(chat_id, text):
                     return
@@ -421,11 +458,29 @@ class TelegramRouter:
 
     @staticmethod
     def handle_callback_query(callback_query):
-        chat_id = callback_query["message"]["chat"]["id"]
-        message_id = callback_query["message"]["message_id"]
+        if not isinstance(callback_query, dict):
+            return
+
+        callback_message = callback_query.get("message")
+        if not isinstance(callback_message, dict):
+            logger.warning("Callback de Telegram rechazado: falta el mensaje de origen")
+            return
+
+        sender_id = _private_chat_sender_id(
+            callback_message.get("chat"),
+            callback_query.get("from"),
+        )
+        if sender_id is None:
+            logger.warning(
+                "Callback de Telegram rechazado: se requiere chat privado con remitente positivo"
+            )
+            return
+
+        chat_id = sender_id
+        message_id = callback_message.get("message_id")
         data = callback_query.get("data", "")
 
-        user = Users.query.filter_by(telegram_chat_id=chat_id).first()
+        user = Users.query.filter_by(telegram_chat_id=sender_id).first()
         if not user:
             telegram_service.send_message(chat_id, "❌ Error de autenticación: Usuario no encontrado.")
             return
