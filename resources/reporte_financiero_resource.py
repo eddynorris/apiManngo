@@ -20,6 +20,7 @@ from models import (
     VentaDetalle,
     db,
 )
+from utils.date_utils import filtro_dias_peru
 from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id):
 
     # Filtros de Venta
     if fecha_inicio and fecha_fin:
-        ventas_q = ventas_q.filter(func.date(Venta.fecha).between(fecha_inicio, fecha_fin))
+        ventas_q = ventas_q.filter(filtro_dias_peru(Venta.fecha, fecha_inicio, fecha_fin))
     if almacen_id:
         ventas_q = ventas_q.filter(Venta.almacen_id == almacen_id)
     if lote_id:
@@ -123,7 +124,7 @@ def _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id):
     # 5. Depósitos (Solo confirmados)
     depositos_q = db.session.query(func.coalesce(func.sum(Pago.monto_depositado), 0)).filter(Pago.depositado == True)
     if fecha_inicio and fecha_fin:
-        depositos_q = depositos_q.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))
+        depositos_q = depositos_q.filter(filtro_dias_peru(Pago.fecha_deposito, fecha_inicio, fecha_fin))
 
     depositado_total = depositos_q.scalar() or Decimal('0.00')
 
@@ -171,7 +172,7 @@ class ReporteVentasPresentacionResource(Resource):
          .join(Venta, Venta.id == VentaDetalle.venta_id)
 
         if fecha_inicio and fecha_fin:
-            query = query.filter(func.date(Venta.fecha).between(fecha_inicio, fecha_fin))
+            query = query.filter(filtro_dias_peru(Venta.fecha, fecha_inicio, fecha_fin))
         if almacen_id:
             query = query.filter(Venta.almacen_id == almacen_id)
         if lote_id:
@@ -228,7 +229,7 @@ class ReporteUnificadoResource(Resource):
          .join(PresentacionProducto, PresentacionProducto.id == VentaDetalle.presentacion_id)
 
         if fecha_inicio and fecha_fin:
-            ventas_base_q = ventas_base_q.filter(func.date(Venta.fecha).between(fecha_inicio, fecha_fin))
+            ventas_base_q = ventas_base_q.filter(filtro_dias_peru(Venta.fecha, fecha_inicio, fecha_fin))
         if almacen_id:
             ventas_base_q = ventas_base_q.filter(Venta.almacen_id == almacen_id)
         if lote_id:
@@ -327,7 +328,7 @@ class ReporteUnificadoResource(Resource):
             query_dep = query_dep.filter(Pago.depositado == True)
 
         if fecha_inicio and fecha_fin:
-            query_dep = query_dep.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))
+            query_dep = query_dep.filter(filtro_dias_peru(Pago.fecha_deposito, fecha_inicio, fecha_fin))
 
         dep_resource = DepositosHistorialResource()
         dep_resp, dep_status = dep_resource.get()
@@ -372,7 +373,7 @@ class DepositosHistorialResource(Resource):
                     return {'error': 'La fecha de inicio no puede ser mayor a la fecha fin.'}, 400
 
                 # Filtrar por rango de fecha de depósito
-                query = query.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))
+                query = query.filter(filtro_dias_peru(Pago.fecha_deposito, fecha_inicio, fecha_fin))
             except (ValueError, TypeError):
                 return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
 

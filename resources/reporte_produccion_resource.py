@@ -10,7 +10,7 @@ from sqlalchemy import and_, func
 
 from common import handle_db_errors
 from models import Almacen, Lote, Movimiento, PresentacionProducto, Producto, Users, db
-from utils.date_utils import get_peru_now, rango_utc_de_dias_peru
+from utils.date_utils import dia_peru_sql, get_peru_now, rango_utc_de_dias_peru, to_peru_time
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +65,9 @@ class ReporteProduccionBriquetasResource(Resource):
             ).join(
                 Producto, PresentacionProducto.producto_id == Producto.id
             ).join(
-                Almacen, Movimiento.usuario_id.in_(
-                    db.session.query(db.text('users.id')).select_from(db.text('users')).filter(
-                        db.text('users.almacen_id') == Almacen.id
-                    )
-                )
+                Users, Movimiento.usuario_id == Users.id
+            ).join(
+                Almacen, Users.almacen_id == Almacen.id  # almacén del usuario que registró
             ).filter(
                 and_(
                     Movimiento.tipo == 'entrada',
@@ -88,7 +86,6 @@ class ReporteProduccionBriquetasResource(Resource):
             # ya que no hay relación directa entre Movimiento y Almacen
             if almacen_id:
                 # Filtrar por usuarios que pertenecen al almacén específico
-                from models import Users
                 usuarios_almacen = db.session.query(Users.id).filter(Users.almacen_id == almacen_id).subquery()
                 query = query.filter(Movimiento.usuario_id.in_(usuarios_almacen))
 
@@ -128,9 +125,10 @@ class ReporteProduccionBriquetasResource(Resource):
             # --- Consulta adicional para resumen por período ---
             resumen_temporal = []
             if periodo == 'dia':
-                # Agrupar por día
+                # Agrupar por día de Perú
+                dia_peru = dia_peru_sql(Movimiento.fecha, db.session.get_bind().dialect.name)
                 query_temporal = db.session.query(
-                    func.date(Movimiento.fecha).label('fecha'),
+                    dia_peru.label('fecha'),
                     func.sum(Movimiento.cantidad).label('unidades_dia'),
                     func.sum(Movimiento.cantidad * PresentacionProducto.capacidad_kg).label('kg_dia')
                 ).join(
@@ -143,7 +141,7 @@ class ReporteProduccionBriquetasResource(Resource):
                         Movimiento.fecha >= inicio_utc,
                         Movimiento.fecha < fin_utc
                     )
-                ).group_by(func.date(Movimiento.fecha)).order_by(func.date(Movimiento.fecha))
+                ).group_by(dia_peru).order_by(dia_peru)
 
                 if presentacion_id:
                     query_temporal = query_temporal.filter(PresentacionProducto.id == presentacion_id)
@@ -235,7 +233,6 @@ class ReporteProduccionGeneralResource(Resource):
                 query = query.filter(PresentacionProducto.tipo == tipo_presentacion)
 
             if almacen_id:
-                from models import Users
                 usuarios_almacen = db.session.query(Users.id).filter(Users.almacen_id == almacen_id).subquery()
                 query = query.filter(Movimiento.usuario_id.in_(usuarios_almacen))
 
@@ -405,7 +402,7 @@ class ReporteProduccionEntradasResource(Resource):
                 cant = Decimal(str(mov.cantidad or 0))
                 cap_kg = Decimal(str(pres.capacidad_kg if pres and pres.capacidad_kg else 1.0))
                 kg_total_mov = cant * cap_kg
-                fecha_str = mov.fecha.strftime('%Y-%m-%d') if mov.fecha else ''
+                fecha_str = to_peru_time(mov.fecha).strftime('%Y-%m-%d') if mov.fecha else ''
                 fecha_iso = mov.fecha.isoformat() if mov.fecha else None
 
                 # Inicializar mapa temporal
