@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import func
 
 from extensions import db
-from models import Almacen, Cliente, PresentacionProducto, Users
+from models import Almacen, Cliente, PresentacionProducto, Users, Venta
 from services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
@@ -165,9 +165,75 @@ def intentar_vinculacion(chat_id, text):
     )
     return True
 
-def buscar_cliente_db(nombre: str, telefono: str = None, ruc: str = None):
+def zona_cliente(cliente):
+    """Almacén al que pertenece un cliente: su preferido o, si no, el de su última venta."""
+    if cliente is None:
+        return None
+    if cliente.almacen_preferido_id:
+        almacen = db.session.get(Almacen, cliente.almacen_preferido_id)
+        if almacen:
+            return almacen
+    ultima = (
+        Venta.query.filter(Venta.cliente_id == cliente.id, Venta.almacen_id.isnot(None))
+        .order_by(Venta.fecha.desc().nullslast(), Venta.id.desc())
+        .first()
+    )
+    return db.session.get(Almacen, ultima.almacen_id) if ultima else None
+
+
+def almacenes_permitidos(usuario):
+    """Almacenes sobre los que el usuario puede vender (misma regla que autorizar_almacen)."""
+    if usuario is None:
+        return []
+    if usuario.rol == 'admin':
+        return Almacen.query.order_by(Almacen.nombre.asc()).all()
+    if usuario.almacen_id:
+        almacen = db.session.get(Almacen, usuario.almacen_id)
+        return [almacen] if almacen else []
+    return []
+
+
+_GASTO_RE = re.compile(r'^\s*(?:s/\.?\s*)?(\d+(?:[.,]\d+)?)\s*(.*)$', re.IGNORECASE)
+
+
+def parsear_gasto(texto):
+    """'20 flete' -> (Decimal('20'), 'flete'). Devuelve None si no hay un monto positivo."""
+    match = _GASTO_RE.match(texto or "")
+    if not match:
+        return None
+    monto = Decimal(match.group(1).replace(',', '.'))
+    if monto <= 0:
+        return None
+    descripcion = match.group(2).strip() or "Gasto de venta"
+    return monto, descripcion
+
+
+def _preferir_por_almacen(candidatos, almacen_id):
+    """Entre varios clientes, el de ese almacén (preferido y luego con ventas allí)."""
+    if not candidatos:
+        return None
+    if almacen_id is None or len(candidatos) == 1:
+        return candidatos[0]
+    for cli in candidatos:
+        if cli.almacen_preferido_id == almacen_id:
+            return cli
+    ids = [c.id for c in candidatos]
+    con_ventas = {
+        cid for (cid,) in db.session.query(Venta.cliente_id)
+        .filter(Venta.cliente_id.in_(ids), Venta.almacen_id == almacen_id)
+        .distinct()
+    }
+    for cli in candidatos:
+        if cli.almacen_preferido_id is None and cli.id in con_ventas:
+            return cli
+    return candidatos[0]
+
+
+def buscar_cliente_db(nombre: str, telefono: str = None, ruc: str = None, almacen_id: int = None):
     """
     Busca un cliente por teléfono, ruc, o realiza una búsqueda semántica por nombre.
+    Con ``almacen_id``, entre varias coincidencias por nombre prefiere las de ese almacén;
+    si solo hay clientes de otro almacén, devuelve igualmente el primero (la tarjeta alerta).
     Retorna el cliente encontrado o None.
     """
     if not nombre and not telefono and not ruc:
@@ -184,15 +250,22 @@ def buscar_cliente_db(nombre: str, telefono: str = None, ruc: str = None):
             return cli
 
     if nombre:
+        nombre_limpio = nombre.strip()
         # Búsqueda exacta case-insensitive
-        cli = Cliente.query.filter(Cliente.nombre.ilike(f"{nombre.strip()}")).first()
-        if cli:
-            return cli
+        exactos = (
+            Cliente.query.filter(Cliente.nombre.ilike(nombre_limpio))
+            .order_by(Cliente.id.asc()).all()
+        )
+        if exactos:
+            return _preferir_por_almacen(exactos, almacen_id)
 
         # Búsqueda parcial (contiene)
-        cli = Cliente.query.filter(Cliente.nombre.ilike(f"%{nombre.strip()}%")).first()
-        if cli:
-            return cli
+        parciales = (
+            Cliente.query.filter(Cliente.nombre.ilike(f"%{nombre_limpio}%"))
+            .order_by(Cliente.id.asc()).limit(20).all()
+        )
+        if parciales:
+            return _preferir_por_almacen(parciales, almacen_id)
 
         # Búsqueda por similitud léxica (Postgres pg_trgm)
         try:

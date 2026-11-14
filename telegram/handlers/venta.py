@@ -5,10 +5,188 @@ from extensions import db
 from models import Almacen, Cliente, Inventario
 from services.telegram_service import telegram_service
 from services.venta_service import VentaService
-from telegram.resolvers import buscar_cliente_db
+from telegram.resolvers import almacenes_permitidos, buscar_cliente_db, zona_cliente
 from telegram.state_machine import StateMachine
 
 logger = logging.getLogger(__name__)
+
+
+def nuevo_cliente_en_almacen(almacen_id, **campos):
+    """Crea (flush, sin commit) un cliente asociado a la zona del almacén indicado."""
+    almacen = db.session.get(Almacen, almacen_id) if almacen_id else None
+    cliente = Cliente(
+        almacen_preferido_id=almacen.id if almacen else None,
+        ciudad=(almacen.ciudad if almacen and almacen.ciudad else None),
+        **campos,
+    )
+    db.session.add(cliente)
+    db.session.flush()
+    return cliente
+
+
+def stock_y_lote(presentacion_id, almacen_id):
+    """Stock total de una presentación en un almacén y el lote FIFO con saldo."""
+    from models import Lote as LoteModel
+    primero = (
+        Inventario.query
+        .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
+        .filter(
+            Inventario.presentacion_id == presentacion_id,
+            Inventario.almacen_id == almacen_id,
+            Inventario.cantidad > 0,
+        )
+        .order_by(LoteModel.fecha_ingreso.asc(), Inventario.id.asc())
+        .first()
+    )
+    invs = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion_id).all()
+    stock = sum(float(i.cantidad) for i in invs) if invs else 0.0
+    return stock, (primero.lote_id if primero else None)
+
+
+def recalcular_items(contexto):
+    """Actualiza stock_actual y lote_id de cada ítem según el almacén del borrador."""
+    for item in contexto.get("items", []):
+        stock, lote_id = stock_y_lote(item["presentacion_id"], contexto["almacen_id"])
+        item["stock_actual"] = stock
+        item["lote_id"] = lote_id
+
+
+def _alertas_stock(contexto):
+    alertas = []
+    almacen_id = contexto.get("almacen_id")
+    for item in contexto.get("items", []):
+        stock, _ = stock_y_lote(item["presentacion_id"], almacen_id)
+        cantidad = float(item.get("cantidad", 0))
+        if stock >= cantidad:
+            continue
+        texto = (
+            f"⚠️ Stock insuficiente en {contexto.get('almacen_nombre')} para "
+            f"'{item.get('producto_nombre')}'. Solicitado: {item.get('cantidad')}, "
+            f"Disponible: {stock}."
+        )
+        otros = {}
+        for inv in Inventario.query.filter(
+            Inventario.presentacion_id == item["presentacion_id"],
+            Inventario.almacen_id != almacen_id,
+            Inventario.cantidad > 0,
+        ).all():
+            otros[inv.almacen.nombre] = otros.get(inv.almacen.nombre, 0) + float(inv.cantidad)
+        hay = [f"{nombre} ({s})" for nombre, s in otros.items() if s >= cantidad]
+        if hay:
+            texto += f" 💡 Hay stock en: {', '.join(hay)}. Usa «Cambiar Almacén»."
+        alertas.append(texto)
+    return alertas
+
+
+def _alerta_zona(contexto, usuario):
+    """(texto, botón|None) si el cliente pertenece a otro almacén que el de la venta."""
+    cliente = db.session.get(Cliente, contexto.get("cliente_id")) if contexto.get("cliente_id") else None
+    zona = zona_cliente(cliente)
+    if zona is None or zona.id == contexto.get("almacen_id"):
+        return None, None
+    almacen = db.session.get(Almacen, contexto.get("almacen_id"))
+    nombre = contexto.get("cliente_nombre")
+    if almacen is not None and almacen.es_planta:
+        return (f"ℹ️ {nombre} es cliente de {zona.nombre}; la venta sale de la planta "
+                f"({almacen.nombre})."), None
+    texto = (f"⚠️ {nombre} es cliente de {zona.nombre} y la venta sale de "
+             f"{contexto.get('almacen_nombre')}.")
+    permitido = any(a.id == zona.id for a in almacenes_permitidos(usuario))
+    boton = {"text": f"🏪 Vender desde {zona.nombre}", "callback_data": f"almacen:{zona.id}"}
+    return texto, (boton if permitido else None)
+
+
+def construir_tarjeta_venta(contexto, usuario):
+    """Texto y teclado de la tarjeta de confirmación de una venta o pedido (borrador)."""
+    estado = contexto.get("estado", "completado")
+    es_pedido = estado == 'pedido'
+    card_title = "Pedido (Sin descuento de Stock)" if es_pedido else "Venta"
+    confirm_text = "pedido" if es_pedido else "venta"
+
+    items_txt = "\n".join(
+        f"• {item['cantidad']}x {item['producto_nombre']} (a S/ {float(item['precio_unitario']):.2f} c/u)"
+        f" = S/ {float(item.get('subtotal', item['cantidad'] * item['precio_unitario'])):.2f}"
+        for item in contexto.get("items", [])
+    )
+    pagos = contexto.get("pagos") or []
+    pagos_txt = "\n".join(
+        f"• S/ {float(p['monto']):.2f} ({p['metodo_pago']})" for p in pagos
+    ) if pagos else "• Al crédito"
+    gasto = contexto.get("gasto_asociado")
+    gasto_txt = (
+        f"\n💸 <b>Gasto Asociado:</b> S/ {float(gasto.get('monto', 0)):.2f} ({gasto.get('descripcion')})"
+        if gasto else ""
+    )
+    fecha = contexto.get("fecha")
+    fecha_txt = f"\n📅 <b>Fecha:</b> {fecha}" if fecha else ""
+
+    alertas = list(contexto.get("avisos") or [])
+    if not es_pedido:
+        alertas.extend(_alertas_stock(contexto))
+    texto_zona, boton_zona = _alerta_zona(contexto, usuario)
+    if texto_zona:
+        alertas.append(texto_zona)
+
+    card = (
+        f"📋 <b>Confirmar {card_title}</b>\n\n"
+        f"👤 <b>Cliente:</b> {contexto.get('cliente_nombre')}\n"
+        f"🏪 <b>Almacén:</b> {contexto.get('almacen_nombre')}\n"
+        f"📦 <b>Productos:</b>\n{items_txt}\n"
+        f"💰 <b>Total:</b> S/ {float(contexto.get('total', 0)):.2f}\n"
+        f"💳 <b>Pagos:</b>\n{pagos_txt}"
+        f"{gasto_txt}"
+        f"{fecha_txt}\n"
+    )
+    if alertas:
+        card += "\n<b>Alertas:</b>\n" + "\n".join(alertas) + "\n"
+    card += f"\n¿Confirmas el registro de este {confirm_text}?"
+
+    filas = []
+    if boton_zona:
+        filas.append([boton_zona])
+    filas += [
+        [
+            {"text": "👤 Cambiar Cliente", "callback_data": "edit:cliente"},
+            {"text": "💲 Modificar Precio", "callback_data": "edit:precio"},
+        ],
+        [
+            {"text": "💸 Agregar Gasto", "callback_data": "edit:gasto"},
+            {"text": "🏪 Cambiar Almacén", "callback_data": "edit:almacen"},
+        ],
+        [
+            {"text": f"✅ Confirmar {confirm_text.capitalize()}", "callback_data": "confirm:venta"},
+            {"text": "❌ Cancelar", "callback_data": "cancel"},
+        ],
+    ]
+    return card, {"inline_keyboard": filas}
+
+
+def _message_id(respuesta):
+    if isinstance(respuesta, dict):
+        resultado = respuesta.get("result")
+        if isinstance(resultado, dict):
+            return resultado.get("message_id")
+    return None
+
+
+def enviar_tarjeta_venta(chat_id, user, contexto, message_id_anterior=None):
+    """Envía la tarjeta completa como mensaje nuevo al final del chat.
+
+    La tarjeta anterior (si la hay) se queda sin botones para que no se confirme una
+    versión desactualizada, y el borrador queda en espera de confirmación con el
+    message_id nuevo.
+    """
+    texto, teclado = construir_tarjeta_venta(contexto, user)
+    nuevo_id = _message_id(telegram_service.send_message(chat_id, texto, teclado))
+    if message_id_anterior:
+        telegram_service.edit_message(
+            chat_id, message_id_anterior, "✏️ <i>Tarjeta actualizada: revisa la de abajo.</i>",
+            reply_markup=None,
+        )
+    StateMachine.set_awaiting_confirmation(
+        user, contexto.get("action", "venta"), contexto, nuevo_id or message_id_anterior
+    )
+
 
 class VentaHandler:
     @staticmethod
@@ -50,20 +228,18 @@ class VentaHandler:
                     warnings.append(f"Se identificó al cliente {cliente.nombre} por el número de teléfono {phone}.")
             else:
                 nombre_nuevo = cliente_nombre if cliente_nombre and cliente_nombre.strip() else f"Cliente {phone}"
-                cliente = Cliente(
+                cliente = nuevo_cliente_en_almacen(
+                    almacen_id,
                     nombre=nombre_nuevo,
                     telefono=phone,
                     ruc=ruc_val,
                     direccion="Dirección no especificada",
-                    ciudad="Lima"
                 )
-                db.session.add(cliente)
-                db.session.flush()
                 extra_ruc_txt = f" y RUC {ruc_val}" if ruc_val else ""
                 warnings.append(f"👤 <b>Cliente Nuevo Creado</b>: Se registró automáticamente a '{nombre_nuevo}' con teléfono {phone}{extra_ruc_txt}.")
 
         if not cliente and cliente_nombre:
-            cliente = buscar_cliente_db(nombre=cliente_nombre)
+            cliente = buscar_cliente_db(nombre=cliente_nombre, almacen_id=almacen_id)
             if cliente and cliente.nombre.lower() != cliente_nombre.lower():
                 warnings.append(f"No se encontró cliente exacto '{cliente_nombre}', se asumió '{cliente.nombre}'.")
 
@@ -113,38 +289,8 @@ class VentaHandler:
             subtotal = cantidad * precio_unitario
             total_estimado += Decimal(str(subtotal))
 
-            from models import Lote as LoteModel
-            invs_fifo = (
-                Inventario.query
-                .join(LoteModel, Inventario.lote_id == LoteModel.id, isouter=True)
-                .filter(
-                    Inventario.presentacion_id == presentacion.id,
-                    Inventario.almacen_id == almacen_id,
-                    Inventario.cantidad > 0
-                )
-                .order_by(LoteModel.fecha_ingreso.asc(), Inventario.id.asc())
-                .all()
-            )
-            lote_id = invs_fifo[0].lote_id if invs_fifo else None
-
-            all_invs = Inventario.query.filter_by(almacen_id=almacen_id, presentacion_id=presentacion.id).all()
-            stock_actual = sum(float(i.cantidad) for i in all_invs) if all_invs else 0.0
-
-            if stock_actual < cantidad:
-                warning_msg = f"⚠️ Stock insuficiente en {almacen_nombre} para '{presentacion.nombre}'. Solicitado: {cantidad}, Disponible: {stock_actual}."
-                # Buscar alternativas
-                alt_invs = Inventario.query.filter(Inventario.presentacion_id == presentacion.id, Inventario.almacen_id != almacen_id, Inventario.cantidad > 0).all()
-                if alt_invs:
-                    alt_stocks = {}
-                    for inv in alt_invs:
-                        alt_stocks[inv.almacen.nombre] = alt_stocks.get(inv.almacen.nombre, 0) + float(inv.cantidad)
-                    alt_hints = []
-                    for w_name, w_stock in alt_stocks.items():
-                        if w_stock >= float(cantidad):
-                            alt_hints.append(f"{w_name} ({w_stock})")
-                    if alt_hints:
-                        warning_msg += f"💡 Hay stock en: {', '.join(alt_hints)}. Si deseas vender desde ahí, menciona el almacén en tu mensaje."
-                warnings.append(warning_msg)
+            # Las alertas de stock las calcula la tarjeta (se recalculan en cada edición).
+            stock_actual, lote_id = stock_y_lote(presentacion.id, almacen_id)
 
             items_enriched.append({
                 "producto_id": presentacion.id,
@@ -209,52 +355,11 @@ class VentaHandler:
             "almacen_id": almacen_id,
             "almacen_nombre": almacen_nombre,
             "estado": estado,
-            "fecha": fecha
+            "fecha": fecha,
+            "avisos": warnings,
         }
-        user.telegram_context = context_data
+        enviar_tarjeta_venta(chat_id, user, context_data)
         db.session.commit()
-
-        items_txt = "\n".join([f"• {item['cantidad']}x {item['producto_nombre']} (a S/ {item['precio_unitario']:.2f} c/u) = S/ {item['subtotal']:.2f}" for item in items_enriched])
-        pagos_txt = "\n".join([f"• S/ {p['monto']:.2f} ({p['metodo_pago']})" for p in pagos]) if pagos else "• Al crédito"
-        warnings_txt = "\n".join(warnings) if warnings else ""
-
-        gasto_txt = f"\n💸 <b>Gasto Asociado:</b> S/ {gasto_asociado.get('monto')} ({gasto_asociado.get('descripcion')})" if gasto_asociado else ""
-        fecha_txt = f"\n📅 <b>Fecha:</b> {fecha}" if fecha else ""
-        card_title = "Pedido (Sin descuento de Stock)" if estado == 'pedido' else "Venta"
-        confirm_text = "pedido" if estado == 'pedido' else "venta"
-
-        card = (
-            f"📋 <b>Confirmar {card_title}</b>\n\n"
-            f"👤 <b>Cliente:</b> {cliente.nombre}\n"
-            f"🏪 <b>Almacén:</b> {almacen_nombre}\n"
-            f"📦 <b>Productos:</b>\n{items_txt}\n"
-            f"💰 <b>Total:</b> S/ {total_estimado:.2f}\n"
-            f"💳 <b>Pagos:</b>\n{pagos_txt}"
-            f"{gasto_txt}"
-            f"{fecha_txt}\n"
-        )
-        if warnings_txt and estado != 'pedido':
-            card += f"\n⚠️ <b>Alertas:</b>\n{warnings_txt}\n"
-
-        card += f"\n¿Confirmas el registro de este {confirm_text}?"
-
-        reply_markup = {
-            "inline_keyboard": [
-                [
-                    {"text": "👤 Cambiar Cliente", "callback_data": "edit:cliente"},
-                    {"text": "💲 Modificar Precio", "callback_data": "edit:precio"}
-                ],
-                [
-                    {"text": "💸 Agregar Gasto", "callback_data": "edit:gasto"},
-                    {"text": "🏪 Cambiar Almacén", "callback_data": "edit:almacen"}
-                ],
-                [
-                    {"text": f"✅ Confirmar {confirm_text.capitalize()}", "callback_data": "confirm:venta"},
-                    {"text": "❌ Cancelar", "callback_data": "cancel"}
-                ]
-            ]
-        }
-        telegram_service.send_message(chat_id, card, reply_markup)
 
     @staticmethod
     def execute_venta(chat_id, user, context, message_id):
@@ -349,14 +454,13 @@ class VentaHandler:
 
     @staticmethod
     def execute_cliente(chat_id, user, context, message_id):
-        nuevo_cliente = Cliente(
+        nuevo_cliente = nuevo_cliente_en_almacen(
+            user.almacen_id,
             nombre=context["nombre"],
             telefono=context["telefono"],
             ruc=context.get("documento"),
             direccion=context.get("direccion"),
-            ciudad="Lima"
         )
-        db.session.add(nuevo_cliente)
         db.session.commit()
 
         telegram_service.edit_message(
@@ -392,8 +496,8 @@ class VentaHandler:
             if not cliente_nombre or not items_raw:
                 continue
 
-            # Buscar Cliente
-            cliente = buscar_cliente_db(nombre=cliente_nombre)
+            # Buscar Cliente (priorizando los del almacén del usuario)
+            cliente = buscar_cliente_db(nombre=cliente_nombre, almacen_id=user_almacen_id)
             if cliente and cliente.nombre.lower() != cliente_nombre.lower():
                 warnings.append(f"No se encontró cliente exacto '{cliente_nombre}', se asumió '{cliente.nombre}' para lote.")
 
@@ -524,14 +628,11 @@ class VentaHandler:
 
             # 1. Auto-registro de cliente si no existe
             if not cliente_id:
-                nuevo_cliente = Cliente(
+                nuevo_cliente = nuevo_cliente_en_almacen(
+                    almacen_id,
                     nombre=cliente_nombre_original,
-                    telefono="999999999", # Teléfono genérico
-                    ciudad="Lima",
-                    almacen_preferido_id=almacen_id
+                    telefono="999999999",  # Teléfono genérico
                 )
-                db.session.add(nuevo_cliente)
-                db.session.flush()
                 cliente_id = nuevo_cliente.id
                 cliente_nombre = nuevo_cliente.nombre
             else:
