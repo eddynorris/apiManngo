@@ -332,10 +332,25 @@ class StorageCleanupTask(db.Model):
 
 
 class TelegramUpdate(db.Model):
+    """Bandeja de entrada duradera del webhook de Telegram (A08).
+
+    estado: recibido -> procesando -> procesado | fallido | abandonado.
+    """
     __tablename__ = 'telegram_updates'
 
     update_id = db.Column(db.BigInteger, primary_key=True)
     recibido_en = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    estado = db.Column(db.String(20), nullable=False, default='recibido', server_default='procesado')
+    chat_id = db.Column(db.BigInteger, nullable=True)
+    payload = db.Column(db.JSON, nullable=True)
+    intentos = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    ultimo_error = db.Column(db.String(300), nullable=True)
+    actualizado_en = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index('idx_telegram_updates_chat_estado', 'chat_id', 'estado'),
+        Index('idx_telegram_updates_estado', 'estado'),
+    )
 
 class Movimiento(db.Model):
     __tablename__ = 'movimientos'

@@ -25,6 +25,7 @@ from extensions import db, jwt, migrate, swagger
 from models import Users
 from resources import init_resources
 from scripts.sync_supabase import sync_supabase_command
+from services.telegram_inbox import telegram_pendientes_command
 
 # Configuración de Logging
 logging.basicConfig(
@@ -309,6 +310,7 @@ talisman = Talisman(
 
 # CLI Commands
 app.cli.add_command(sync_supabase_command)
+app.cli.add_command(telegram_pendientes_command)
 
 # JWT Error Handling
 @jwt.unauthorized_loader

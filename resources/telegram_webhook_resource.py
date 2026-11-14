@@ -1,68 +1,79 @@
+import hmac
 import logging
 import os
 import random
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
+from flask import current_app, request
 from flask_jwt_extended import jwt_required
 from flask_restful import Resource
 
 from common import handle_db_errors, obtener_usuario_actual
 from extensions import db
 from models import Users
-from telegram.router import TelegramRouter
+from services import telegram_inbox
 
 logger = logging.getLogger(__name__)
 
-# LEGADO INACTIVO: el executor y `_process_update_async` no se usan desde
-# `post` en esta versión. Se conservan solo como referencia histórica y no
-# implican entrega operativa. No reactivar sin una cola durable, idempotencia
-# de efectos de negocio y workers.
-executor = ThreadPoolExecutor(max_workers=5)
+# Procesa en segundo plano los updates ya guardados. Si el proceso muere, el
+# update queda en la BD y lo recupera `flask telegram-pendientes` (cron).
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='telegram-inbox')
 
 
-def _process_update_async(app, update):
-    """LEGADO NO EJECUTADO: no se invoca desde `TelegramWebhookResource.post`."""
+def _procesar_en_segundo_plano(app, update_id):
     with app.app_context():
         try:
-            if "callback_query" in update:
-                TelegramRouter.handle_callback_query(update["callback_query"])
-            elif "message" in update:
-                TelegramRouter.handle_message(update["message"])
-        except Exception as e:
-            error_id = uuid.uuid4().hex[:8]
-            logger.error(f"Error asíncrono procesando update de Telegram [{error_id}]: {e}", exc_info=True)
+            telegram_inbox.procesar(update_id)
+        except Exception:
+            logger.exception("Fallo inesperado procesando el update de Telegram %s", update_id)
+        finally:
+            db.session.remove()
+
+
+def programar_procesamiento(app, update_id):
+    """Punto único de despacho (los tests lo sustituyen por una llamada síncrona)."""
+    _executor.submit(_procesar_en_segundo_plano, app, update_id)
+
+
+def _iguales(recibido, esperado):
+    return hmac.compare_digest(str(recibido).encode('utf-8'), esperado.encode('utf-8'))
+
 
 class TelegramWebhookResource(Resource):
-    def _marcar_update_procesado(self, update_id: int) -> bool:
-        """LEGADO NO EJECUTADO: deduplicación histórica, no se llama desde `post`."""
-        try:
-            from sqlalchemy import text
-            stmt = text("INSERT INTO telegram_updates (update_id) VALUES (:u) ON CONFLICT (update_id) DO NOTHING RETURNING update_id")
-            res = db.session.execute(stmt, {'u': update_id})
-            db.session.commit()
-            return res.first() is not None
-        except Exception as e:
-            logger.error(f"Error al deduplicar update_id {update_id}: {e}")
-            db.session.rollback()
-            return False
-
     def post(self, webhook_token):
-        """Contención de release: la entrega de Telegram no está implementada.
+        """Recibe un update, lo guarda de forma duradera y responde 200 (A08).
 
-        Devuelve 503 antes de validar secretos, deduplicar, escribir en BD,
-        encolar o invocar el router. No se habilita con flags ni se responde
-        200 ficticio: sin cola durable, idempotencia y workers no hay entrega
-        operativa que confirmar a Telegram.
+        - El token de la ruta debe coincidir con TELEGRAM_WEBHOOK_SECRET (si falta, se rechaza).
+        - Si TELEGRAM_BOT_SECRET_TOKEN está definido, la cabecera
+          X-Telegram-Bot-Api-Secret-Token debe coincidir.
+        - Un update_id repetido responde 200 sin reprocesar.
+        - Si la BD falla al guardar, se responde 500 y Telegram reintenta.
         """
-        logger.warning(
-            "Webhook de Telegram rechazado: entrega no disponible en esta versión"
-        )
-        return {
-            "error": "IntegrationUnavailable",
-            "message": "Telegram delivery is disabled in this release.",
-        }, 503
+        esperado = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
+        if not esperado or not _iguales(webhook_token, esperado):
+            logger.warning("Webhook de Telegram rechazado: token de ruta inválido")
+            return {"error": "Unauthorized webhook token"}, 403
+
+        secreto = os.environ.get("TELEGRAM_BOT_SECRET_TOKEN")
+        if secreto:
+            cabecera = request.headers.get('X-Telegram-Bot-Api-Secret-Token') or ''
+            if not _iguales(cabecera, secreto):
+                logger.warning("Webhook de Telegram rechazado: cabecera secreta inválida")
+                return {"error": "Unauthorized secret token"}, 403
+
+        try:
+            update_id = telegram_inbox.registrar_update(request.get_json(silent=True))
+        except telegram_inbox.UpdateInvalido:
+            # 200 para que Telegram no reintente indefinidamente un cuerpo inutilizable
+            logger.warning("Update de Telegram ignorado: formato inválido")
+            return {"status": "ignored"}, 200
+
+        if update_id is None:
+            return {"status": "ok", "message": "Duplicate update ignored"}, 200
+
+        programar_procesamiento(current_app._get_current_object(), update_id)
+        return {"status": "ok"}, 200
 
 
 class TelegramLinkResource(Resource):
