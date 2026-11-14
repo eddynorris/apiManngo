@@ -5,6 +5,8 @@ from typing import Any
 from flask import request
 from flask_jwt_extended import get_jwt, jwt_required
 from flask_restful import Resource
+from marshmallow import ValidationError
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash
 
 import config
@@ -63,6 +65,8 @@ class UserResource(Resource):
             # Respuesta estandarizada
             return create_pagination_response(users_schema.dump(usuarios.items), usuarios), 200
 
+        except (HTTPException, ValidationError):
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             logger.error(f"[{self.__class__.__name__}] Error al obtener usuarios: {str(e)}", exc_info=True)
             return {"error": "Error al procesar la solicitud"}, 500
@@ -127,6 +131,9 @@ class UserResource(Resource):
 
             return result, 201
 
+        except (HTTPException, ValidationError):
+            db.session.rollback()
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             db.session.rollback()
             logger.error(f"[{self.__class__.__name__}] Error al crear usuario: {str(e)}", exc_info=True)
@@ -208,6 +215,9 @@ class UserResource(Resource):
 
             return result, 200
 
+        except (HTTPException, ValidationError):
+            db.session.rollback()
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             db.session.rollback()
             logger.error(f"[{self.__class__.__name__}] Error al actualizar usuario: {str(e)}", exc_info=True)
@@ -244,6 +254,9 @@ class UserResource(Resource):
             logger.info(f"Usuario eliminado: {user_id} - {username}")
             return {"message": "Usuario eliminado correctamente"}, 200
 
+        except (HTTPException, ValidationError):
+            db.session.rollback()
+            raise  # 404/400 los resuelve Flask o handle_db_errors (A19)
         except Exception as e:
             db.session.rollback()
             logger.error(f"[{self.__class__.__name__}] Error al eliminar usuario: {str(e)}", exc_info=True)
