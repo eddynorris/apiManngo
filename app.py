@@ -133,7 +133,8 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Configurar options del engine de forma condicional (evitar pooling en SQLite de pruebas)
 if "sqlite" in app.config['SQLALCHEMY_DATABASE_URI']:
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_pre_ping': True
+        'pool_pre_ping': True,
+        'hide_parameters': True,  # no volcar valores (p. ej. payloads de Telegram) en errores SQL
     }
 else:
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -141,6 +142,7 @@ else:
         'max_overflow': int(os.environ.get('DB_MAX_OVERFLOW', 10)),
         'pool_recycle': int(os.environ.get('DB_POOL_RECYCLE', 300)),
         'pool_pre_ping': True,
+        'hide_parameters': True,  # no volcar valores (p. ej. payloads de Telegram) en errores SQL
     }
 
 # Configuración S3

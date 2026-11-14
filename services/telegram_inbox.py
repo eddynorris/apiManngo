@@ -8,13 +8,16 @@ Flujo:
    reclama si el mismo chat tiene otro update ``procesando`` o uno ``recibido``
    más antiguo, y al terminar sigue con el siguiente del mismo chat.
 3. ``procesar_pendientes`` (comando ``flask telegram-pendientes``, por cron):
-   procesa los ``recibido`` que nunca empezaron y marca ``abandonado`` los
-   ``procesando`` colgados, avisando al usuario.
+   procesa los ``recibido`` que nunca empezaron (si no son demasiado antiguos),
+   marca ``abandonado`` los ``procesando`` colgados y los ``recibido`` caducados,
+   avisando al usuario, y purga las filas terminadas antiguas.
 
 Semántica: **como máximo una vez**. Un update que pudo haber creado una venta o
 un pago nunca se reintenta automáticamente; el usuario recibe un aviso para
-revisar antes de repetir. Límite conocido: dos updates distintos del mismo chat
-reclamados en el mismo instante por procesos diferentes pueden solaparse.
+revisar antes de repetir. En PostgreSQL el reclamo toma un advisory lock por chat
+para que dos procesos no adelanten ni solapen updates del mismo chat.
+
+Privacidad: ni ``ultimo_error`` ni los logs guardan el texto del usuario.
 """
 import logging
 import uuid
@@ -22,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 
 import click
 from flask.cli import with_appcontext
-from sqlalchemy import and_, exists, func, select, update
+from sqlalchemy import and_, delete, exists, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
@@ -36,12 +39,18 @@ PROCESADO = 'procesado'
 FALLIDO = 'fallido'
 ABANDONADO = 'abandonado'
 
-ESPERA_RECIBIDO = timedelta(minutes=1)
+ESPERA_RECIBIDO = timedelta(minutes=1)      # antes de esto, el hilo del webhook aún puede estar en ello
+CADUCIDAD_RECIBIDO = timedelta(minutes=15)  # después, ejecutarlo sería peligroso (el usuario pudo rehacerlo)
 ESPERA_PROCESANDO = timedelta(minutes=10)
+RETENCION = timedelta(days=30)              # filas terminadas (con payload) que se conservan
 
 AVISO_ABANDONADO = (
     "⚠️ No pude confirmar si se completó tu último mensaje. "
     "Revisa en el sistema si la operación quedó registrada antes de repetirla."
+)
+AVISO_CADUCADO = (
+    "⚠️ No pude procesar a tiempo tu último mensaje y lo descarté para no registrar nada tarde. "
+    "Si todavía lo necesitas, envíalo de nuevo."
 )
 
 
@@ -104,6 +113,10 @@ def reclamar(update_id):
 
     condiciones = [t.c.update_id == update_id, t.c.estado == RECIBIDO]
     if fila.chat_id is not None:
+        if db.session.get_bind().dialect.name == 'postgresql':
+            # Serializa los reclamos del mismo chat: el UPDATE siguiente (READ COMMITTED)
+            # se evalúa después del commit del reclamo concurrente y ve su 'procesando'.
+            db.session.execute(text('SELECT pg_advisory_xact_lock(:clave)'), {'clave': fila.chat_id})
         condiciones.append(~exists().where(and_(
             otro.c.chat_id == fila.chat_id, otro.c.estado == PROCESANDO,
         )))
@@ -120,13 +133,19 @@ def reclamar(update_id):
 
 
 def _marcar(update_id, estado, error=None):
+    """Cierra un update que este proceso tiene en 'procesando'.
+
+    Si mientras tanto el cron lo marcó 'abandonado' (y avisó al usuario), no se toca.
+    """
     t = TelegramUpdate.__table__
-    db.session.execute(
-        update(t).where(t.c.update_id == update_id).values(
+    resultado = db.session.execute(
+        update(t).where(t.c.update_id == update_id, t.c.estado == PROCESANDO).values(
             estado=estado, ultimo_error=error, actualizado_en=_ahora(),
         )
     )
     db.session.commit()
+    if resultado.rowcount != 1:
+        logger.warning("Update de Telegram %s terminó como %s pero ya no estaba 'procesando'", update_id, estado)
 
 
 def _despachar(payload):
@@ -145,13 +164,16 @@ def _ejecutar_reclamado(update_id):
     ).scalar_one_or_none() or {}
     try:
         _despachar(payload)
+        estado, error = PROCESADO, None
     except Exception as e:
-        db.session.rollback()
         error_id = uuid.uuid4().hex[:8]
-        logger.error("Error procesando update de Telegram %s [%s]", update_id, error_id, exc_info=True)
-        _marcar(update_id, FALLIDO, f"{type(e).__name__} [{error_id}]")
-        return
-    _marcar(update_id, PROCESADO)
+        # Solo el tipo: el mensaje y la traza pueden contener el texto del usuario
+        logger.error("Error procesando update de Telegram %s: %s [%s]", update_id, type(e).__name__, error_id)
+        estado, error = FALLIDO, f"{type(e).__name__} [{error_id}]"
+    # El router hace commit de su trabajo; aquí se descarta cualquier estado roto o a medias
+    # que haya dejado en la sesión (p. ej. un flush fallido sin rollback) antes de marcar.
+    db.session.rollback()
+    _marcar(update_id, estado, error)
 
 
 def _siguiente_del_chat(update_id):
@@ -175,13 +197,31 @@ def procesar(update_id):
     return procesados
 
 
-def _avisar(chat_id):
+def _avisar(chat_id, texto):
     from services.telegram_service import telegram_service
 
     try:
-        telegram_service.send_message(chat_id, AVISO_ABANDONADO)
-    except Exception:
-        logger.error("No se pudo avisar de un update abandonado", exc_info=True)
+        telegram_service.send_message(chat_id, texto)
+    except Exception as e:
+        logger.error("No se pudo avisar de un update no procesado: %s", type(e).__name__)
+
+
+def _abandonar(filas, estado_actual, motivo, aviso, ahora):
+    """Pasa a 'abandonado' las filas que sigan en `estado_actual` y avisa a su chat."""
+    t = TelegramUpdate.__table__
+    total = 0
+    for fila in filas:
+        resultado = db.session.execute(
+            update(t).where(t.c.update_id == fila.update_id, t.c.estado == estado_actual).values(
+                estado=ABANDONADO, ultimo_error=motivo, actualizado_en=ahora,
+            )
+        )
+        db.session.commit()
+        if resultado.rowcount == 1:
+            total += 1
+            if fila.chat_id is not None and fila.chat_id > 0:
+                _avisar(fila.chat_id, aviso)
+    return total
 
 
 def procesar_pendientes(ahora=None):
@@ -189,34 +229,49 @@ def procesar_pendientes(ahora=None):
     ahora = ahora or _ahora()
     t = TelegramUpdate.__table__
 
-    abandonados = 0
     colgados = db.session.execute(
         select(t.c.update_id, t.c.chat_id).where(
             t.c.estado == PROCESANDO, t.c.actualizado_en < ahora - ESPERA_PROCESANDO,
         )
     ).all()
-    for fila in colgados:
-        resultado = db.session.execute(
-            update(t).where(t.c.update_id == fila.update_id, t.c.estado == PROCESANDO).values(
-                estado=ABANDONADO,
-                ultimo_error='Sin confirmación: el procesamiento se interrumpió',
-                actualizado_en=ahora,
-            )
+    abandonados = _abandonar(
+        colgados, PROCESANDO, 'Sin confirmación: el procesamiento se interrumpió', AVISO_ABANDONADO, ahora,
+    )
+
+    caducados = db.session.execute(
+        select(t.c.update_id, t.c.chat_id).where(
+            t.c.estado == RECIBIDO, t.c.recibido_en < ahora - CADUCIDAD_RECIBIDO,
         )
-        db.session.commit()
-        if resultado.rowcount == 1:
-            abandonados += 1
-            if fila.chat_id is not None and fila.chat_id > 0:
-                _avisar(fila.chat_id)
+    ).all()
+    abandonados += _abandonar(
+        caducados, RECIBIDO, 'Caducado sin procesar', AVISO_CADUCADO, ahora,
+    )
 
     pendientes = db.session.execute(
         select(t.c.update_id).where(
             t.c.estado == RECIBIDO, t.c.recibido_en < ahora - ESPERA_RECIBIDO,
         ).order_by(t.c.update_id)
     ).scalars().all()
-    procesados = sum(procesar(update_id) for update_id in pendientes)
+    procesados = 0
+    errores = 0
+    for update_id in pendientes:
+        try:
+            procesados += procesar(update_id)
+        except Exception as e:
+            # Un update problemático no detiene la recuperación del resto
+            db.session.rollback()
+            errores += 1
+            logger.error("Fallo recuperando el update de Telegram %s: %s", update_id, type(e).__name__)
 
-    return {'abandonados': abandonados, 'procesados': procesados}
+    purgados = db.session.execute(
+        delete(t).where(
+            t.c.estado.in_([PROCESADO, FALLIDO, ABANDONADO]),
+            t.c.recibido_en < ahora - RETENCION,
+        )
+    ).rowcount
+    db.session.commit()
+
+    return {'abandonados': abandonados, 'procesados': procesados, 'errores': errores, 'purgados': purgados}
 
 
 @click.command('telegram-pendientes')
@@ -225,5 +280,6 @@ def telegram_pendientes_command():
     """Procesa updates de Telegram pendientes y marca los colgados (para cron)."""
     resumen = procesar_pendientes()
     click.echo(
-        f"telegram-pendientes: abandonados={resumen['abandonados']} procesados={resumen['procesados']}"
+        "telegram-pendientes: "
+        + " ".join(f"{clave}={valor}" for clave, valor in resumen.items())
     )

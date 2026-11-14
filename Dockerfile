@@ -78,5 +78,6 @@ CMD exec gunicorn \
     --timeout "${GUNICORN_TIMEOUT}" \
     --graceful-timeout 30 \
     --access-logfile - \
+    --logger-class utils.gunicorn_logging.LoggerSinSecretos \
     --error-logfile - \
     app:app

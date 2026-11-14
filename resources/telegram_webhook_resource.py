@@ -25,8 +25,9 @@ def _procesar_en_segundo_plano(app, update_id):
     with app.app_context():
         try:
             telegram_inbox.procesar(update_id)
-        except Exception:
-            logger.exception("Fallo inesperado procesando el update de Telegram %s", update_id)
+        except Exception as e:
+            # Sin traza ni mensaje: podrían contener el texto del usuario
+            logger.error("Fallo inesperado procesando el update de Telegram %s: %s", update_id, type(e).__name__)
         finally:
             db.session.remove()
 
