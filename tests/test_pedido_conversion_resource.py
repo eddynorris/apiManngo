@@ -1,13 +1,25 @@
-import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-import pytest
 
-from models import (Users, Producto, PresentacionProducto, Lote, Almacen, 
-                   Inventario, Movimiento, Cliente, Pedido, PedidoDetalle, 
-                   Venta, VentaDetalle)
-from extensions import db
+import pytest
 from werkzeug.security import generate_password_hash
+
+from extensions import db
+from models import (
+    Almacen,
+    Cliente,
+    Inventario,
+    Lote,
+    Movimiento,
+    Pedido,
+    PedidoDetalle,
+    PresentacionProducto,
+    Producto,
+    Users,
+    Venta,
+    VentaDetalle,
+)
+
 
 def get_auth_token(client, username, password):
     """Obtiene un token JWT para un usuario."""
@@ -37,13 +49,13 @@ def setup_pedido_conversion_data(test_client):
 
     # Crear usuarios
     admin_user = Users(
-        username='admin_pedido', 
-        password=generate_password_hash('adminpass'), 
+        username='admin_pedido',
+        password=generate_password_hash('adminpass'),
         rol='admin'
     )
     vendedor_user = Users(
-        username='vendedor_pedido', 
-        password=generate_password_hash('vendedorpass'), 
+        username='vendedor_pedido',
+        password=generate_password_hash('vendedorpass'),
         rol='usuario'
     )
     db.session.add_all([admin_user, vendedor_user])
@@ -62,13 +74,13 @@ def setup_pedido_conversion_data(test_client):
 
     # Crear productos
     producto1 = Producto(
-        nombre='Carbón Premium', 
+        nombre='Carbón Premium',
         descripcion='Carbón de alta calidad',
         precio_compra=Decimal('50.00'),
         activo=True
     )
     producto2 = Producto(
-        nombre='Carbón Estándar', 
+        nombre='Carbón Estándar',
         descripcion='Carbón uso comercial',
         precio_compra=Decimal('30.00'),
         activo=True
@@ -164,56 +176,56 @@ def setup_pedido_conversion_data(test_client):
     db.session.commit()
 
     # Crear pedidos de prueba
-    
+
     # Pedido 1: Pedido normal que se puede convertir
     pedido1 = Pedido(
         cliente_id=cliente1.id,
         almacen_id=almacen1.id,
         vendedor_id=vendedor_user.id,
-        fecha_creacion=datetime.now(timezone.utc),
-        fecha_entrega=datetime.now(timezone.utc),
+        fecha_creacion=datetime.now(UTC),
+        fecha_entrega=datetime.now(UTC),
         estado='confirmado',
         notas='Pedido para evento especial'
     )
-    
+
     # Pedido 2: Pedido ya entregado (no se puede convertir)
     pedido2 = Pedido(
         cliente_id=cliente2.id,
         almacen_id=almacen1.id,
         vendedor_id=vendedor_user.id,
-        fecha_creacion=datetime.now(timezone.utc),
-        fecha_entrega=datetime.now(timezone.utc),
+        fecha_creacion=datetime.now(UTC),
+        fecha_entrega=datetime.now(UTC),
         estado='entregado',
         notas='Pedido ya entregado'
     )
-    
+
     # Pedido 3: Pedido cancelado (no se puede convertir)
     pedido3 = Pedido(
         cliente_id=cliente1.id,
         almacen_id=almacen1.id,
         vendedor_id=vendedor_user.id,
-        fecha_creacion=datetime.now(timezone.utc),
-        fecha_entrega=datetime.now(timezone.utc),
+        fecha_creacion=datetime.now(UTC),
+        fecha_entrega=datetime.now(UTC),
         estado='cancelado',
         notas='Pedido cancelado por cliente'
     )
-    
+
     # Pedido 4: Pedido con stock insuficiente
     pedido4 = Pedido(
         cliente_id=cliente2.id,
         almacen_id=almacen1.id,
         vendedor_id=vendedor_user.id,
-        fecha_creacion=datetime.now(timezone.utc),
-        fecha_entrega=datetime.now(timezone.utc),
+        fecha_creacion=datetime.now(UTC),
+        fecha_entrega=datetime.now(UTC),
         estado='confirmado',
         notas='Pedido con stock insuficiente'
     )
-    
+
     db.session.add_all([pedido1, pedido2, pedido3, pedido4])
     db.session.commit()
 
     # Crear detalles de pedidos
-    
+
     # Detalles para pedido1 (convertible)
     detalle1_1 = PedidoDetalle(
         pedido_id=pedido1.id,
@@ -227,7 +239,7 @@ def setup_pedido_conversion_data(test_client):
         cantidad=5,   # 5 bolsas de 10kg
         precio_estimado=Decimal('140.00')
     )
-    
+
     # Detalles para pedido2 (ya entregado)
     detalle2_1 = PedidoDetalle(
         pedido_id=pedido2.id,
@@ -235,7 +247,7 @@ def setup_pedido_conversion_data(test_client):
         cantidad=2,
         precio_estimado=Decimal('75.00')
     )
-    
+
     # Detalles para pedido3 (cancelado)
     detalle3_1 = PedidoDetalle(
         pedido_id=pedido3.id,
@@ -243,7 +255,7 @@ def setup_pedido_conversion_data(test_client):
         cantidad=3,
         precio_estimado=Decimal('75.00')
     )
-    
+
     # Detalles para pedido4 (stock insuficiente)
     detalle4_1 = PedidoDetalle(
         pedido_id=pedido4.id,
@@ -251,7 +263,7 @@ def setup_pedido_conversion_data(test_client):
         cantidad=10,  # Solicita 10 pero solo hay 5 en stock
         precio_estimado=Decimal('45.00')
     )
-    
+
     db.session.add_all([detalle1_1, detalle1_2, detalle2_1, detalle3_1, detalle4_1])
     db.session.commit()
 
@@ -279,7 +291,7 @@ class TestPedidoConversionResource:
         data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         # Verificar stock inicial
         inventario_inicial_1 = Inventario.query.filter_by(
             presentacion_id=data['presentacion1'].id,
@@ -289,36 +301,36 @@ class TestPedidoConversionResource:
             presentacion_id=data['presentacion2'].id,
             almacen_id=data['almacen1'].id
         ).first()
-        
+
         stock_inicial_1 = inventario_inicial_1.cantidad
         stock_inicial_2 = inventario_inicial_2.cantidad
-        
+
         # Realizar conversión
         response = test_client.post(
             f'/pedidos/{data["pedido1"].id}/convertir',
             headers=headers,
             json={'tipo_pago': 'contado', 'usar_precio_actual': True}
         )
-        
+
         assert response.status_code == 201
         response_data = response.get_json()
         assert response_data['message'] == 'Pedido convertido a venta exitosamente'
         assert 'venta' in response_data
-        
+
         venta_data = response_data['venta']
         assert venta_data['cliente']['id'] == data['cliente1'].id
         assert venta_data['almacen']['id'] == data['almacen1'].id
         assert venta_data['tipo_pago'] == 'contado'
         assert venta_data['estado_pago'] == 'pendiente'
-        
+
         # Verificar total calculado correctamente
         total_esperado = (10 * Decimal('75.00')) + (5 * Decimal('140.00'))  # 750 + 700 = 1450
         assert Decimal(venta_data['total']) == total_esperado
-        
+
         # Verificar que el pedido cambió de estado
         pedido_actualizado = Pedido.query.get(data['pedido1'].id)
         assert pedido_actualizado.estado == 'entregado'
-        
+
         # Verificar que se actualizó el inventario
         inventario_final_1 = Inventario.query.filter_by(
             presentacion_id=data['presentacion1'].id,
@@ -328,14 +340,14 @@ class TestPedidoConversionResource:
             presentacion_id=data['presentacion2'].id,
             almacen_id=data['almacen1'].id
         ).first()
-        
+
         assert inventario_final_1.cantidad == stock_inicial_1 - 10
         assert inventario_final_2.cantidad == stock_inicial_2 - 5
-        
+
         # Verificar que se crearon movimientos de salida
         movimientos = Movimiento.query.filter_by(tipo='salida').all()
         assert len(movimientos) == 2  # Uno por cada detalle
-        
+
         for mov in movimientos:
             assert mov.usuario_id == data['vendedor_user'].id
             assert f"desde pedido {data['pedido1'].id}" in mov.motivo
@@ -345,18 +357,18 @@ class TestPedidoConversionResource:
         data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         # Realizar conversión usando precio estimado
         response = test_client.post(
             f'/pedidos/{data["pedido1"].id}/convertir',
             headers=headers,
             json={'tipo_pago': 'credito', 'usar_precio_actual': False}
         )
-        
+
         assert response.status_code == 201
         response_data = response.get_json()
         venta_data = response_data['venta']
-        
+
         # Verificar que se usó el precio estimado del pedido
         total_esperado = (10 * Decimal('75.00')) + (5 * Decimal('140.00'))
         assert Decimal(venta_data['total']) == total_esperado
@@ -367,13 +379,13 @@ class TestPedidoConversionResource:
         data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         response = test_client.post(
             f'/pedidos/{data["pedido2"].id}/convertir',
             headers=headers,
             json={'tipo_pago': 'contado'}
         )
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert response_data['error'] == 'Este pedido ya fue entregado'
@@ -383,13 +395,13 @@ class TestPedidoConversionResource:
         data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         response = test_client.post(
             f'/pedidos/{data["pedido3"].id}/convertir',
             headers=headers,
             json={'tipo_pago': 'contado'}
         )
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert response_data['error'] == 'No se puede convertir un pedido cancelado'
@@ -399,46 +411,45 @@ class TestPedidoConversionResource:
         data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         response = test_client.post(
             f'/pedidos/{data["pedido4"].id}/convertir',
             headers=headers,
             json={'tipo_pago': 'contado'}
         )
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert response_data['error'] == 'Stock insuficiente para completar el pedido'
         assert 'detalles' in response_data
         assert len(response_data['detalles']) == 1
-        
+
         detalle_error = response_data['detalles'][0]
         assert detalle_error['solicitado'] == 10
         assert detalle_error['disponible'] == 5
 
     def test_error_pedido_inexistente(self, test_client, setup_pedido_conversion_data):
         """Test: Error 404 al intentar convertir pedido inexistente."""
-        data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         response = test_client.post(
             '/pedidos/99999/convertir',
             headers=headers,
             json={'tipo_pago': 'contado'}
         )
-        
+
         assert response.status_code == 404
 
     def test_sin_autenticacion(self, test_client, setup_pedido_conversion_data):
         """Test: Error 401 al intentar convertir sin autenticación."""
         data = setup_pedido_conversion_data
-        
+
         response = test_client.post(
             f'/pedidos/{data["pedido1"].id}/convertir',
             json={'tipo_pago': 'contado'}
         )
-        
+
         assert response.status_code == 401
 
     def test_admin_puede_convertir_cualquier_pedido(self, test_client, setup_pedido_conversion_data):
@@ -446,13 +457,13 @@ class TestPedidoConversionResource:
         data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'admin_pedido', 'adminpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         response = test_client.post(
             f'/pedidos/{data["pedido1"].id}/convertir',
             headers=headers,
             json={'tipo_pago': 'credito'}
         )
-        
+
         assert response.status_code == 201
         response_data = response.get_json()
         assert response_data['message'] == 'Pedido convertido a venta exitosamente'
@@ -462,17 +473,17 @@ class TestPedidoConversionResource:
         data = setup_pedido_conversion_data
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         response = test_client.post(
             f'/pedidos/{data["pedido1"].id}/convertir',
             headers=headers,
             json={'tipo_pago': 'contado'}
         )
-        
+
         assert response.status_code == 201
         response_data = response.get_json()
         venta_id = response_data['venta']['id']
-        
+
         # Verificar venta en base de datos
         venta = Venta.query.get(venta_id)
         assert venta is not None
@@ -482,7 +493,7 @@ class TestPedidoConversionResource:
         assert venta.tipo_pago == 'contado'
         assert venta.estado_pago == 'pendiente'
         assert len(venta.detalles) == 2
-        
+
         # Verificar detalles de venta
         for detalle in venta.detalles:
             assert detalle.precio_unitario > 0
@@ -491,29 +502,29 @@ class TestPedidoConversionResource:
     def test_error_pedido_sin_detalles(self, test_client, setup_pedido_conversion_data):
         """Test: Error al intentar convertir pedido sin detalles."""
         data = setup_pedido_conversion_data
-        
+
         # Crear pedido sin detalles
         pedido_vacio = Pedido(
             cliente_id=data['cliente1'].id,
             almacen_id=data['almacen1'].id,
             vendedor_id=data['vendedor_user'].id,
-            fecha_creacion=datetime.now(timezone.utc),
-            fecha_entrega=datetime.now(timezone.utc),
+            fecha_creacion=datetime.now(UTC),
+            fecha_entrega=datetime.now(UTC),
             estado='confirmado',
             notas='Pedido sin detalles'
         )
         db.session.add(pedido_vacio)
         db.session.commit()
-        
+
         token = get_auth_token(test_client, 'vendedor_pedido', 'vendedorpass')
         headers = {'Authorization': f'Bearer {token}'}
-        
+
         response = test_client.post(
             f'/pedidos/{pedido_vacio.id}/convertir',
             headers=headers,
             json={'tipo_pago': 'contado'}
         )
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert response_data['error'] == 'El pedido no tiene detalles para convertir'

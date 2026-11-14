@@ -1,14 +1,16 @@
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt
+import logging
+from datetime import UTC
+from decimal import Decimal, InvalidOperation
+
 from flask import request
-from models import Inventario, PresentacionProducto, Almacen, Movimiento, Gasto, Proveedor
-from extensions import db
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource
+
 from common import handle_db_errors, rol_requerido
+from extensions import db
+from models import Almacen, Gasto, Inventario, Movimiento, PresentacionProducto, Proveedor
 from utils.date_parser import parse_fecha_operacion
 from utils.date_utils import get_peru_now, to_peru_time
-from decimal import Decimal, InvalidOperation
-from datetime import timezone
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,7 @@ class InsumoAlertaResource(Resource):
         """
         Retorna todos los insumos cuyo stock es menor o igual al stock mínimo.
         Incluye nombre del producto, almacén, stock actual, stock mínimo y porcentaje restante.
-        
+
         Filtros opcionales:
         - almacen_id: Filtrar por almacén específico
         """
@@ -93,11 +95,11 @@ class CompraInsumoResource(Resource):
     def post(self):
         """
         Registra una compra de insumos en un solo paso atómico.
-        
+
         Realiza en una sola transacción:
         1. Valida que la presentación sea de tipo 'insumo'
         2. Actualiza o crea el registro de Inventario (sin lote)
-        3. Registra un Movimiento de tipo 'entrada' / tipo_operacion 'compra'  
+        3. Registra un Movimiento de tipo 'entrada' / tipo_operacion 'compra'
         4. Registra un Gasto con categoría 'insumos'
 
         Body esperado:
@@ -163,7 +165,7 @@ class CompraInsumoResource(Resource):
         # se rechaza) para evitar compras históricas fechadas como hoy.
         fecha_raw = data.get('fecha', _FECHA_AUSENTE)
         if fecha_raw is _FECHA_AUSENTE:
-            fecha_operacion = get_peru_now().astimezone(timezone.utc)
+            fecha_operacion = get_peru_now().astimezone(UTC)
         else:
             try:
                 fecha_operacion = parse_fecha_operacion(fecha_raw)

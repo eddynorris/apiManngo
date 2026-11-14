@@ -1,10 +1,24 @@
-import pytest
-from app import app as flask_app
-from extensions import db
-from models import Producto, PresentacionProducto, Lote, Almacen, Venta, VentaDetalle, Pago, Gasto, Cliente, Users
+import json
 from datetime import datetime
 from decimal import Decimal
-import json
+
+import pytest
+
+from app import app as flask_app
+from extensions import db
+from models import (
+    Almacen,
+    Cliente,
+    Gasto,
+    Lote,
+    Pago,
+    PresentacionProducto,
+    Producto,
+    Users,
+    Venta,
+    VentaDetalle,
+)
+
 
 @pytest.fixture(scope='module')
 def test_client():

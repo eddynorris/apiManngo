@@ -1,11 +1,12 @@
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
-import pytest
 
-from models import Users, Producto, PresentacionProducto, Lote, Almacen, Inventario, Movimiento
-from extensions import db
+import pytest
 from werkzeug.security import generate_password_hash
+
+from extensions import db
+from models import Almacen, Inventario, Lote, Movimiento, PresentacionProducto, Producto, Users
+
 
 def get_auth_token(client, username, password):
     """Obtiene un token JWT para un usuario."""
@@ -55,24 +56,24 @@ def setup_batch_update_data(test_client):
 
     # Crear presentaciones
     presentacion1 = PresentacionProducto(
-        producto_id=producto1.id, 
-        nombre='Saco 20kg', 
-        capacidad_kg=Decimal('20.00'), 
-        tipo='procesado', 
+        producto_id=producto1.id,
+        nombre='Saco 20kg',
+        capacidad_kg=Decimal('20.00'),
+        tipo='procesado',
         precio_venta=Decimal('25.00')
     )
     presentacion2 = PresentacionProducto(
-        producto_id=producto1.id, 
-        nombre='Bolsa 5kg', 
-        capacidad_kg=Decimal('5.00'), 
-        tipo='detalle', 
+        producto_id=producto1.id,
+        nombre='Bolsa 5kg',
+        capacidad_kg=Decimal('5.00'),
+        tipo='detalle',
         precio_venta=Decimal('7.00')
     )
     presentacion3 = PresentacionProducto(
-        producto_id=producto2.id, 
-        nombre='Saco 25kg', 
-        capacidad_kg=Decimal('25.00'), 
-        tipo='procesado', 
+        producto_id=producto2.id,
+        nombre='Saco 25kg',
+        capacidad_kg=Decimal('25.00'),
+        tipo='procesado',
         precio_venta=Decimal('35.00')
     )
     db.session.add_all([presentacion1, presentacion2, presentacion3])
@@ -80,16 +81,16 @@ def setup_batch_update_data(test_client):
 
     # Crear lotes
     lote1 = Lote(
-        producto_id=producto1.id, 
-        descripcion='Lote Batch 1', 
-        peso_humedo_kg=Decimal('10000.00'), 
+        producto_id=producto1.id,
+        descripcion='Lote Batch 1',
+        peso_humedo_kg=Decimal('10000.00'),
         cantidad_disponible_kg=Decimal('10000.00'),
         fecha_ingreso=datetime(2023, 1, 1)
     )
     lote2 = Lote(
-        producto_id=producto2.id, 
-        descripcion='Lote Batch 2', 
-        peso_humedo_kg=Decimal('8000.00'), 
+        producto_id=producto2.id,
+        descripcion='Lote Batch 2',
+        peso_humedo_kg=Decimal('8000.00'),
         cantidad_disponible_kg=Decimal('8000.00'),
         fecha_ingreso=datetime(2023, 1, 15)
     )
@@ -157,15 +158,13 @@ class TestInventarioBatchUpdate:
         }
 
         # Obtener estado inicial
-        initial_inventario = Inventario.query.get(inventario_id)
-        initial_cantidad = initial_inventario.cantidad
         initial_movimientos = Movimiento.query.count()
 
         response = test_client.put(f'/inventarios/{inventario_id}', json=update_data, headers=headers)
-        
+
         assert response.status_code == 200
         response_data = response.get_json()
-        
+
         # Verificar respuesta
         assert response_data['id'] == inventario_id
         assert Decimal(response_data['cantidad']) == Decimal(75)
@@ -222,21 +221,21 @@ class TestInventarioBatchUpdate:
         initial_movimientos = Movimiento.query.count()
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 200
         response_data = response.get_json()
-        
+
         # Verificar respuesta
         assert len(response_data) == 3
-        
+
         # Verificar cada inventario actualizado
-        for i, update in enumerate(updates_data):
+        for _i, update in enumerate(updates_data):
             inventario_id = update['id']
             response_item = next(item for item in response_data if item['id'] == inventario_id)
-            
+
             assert Decimal(response_item['cantidad']) == Decimal(update['cantidad'])
             assert response_item['stock_minimo'] == update['stock_minimo']
-            
+
             # Verificar en BD
             updated_inventario = Inventario.query.get(inventario_id)
             assert updated_inventario.cantidad == update['cantidad']
@@ -267,7 +266,7 @@ class TestInventarioBatchUpdate:
         ]
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert "Cada item debe tener un 'id' para actualización múltiple" in response_data['error']
@@ -297,7 +296,7 @@ class TestInventarioBatchUpdate:
         ]
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 404
         # Verificar que ningún inventario fue actualizado (rollback)
         inventario1 = Inventario.query.get(setup_batch_update_data['inventario1'].id)
@@ -325,7 +324,7 @@ class TestInventarioBatchUpdate:
         ]
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 403
         response_data = response.get_json()
         assert "No tiene permisos para modificar inventario" in response_data['error']
@@ -358,7 +357,7 @@ class TestInventarioBatchUpdate:
         ]
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert "Campo inmutable 'presentacion_id' no puede modificarse" in response_data['error']
@@ -390,7 +389,7 @@ class TestInventarioBatchUpdate:
         ]
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert "La cantidad no puede ser negativa" in response_data['error']
@@ -422,7 +421,7 @@ class TestInventarioBatchUpdate:
         ]
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert "Stock insuficiente en el lote" in response_data['error']
@@ -446,7 +445,7 @@ class TestInventarioBatchUpdate:
         }
 
         response = test_client.put('/inventarios', json=update_data, headers=headers)
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert "Para actualización múltiple se esperaba una lista de objetos" in response_data['error']
@@ -459,7 +458,7 @@ class TestInventarioBatchUpdate:
         headers = {'Authorization': f'Bearer {admin_token}'}
 
         response = test_client.put('/inventarios', json=[], headers=headers)
-        
+
         assert response.status_code == 400
         response_data = response.get_json()
         assert "Lista vacía para actualización múltiple" in response_data['error']
@@ -485,10 +484,10 @@ class TestInventarioBatchUpdate:
         ]
 
         response = test_client.put('/inventarios', json=updates_data, headers=headers)
-        
+
         assert response.status_code == 200
         response_data = response.get_json()
-        
+
         # Verificar actualización
         assert Decimal(response_data[0]['cantidad']) == Decimal(60)
         assert response_data[0]['lote_id'] == setup_batch_update_data['lote2'].id

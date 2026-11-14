@@ -1,14 +1,23 @@
 """Límites de volumen para ``all=true`` y exportación de ventas."""
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from flask_jwt_extended import create_access_token
 from sqlalchemy import event
 
 from extensions import db
-from models import Almacen, Cliente, Pago, PresentacionProducto, Producto, Users, Venta, VentaDetalle
+from models import (
+    Almacen,
+    Cliente,
+    Pago,
+    PresentacionProducto,
+    Producto,
+    Users,
+    Venta,
+    VentaDetalle,
+)
 
 
 @contextmanager
@@ -62,7 +71,7 @@ def _preparar_ventas(n):
             tipo_pago="contado",
             estado_pago="pagado",
             estado="completado",
-            fecha=datetime.now(timezone.utc) - timedelta(seconds=indice),
+            fecha=datetime.now(UTC) - timedelta(seconds=indice),
         )
         db.session.add(venta)
         db.session.flush()

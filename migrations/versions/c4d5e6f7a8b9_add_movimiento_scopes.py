@@ -8,9 +8,8 @@ Procedencia exacta de movimientos manuales nuevos. No se rellena para
 movimientos históricos: esos movimientos quedan sin alcance verificable y no
 pueden revertirse borrando una sola pierna.
 """
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = 'c4d5e6f7a8b9'
 down_revision = 'b7c1d2e3f4a5'

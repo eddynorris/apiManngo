@@ -1,5 +1,6 @@
 import html
 
+
 def escape_html(text):
     """
     Escapes special HTML characters (&, <, >) to prevent HTML injection errors in Telegram formatting (SEG-09).

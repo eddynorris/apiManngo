@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from collections.abc import Mapping
 from urllib.parse import urlsplit
 

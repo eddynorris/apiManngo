@@ -15,14 +15,13 @@ import hashlib
 import io
 import re
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Iterable
 
 from lxml import etree
-
 
 UBL_NS = "urn:oasis:names:specification:ubl:schema:xsd:DespatchAdvice-2"
 CAC_NS = "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"

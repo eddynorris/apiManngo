@@ -1,10 +1,12 @@
 # services/stock_service.py
 from dataclasses import dataclass
 from decimal import Decimal
-from extensions import db
-from models import Inventario, Lote, Movimiento
-from sqlalchemy.orm import joinedload
+
 from sqlalchemy import orm
+
+from extensions import db
+from models import Inventario, Movimiento
+
 
 @dataclass
 class ConsumoLote:
@@ -36,7 +38,7 @@ class StockService:
         """
         if not presentacion_ids:
             return {}
-            
+
         from models import Lote as LoteModel
         invs_raw = (
             Inventario.query
@@ -55,11 +57,11 @@ class StockService:
             )
             .all()
         )
-        
+
         inventarios_por_presentacion = {}
         for inv in invs_raw:
             inventarios_por_presentacion.setdefault(inv.presentacion_id, []).append(inv)
-            
+
         return inventarios_por_presentacion
 
     @staticmethod
@@ -115,7 +117,7 @@ class StockService:
                 )
                 db.session.add(inv_sin_lote)
                 db.session.flush()
-                
+
             inv_sin_lote.cantidad -= cantidad_restante
             consumos.append(ConsumoLote(
                 inventario_id=inv_sin_lote.id,

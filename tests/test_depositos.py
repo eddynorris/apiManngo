@@ -1,9 +1,14 @@
 import unittest
-from unittest.mock import patch, MagicMock
-from flask import Flask
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
-from resources.reporte_financiero_resource import ResumenFinancieroResource, ReporteUnificadoResource, DepositosHistorialResource
+from flask import Flask
+
+from resources.reporte_financiero_resource import (
+    DepositosHistorialResource,
+    ReporteUnificadoResource,
+    ResumenFinancieroResource,
+)
 
 
 class TestDepositos(unittest.TestCase):

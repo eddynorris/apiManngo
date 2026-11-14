@@ -6,6 +6,12 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501", "E712"]
 
+[tool.ruff.lint.per-file-ignores]
+# conftest fija el entorno offline antes de importar la app
+"tests/conftest.py" = ["E402"]
+# fixtures de pytest importadas desde otros módulos de test
+"tests/**" = ["F811"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

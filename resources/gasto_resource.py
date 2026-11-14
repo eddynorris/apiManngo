@@ -1,15 +1,17 @@
-from flask_restful import Resource, reqparse
-from flask_jwt_extended import jwt_required, get_jwt
-from flask import request, send_file
-from models import Gasto, Almacen, Users, Lote
-from schemas import gasto_schema, gastos_schema
-from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, parse_iso_datetime
-from sqlalchemy import asc, desc
-import pandas as pd
 import io
 import logging
 from datetime import datetime
+
+import pandas as pd
+from flask import request, send_file
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource
+from sqlalchemy import asc, desc
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors
+from extensions import db
+from models import Almacen, Gasto, Lote, Users
+from schemas import gasto_schema, gastos_schema
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -21,7 +23,7 @@ class GastoResource(Resource):
 
         if gasto_id:
             return gasto_schema.dump(Gasto.query.get_or_404(gasto_id)), 200
-        
+
         # --- Lógica de Ordenación Dinámica ---
         sort_by = request.args.get('sort_by', 'fecha') # Default a fecha
         sort_order = request.args.get('sort_order', 'desc').lower() # Default a desc
@@ -40,12 +42,12 @@ class GastoResource(Resource):
         # --- Fin Lógica de Ordenación ---
 
         query = Gasto.query
-        
+
         # --- FILTRO POR ROL ---
         claims = get_jwt()
         current_user_id = claims.get('sub')
         rol = claims.get('rol')
-        
+
         if rol != 'admin':
             query = query.filter_by(usuario_id=current_user_id)
         # ----------------------
@@ -77,7 +79,7 @@ class GastoResource(Resource):
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         gastos = query.paginate(page=page, per_page=per_page, error_out=False)
-        
+
         return {
             "data": gastos_schema.dump(gastos.items),
             "pagination": {
@@ -92,7 +94,7 @@ class GastoResource(Resource):
     @handle_db_errors
     def post(self):
         """Registra nuevo gasto con defaults inteligentes.
-        
+
         Campos obligatorios: descripcion, monto
         Campos opcionales con defaults:
           - categoria: default 'logistica'
@@ -106,13 +108,13 @@ class GastoResource(Resource):
         # --- DEFAULTS INTELIGENTES ---
         if not json_data.get('categoria'):
             json_data['categoria'] = 'logistica'
-        
+
         if not json_data.get('almacen_id'):
             user_almacen = claims.get('almacen_id')
             if not user_almacen:
                 return {"error": "No se proporcionó almacen_id y el usuario no tiene almacén asignado."}, 400
             json_data['almacen_id'] = user_almacen
-        
+
         if not json_data.get('fecha'):
             json_data['fecha'] = datetime.now().strftime('%Y-%m-%d')
         # --- FIN DEFAULTS ---
@@ -123,7 +125,7 @@ class GastoResource(Resource):
         data = gasto_schema.load(json_data)
         Almacen.query.get_or_404(data.almacen_id)
         data.usuario_id = claims.get('sub')  # Asignar usuario actual
-        
+
         db.session.add(data)
         db.session.commit()
         return gasto_schema.dump(data), 201
@@ -133,17 +135,17 @@ class GastoResource(Resource):
     def put(self, gasto_id):
         """Actualiza gasto existente con validación de datos y ownership"""
         gasto = Gasto.query.get_or_404(gasto_id)
-        
+
         # Verificar ownership (solo admin o el dueño pueden editar)
         claims = get_jwt()
         current_user_id = claims.get('sub')
         rol = claims.get('rol')
-        
+
         if rol != 'admin' and gasto.usuario_id != current_user_id:
             return {"error": "No tienes permiso para editar este gasto"}, 403
-        
-        data = gasto_schema.load(request.get_json(), partial=True)
-        
+
+        gasto_schema.load(request.get_json(), partial=True)  # valida antes de cargar sobre la instancia
+
         updated_gasto = gasto_schema.load(
             request.get_json(),
             instance=gasto,
@@ -158,15 +160,15 @@ class GastoResource(Resource):
     def delete(self, gasto_id):
         """Elimina registro de gasto con verificación de ownership"""
         gasto = Gasto.query.get_or_404(gasto_id)
-        
+
         # Verificar ownership (solo admin o el dueño pueden eliminar)
         claims = get_jwt()
         current_user_id = claims.get('sub')
         rol = claims.get('rol')
-        
+
         if rol != 'admin' and gasto.usuario_id != current_user_id:
             return {"error": "No tienes permiso para eliminar este gasto"}, 403
-        
+
         db.session.delete(gasto)
         db.session.commit()
         return {"message": "Gasto eliminado exitosamente"}, 200
@@ -181,7 +183,7 @@ class GastoExportResource(Resource):
             claims = get_jwt()
             current_user_id = claims.get('sub')
             rol = claims.get('rol')
-            
+
             query = Gasto.query
             if rol != 'admin':
                 query = query.filter_by(usuario_id=current_user_id)
@@ -224,7 +226,7 @@ class GastoExportResource(Resource):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, sheet_name='Gastos')
-            
+
             output.seek(0)
 
             return send_file(

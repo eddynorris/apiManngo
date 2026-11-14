@@ -13,7 +13,6 @@ import redis
 from flask import Flask
 from flask_limiter import Limiter
 
-
 MANNGO_ALLOW_LOCAL_REDIS_TESTS = "MANNGO_ALLOW_LOCAL_REDIS_TESTS"
 MANNGO_LOCAL_REDIS_URL = "MANNGO_LOCAL_REDIS_URL"
 

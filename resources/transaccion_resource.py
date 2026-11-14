@@ -1,16 +1,18 @@
+import logging
+from datetime import UTC
+from decimal import Decimal, InvalidOperation
+
 from flask import request
+from flask_jwt_extended import get_jwt, jwt_required
 from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
-from models import Venta, VentaDetalle, Pago, Gasto, Movimiento, Inventario, Cliente
-from extensions import db
+
 from common import handle_db_errors
+from extensions import db
+from models import Gasto, Inventario, Movimiento, Pago, Venta, VentaDetalle
 from services.authorization import autorizar_almacen
 from services.money import monto_decimal_positivo
 from utils.date_parser import parse_fecha_operacion
 from utils.date_utils import get_peru_now, to_peru_time
-from decimal import Decimal, InvalidOperation
-from datetime import timezone
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ class TransaccionCompletaResource(Resource):
         claims = get_jwt()
         usuario_id = claims.get('sub')
         almacen_id = claims.get('almacen_id')
-        
+
         if not almacen_id:
              return {"error": "Usuario no tiene almacén asignado."}, 403
 
@@ -41,7 +43,7 @@ class TransaccionCompletaResource(Resource):
         # (incluido null o cadena vacía) debe ser válida o rechazarse sin efectos.
         fecha_raw = data.get('fecha', _FECHA_AUSENTE)
         if fecha_raw is _FECHA_AUSENTE:
-            fecha_transaccion = get_peru_now().astimezone(timezone.utc)
+            fecha_transaccion = get_peru_now().astimezone(UTC)
         else:
             try:
                 fecha_transaccion = parse_fecha_operacion(fecha_raw)
@@ -80,13 +82,13 @@ class TransaccionCompletaResource(Resource):
             # --- 2. Crear Venta ---
             total_venta = Decimal(0)
             detalles_venta = []
-            
+
             for item in items:
                 prod_id = item.get('producto_id')
                 cantidad = item.get('cantidad')
                 precio = Decimal(str(item.get('precio_unitario', 0)))
                 lote_id = item.get('lote_id')
-                
+
                 if not prod_id or not lote_id:
                      return {"error": f"Faltan datos (ID o Lote) para el producto: {item.get('producto_nombre_buscado')}"}, 400
 
@@ -97,7 +99,7 @@ class TransaccionCompletaResource(Resource):
 
                 # Deducir Stock
                 inventario.cantidad -= cantidad
-                
+
                 detalle = VentaDetalle(
                     presentacion_id=prod_id,
                     cantidad=cantidad,
@@ -163,7 +165,7 @@ class TransaccionCompletaResource(Resource):
                 nueva_venta.estado_pago = 'parcial'
             else:
                 nueva_venta.estado_pago = 'pendiente'
-            
+
             if total_pagado < total_venta:
                 nueva_venta.tipo_pago = 'credito'
 
@@ -188,7 +190,7 @@ class TransaccionCompletaResource(Resource):
                 db.session.add(nuevo_gasto)
 
             db.session.commit()
-            
+
             return {
                 "message": "Transacción completada exitosamente.",
                 "venta_id": nueva_venta.id,

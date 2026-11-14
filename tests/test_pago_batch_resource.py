@@ -1,13 +1,15 @@
 import json
-import pytest
-from decimal import Decimal
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from decimal import Decimal
 from io import BytesIO
+from unittest.mock import patch
 
-from models import Users, Almacen, Cliente, Venta, Pago
-from extensions import db
+import pytest
 from werkzeug.security import generate_password_hash
+
+from extensions import db
+from models import Almacen, Cliente, Pago, Users, Venta
+
 
 def get_auth_token(client, username, password):
     """Obtiene un token JWT para un usuario."""
@@ -30,18 +32,18 @@ def setup_pago_batch_data(test_client):
 
     # Crear usuarios
     admin_user = Users(
-        username='admin_batch', 
-        password=generate_password_hash('adminpass'), 
+        username='admin_batch',
+        password=generate_password_hash('adminpass'),
         rol='admin'
     )
     user_almacen1 = Users(
-        username='user_alm1_batch', 
-        password=generate_password_hash('userpass'), 
+        username='user_alm1_batch',
+        password=generate_password_hash('userpass'),
         rol='usuario'
     )
     user_almacen2 = Users(
-        username='user_alm2_batch', 
-        password=generate_password_hash('userpass'), 
+        username='user_alm2_batch',
+        password=generate_password_hash('userpass'),
         rol='usuario'
     )
     db.session.add_all([admin_user, user_almacen1, user_almacen2])
@@ -157,19 +159,19 @@ class TestPagoBatchResource:
         }
 
         response = test_client.post('/pagos/batch', json=data, headers=headers)
-        
+
         assert response.status_code == 201
         response_data = response.get_json()
         assert "message" in response_data
         assert "pagos_creados" in response_data
         assert len(response_data["pagos_creados"]) == 3
-        
+
         # Verificar que los pagos se crearon correctamente
         pagos_creados = response_data["pagos_creados"]
         assert pagos_creados[0]["monto"] == "50.00"
         assert pagos_creados[1]["monto"] == "100.00"
         assert pagos_creados[2]["monto"] == "150.00"
-        
+
         # Verificar que todos tienen la misma referencia y método de pago
         for pago in pagos_creados:
             assert pago["metodo_pago"] == "transferencia"
@@ -179,7 +181,7 @@ class TestPagoBatchResource:
         db.session.refresh(setup_pago_batch_data['venta1'])
         db.session.refresh(setup_pago_batch_data['venta2'])
         db.session.refresh(setup_pago_batch_data['venta4'])
-        
+
         assert setup_pago_batch_data['venta1'].estado_pago == 'parcial'  # 50/100
         assert setup_pago_batch_data['venta2'].estado_pago == 'parcial'  # 100/200
         assert setup_pago_batch_data['venta4'].estado_pago == 'parcial'  # 250/300
@@ -193,13 +195,13 @@ class TestPagoBatchResource:
         # Configurar mocks
         mock_save_file.return_value = 'comprobantes/test_file_key.jpg'
         mock_get_presigned_url.return_value = 'https://s3.amazonaws.com/presigned-url'
-        
+
         admin_token = get_auth_token(test_client, 'admin_batch', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
 
         # Crear archivo de prueba
         test_file = (BytesIO(b'fake image data'), 'comprobante.jpg')
-        
+
         pagos_data = [
             {"venta_id": setup_pago_batch_data['venta1'].id, "monto": "100.00"},  # Pago completo
             {"venta_id": setup_pago_batch_data['venta2'].id, "monto": "200.00"}   # Pago completo
@@ -214,16 +216,16 @@ class TestPagoBatchResource:
         }
 
         response = test_client.post('/pagos/batch', data=data, headers=headers)
-        
+
         assert response.status_code == 201
         response_data = response.get_json()
         assert "message" in response_data
         assert "pagos_creados" in response_data
         assert len(response_data["pagos_creados"]) == 2
-        
+
         # Verificar que el archivo se guardó
         mock_save_file.assert_called_once()
-        
+
         # Verificar que ambos pagos tienen la URL del comprobante
         for pago in response_data["pagos_creados"]:
             assert pago["url_comprobante"] == 'https://s3.amazonaws.com/presigned-url'
@@ -233,7 +235,7 @@ class TestPagoBatchResource:
         # Verificar estados de ventas (ambas deberían estar pagadas)
         db.session.refresh(setup_pago_batch_data['venta1'])
         db.session.refresh(setup_pago_batch_data['venta2'])
-        
+
         assert setup_pago_batch_data['venta1'].estado_pago == 'pagado'
         assert setup_pago_batch_data['venta2'].estado_pago == 'pagado'
 
@@ -291,14 +293,14 @@ class TestPagoBatchResource:
         }
 
         response = test_client.post('/pagos/batch', json=data, headers=headers)
-        
+
         if response.status_code != 400:
             pytest.fail(f"Expected 400, got {response.status_code}. Response: {response.get_json()}")
-        
+
         error_msg = response.get_json()["error"]
         if "El campo 'pagos' debe ser una lista no vacía." not in error_msg:
             pytest.fail(f"Expected error message not found. Actual error: {error_msg}")
-        
+
         assert response.status_code == 400
         assert "El campo 'pagos' debe ser una lista no vacía." in response.get_json()["error"]
 
@@ -413,11 +415,11 @@ class TestPagoBatchResource:
         }
 
         response = test_client.post('/pagos/batch', json=data, headers=headers)
-        
+
         assert response.status_code == 201
         response_data = response.get_json()
         assert len(response_data["pagos_creados"]) == 2
-        
+
         # Verificar que la venta quede completamente pagada
         db.session.refresh(setup_pago_batch_data['venta2'])
         assert setup_pago_batch_data['venta2'].estado_pago == 'pagado'
@@ -464,12 +466,12 @@ class TestPagoBatchResource:
         """
         # Configurar mock para simular error en save_file
         mock_save_file.return_value = 'comprobantes/test_file_key.jpg'
-        
+
         admin_token = get_auth_token(test_client, 'admin_batch', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
 
         test_file = (BytesIO(b'fake image data'), 'comprobante.jpg')
-        
+
         # Usar un monto que exceda el saldo para forzar error
         pagos_data = [
             {"venta_id": setup_pago_batch_data['venta1'].id, "monto": "150.00"}  # Excede el total de 100
@@ -483,10 +485,10 @@ class TestPagoBatchResource:
         }
 
         response = test_client.post('/pagos/batch', data=data, headers=headers)
-        
+
         assert response.status_code == 400
         assert "excede el saldo pendiente" in response.get_json()["error"]
-        
+
         # Verificar que no se crearon pagos
         pagos_count = Pago.query.filter_by(venta_id=setup_pago_batch_data['venta1'].id).count()
         assert pagos_count == 0  # No debería haber pagos nuevos

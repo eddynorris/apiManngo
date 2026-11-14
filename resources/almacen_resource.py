@@ -1,11 +1,13 @@
 # ARCHIVO: almacen_resource.py
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required
 from flask import request
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, rol_requerido
+from extensions import db
 from models import Almacen
 from schemas import almacen_schema, almacenes_schema
-from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido
+
 
 class AlmacenResource(Resource):
     @jwt_required()
@@ -19,7 +21,7 @@ class AlmacenResource(Resource):
         """
         if almacen_id:
             return almacen_schema.dump(Almacen.query.get_or_404(almacen_id)), 200
-        
+
         # Construir query con filtros
         query = Almacen.query
         if nombre := request.args.get('nombre'):
@@ -31,7 +33,7 @@ class AlmacenResource(Resource):
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         resultado = query.paginate(page=page, per_page=per_page, error_out=False)
-        
+
         return {
             "data": almacenes_schema.dump(resultado.items),
             "pagination": {
@@ -72,10 +74,10 @@ class AlmacenResource(Resource):
     def delete(self, almacen_id):
         """Elimina un almacén solo si no tiene usuarios asociados"""
         almacen = Almacen.query.get_or_404(almacen_id)
-        
+
         if almacen.usuarios:
             return {"error": "No se puede eliminar un almacén con usuarios asignados"}, 400
-            
+
         db.session.delete(almacen)
         db.session.commit()
         return "", 204

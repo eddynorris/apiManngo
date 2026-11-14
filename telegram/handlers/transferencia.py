@@ -1,12 +1,9 @@
-import os
 import logging
 from decimal import Decimal
-from datetime import datetime, timezone
 
 from extensions import db
-from models import Users, Cliente, PresentacionProducto, Inventario, Lote, Movimiento, Almacen, Receta, ComponenteReceta
+from models import Almacen, Inventario
 from services.telegram_service import telegram_service
-from services.sunat_service import sunat_service
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +120,9 @@ class TransferenciaHandler:
             ]
         }
 
-        from resources.transferencia_resource import TransferenciaService
         from unittest.mock import patch
+
+        from resources.transferencia_resource import TransferenciaService
 
         with patch('resources.transferencia_resource.get_jwt', return_value={"sub": user.id, "rol": user.rol, "almacen_id": user.almacen_id}):
             service = TransferenciaService(payload)

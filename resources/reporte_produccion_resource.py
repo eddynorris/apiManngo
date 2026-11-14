@@ -1,13 +1,15 @@
 import logging
-from flask import request
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required
-from sqlalchemy import func, and_
+import re
 from datetime import datetime, timedelta
 from decimal import Decimal
-import re
-from models import db, Movimiento, PresentacionProducto, Producto, Almacen, Users, Lote
+
+from flask import request
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+from sqlalchemy import and_, func
+
 from common import handle_db_errors
+from models import Almacen, Lote, Movimiento, PresentacionProducto, Producto, Users, db
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ class ReporteProduccionBriquetasResource(Resource):
             almacen_id = request.args.get('almacen_id', type=int)
             presentacion_id = request.args.get('presentacion_id', type=int)
             periodo = request.args.get('periodo', 'dia')  # 'dia', 'semana', 'mes'
-            
+
             # Si no se especifican fechas, usar el último mes
             if not fecha_inicio_str or not fecha_fin_str:
                 fecha_fin = datetime.now().date()
@@ -42,11 +44,11 @@ class ReporteProduccionBriquetasResource(Resource):
                     fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
-            
+
             # Validar período
             if periodo not in ['dia', 'semana', 'mes']:
                 return {'error': 'Período debe ser: dia, semana o mes'}, 400
-            
+
             # --- Consulta base para movimientos de producción de briquetas ---
             query = db.session.query(
                 PresentacionProducto.id.label('presentacion_id'),
@@ -74,11 +76,11 @@ class ReporteProduccionBriquetasResource(Resource):
                     func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
                 )
             )
-            
+
             # Aplicar filtros opcionales
             if presentacion_id:
                 query = query.filter(PresentacionProducto.id == presentacion_id)
-            
+
             # Para filtro de almacén, necesitamos una aproximación diferente
             # ya que no hay relación directa entre Movimiento y Almacen
             if almacen_id:
@@ -86,7 +88,7 @@ class ReporteProduccionBriquetasResource(Resource):
                 from models import Users
                 usuarios_almacen = db.session.query(Users.id).filter(Users.almacen_id == almacen_id).subquery()
                 query = query.filter(Movimiento.usuario_id.in_(usuarios_almacen))
-            
+
             # Agrupar por presentación
             query = query.group_by(
                 PresentacionProducto.id,
@@ -94,19 +96,19 @@ class ReporteProduccionBriquetasResource(Resource):
                 Producto.nombre,
                 Almacen.nombre
             )
-            
+
             # Ejecutar consulta
             resultados = query.all()
-            
+
             # --- Formatear respuesta ---
             reporte_data = []
             total_unidades = 0
             total_kg = Decimal('0.00')
-            
+
             for r in resultados:
                 unidades = int(r.unidades_producidas or 0)
                 kg = Decimal(str(r.kg_producidos or 0))
-                
+
                 reporte_data.append({
                     'presentacion_id': r.presentacion_id,
                     'presentacion_nombre': r.presentacion_nombre,
@@ -116,10 +118,10 @@ class ReporteProduccionBriquetasResource(Resource):
                     'numero_producciones': int(r.numero_producciones or 0),
                     'almacen_nombre': r.almacen_nombre or 'No especificado'
                 })
-                
+
                 total_unidades += unidades
                 total_kg += kg
-            
+
             # --- Consulta adicional para resumen por período ---
             resumen_temporal = []
             if periodo == 'dia':
@@ -138,17 +140,17 @@ class ReporteProduccionBriquetasResource(Resource):
                         func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
                     )
                 ).group_by(func.date(Movimiento.fecha)).order_by(func.date(Movimiento.fecha))
-                
+
                 if presentacion_id:
                     query_temporal = query_temporal.filter(PresentacionProducto.id == presentacion_id)
-                
+
                 resultados_temporales = query_temporal.all()
                 resumen_temporal = [{
                     'fecha': r.fecha.isoformat(),
                     'unidades_producidas': int(r.unidades_dia or 0),
                     'kg_producidos': float(r.kg_dia or 0)
                 } for r in resultados_temporales]
-            
+
             # Respuesta final
             respuesta = {
                 'periodo': {
@@ -165,9 +167,9 @@ class ReporteProduccionBriquetasResource(Resource):
                 'detalle_por_presentacion': reporte_data,
                 'resumen_temporal': resumen_temporal
             }
-            
+
             return respuesta, 200
-            
+
         except Exception as e:
             db.session.rollback()
             return {'error': 'Error interno del servidor', 'details': str(e)}, 500
@@ -189,7 +191,7 @@ class ReporteProduccionGeneralResource(Resource):
             fecha_fin_str = request.args.get('fecha_fin')
             almacen_id = request.args.get('almacen_id', type=int)
             tipo_presentacion = request.args.get('tipo_presentacion')
-            
+
             # Si no se especifican fechas, usar el último mes
             if not fecha_inicio_str or not fecha_fin_str:
                 fecha_fin = datetime.now().date()
@@ -201,7 +203,7 @@ class ReporteProduccionGeneralResource(Resource):
                     fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
-            
+
             # --- Consulta base para todos los movimientos de producción ---
             query = db.session.query(
                 PresentacionProducto.tipo.label('tipo_presentacion'),
@@ -221,35 +223,35 @@ class ReporteProduccionGeneralResource(Resource):
                     func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
                 )
             )
-            
+
             # Aplicar filtros opcionales
             if tipo_presentacion:
                 query = query.filter(PresentacionProducto.tipo == tipo_presentacion)
-            
+
             if almacen_id:
                 from models import Users
                 usuarios_almacen = db.session.query(Users.id).filter(Users.almacen_id == almacen_id).subquery()
                 query = query.filter(Movimiento.usuario_id.in_(usuarios_almacen))
-            
+
             # Agrupar por tipo y presentación
             query = query.group_by(
                 PresentacionProducto.tipo,
                 PresentacionProducto.nombre,
                 Producto.nombre
             ).order_by(PresentacionProducto.tipo, PresentacionProducto.nombre)
-            
+
             # Ejecutar consulta
             resultados = query.all()
-            
+
             # --- Formatear respuesta ---
             reporte_data = []
             resumen_por_tipo = {}
-            
+
             for r in resultados:
                 tipo = r.tipo_presentacion
                 unidades = int(r.unidades_producidas or 0)
                 kg = Decimal(str(r.kg_producidos or 0))
-                
+
                 # Agregar al detalle
                 reporte_data.append({
                     'tipo_presentacion': tipo,
@@ -259,7 +261,7 @@ class ReporteProduccionGeneralResource(Resource):
                     'kg_producidos': float(kg),
                     'numero_producciones': int(r.numero_producciones or 0)
                 })
-                
+
                 # Agregar al resumen por tipo
                 if tipo not in resumen_por_tipo:
                     resumen_por_tipo[tipo] = {
@@ -267,11 +269,11 @@ class ReporteProduccionGeneralResource(Resource):
                         'kg_totales': Decimal('0.00'),
                         'producciones_totales': 0
                     }
-                
+
                 resumen_por_tipo[tipo]['unidades_totales'] += unidades
                 resumen_por_tipo[tipo]['kg_totales'] += kg
                 resumen_por_tipo[tipo]['producciones_totales'] += int(r.numero_producciones or 0)
-            
+
             # Convertir resumen a formato de respuesta
             resumen_formateado = [{
                 'tipo': tipo,
@@ -279,7 +281,7 @@ class ReporteProduccionGeneralResource(Resource):
                 'kg_totales': float(datos['kg_totales']),
                 'producciones_totales': datos['producciones_totales']
             } for tipo, datos in resumen_por_tipo.items()]
-            
+
             # Respuesta final
             respuesta = {
                 'periodo': {
@@ -289,9 +291,9 @@ class ReporteProduccionGeneralResource(Resource):
                 'resumen_por_tipo': resumen_formateado,
                 'detalle_completo': reporte_data
             }
-            
+
             return respuesta, 200
-            
+
         except Exception as e:
             db.session.rollback()
             return {'error': 'Error interno del servidor', 'details': str(e)}, 500
@@ -308,7 +310,7 @@ class ReporteProduccionEntradasResource(Resource):
     @handle_db_errors
     def get(self):
         try:
-            
+
 
             # --- 1. Filtros de Consulta ---
             fecha_inicio_str = request.args.get('fecha_inicio')

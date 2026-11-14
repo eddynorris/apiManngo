@@ -11,7 +11,7 @@ Convención de entrada:
 - Un campo ausente puede usar el valor actual; un campo presente pero nulo,
   vacío o no parseable se rechaza con ``ValueError``.
 """
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 
 from utils.date_utils import PERU_TZ, get_peru_now
 
@@ -61,7 +61,7 @@ def parse_fecha_operacion(value, field_name: str = "fecha") -> datetime:
             f"Fecha inválida para '{field_name}': use YYYY-MM-DD o ISO 8601"
         ) from None
 
-    return local.astimezone(timezone.utc)
+    return local.astimezone(UTC)
 
 
 def parse_telegram_date(fecha_str) -> datetime:

@@ -1,12 +1,10 @@
 """baseline_production
 
 Revision ID: d312602d0682
-Revises: 
+Revises:
 Create Date: 2026-07-21 17:42:37.058930
 
 """
-from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.

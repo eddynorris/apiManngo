@@ -1,5 +1,6 @@
 import pytest
 from flask import jsonify
+from marshmallow import ValidationError
 from werkzeug.exceptions import (
     BadRequest,
     Conflict,
@@ -9,7 +10,6 @@ from werkzeug.exceptions import (
     TooManyRequests,
     Unauthorized,
 )
-from marshmallow import ValidationError
 
 from app import app
 from common import handle_db_errors

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -6,11 +6,24 @@ from werkzeug.security import generate_password_hash
 
 from extensions import db
 from models import (
-    Almacen, Cliente, Gasto, Inventario, Lote, Movimiento, Pago,
-    PresentacionProducto, Producto, Proveedor, Users, Venta, VentaDetalle,
+    Almacen,
+    Cliente,
+    Gasto,
+    Inventario,
+    Lote,
+    Movimiento,
+    Pago,
+    PresentacionProducto,
+    Producto,
+    Proveedor,
+    Users,
+    Venta,
+    VentaDetalle,
 )
 from utils.date_parser import (
-    parse_fecha_operacion, parse_telegram_date, parse_telegram_date_only,
+    parse_fecha_operacion,
+    parse_telegram_date,
+    parse_telegram_date_only,
 )
 from utils.date_utils import get_peru_now, to_peru_time
 
@@ -75,7 +88,7 @@ def setup_fechas_data(test_client):
         producto_id=producto.id,
         descripcion='Lote Fechas',
         cantidad_disponible_kg=Decimal('100.00'),
-        fecha_ingreso=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        fecha_ingreso=datetime(2024, 1, 1, tzinfo=UTC),
     )
     db.session.add_all([presentacion, insumo, lote])
     db.session.flush()
@@ -158,16 +171,16 @@ def _snapshot(data):
 class TestParseoFechasOperacion:
     def test_fecha_dia_es_medianoche_de_peru_en_utc(self):
         assert parse_fecha_operacion('2026-03-11') == datetime(
-            2026, 3, 11, 5, 0, tzinfo=timezone.utc
+            2026, 3, 11, 5, 0, tzinfo=UTC
         )
 
     def test_hora_ingenua_se_interpreta_en_peru(self):
         assert parse_fecha_operacion('2026-03-11T23:30:00') == datetime(
-            2026, 3, 12, 4, 30, tzinfo=timezone.utc
+            2026, 3, 12, 4, 30, tzinfo=UTC
         )
 
     def test_iso_con_zona_respeta_el_instante(self):
-        esperado = datetime(2026, 3, 12, 4, 30, tzinfo=timezone.utc)
+        esperado = datetime(2026, 3, 12, 4, 30, tzinfo=UTC)
         assert parse_fecha_operacion('2026-03-11T23:30:00-05:00') == esperado
         assert parse_fecha_operacion('2026-03-12T04:30:00Z') == esperado
 

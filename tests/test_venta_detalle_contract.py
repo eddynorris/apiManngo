@@ -2,7 +2,10 @@ from decimal import Decimal
 
 from extensions import db
 from models import Inventario, Pago, Venta, VentaDetalle
-from tests.test_venta_authorization import auth_headers, setup_venta_auth
+from tests.test_venta_authorization import (  # noqa: F401  (fixture de pytest)
+    auth_headers,
+    setup_venta_auth,
+)
 
 
 def _detalle_payload(data, cantidad='1', precio='50.00'):

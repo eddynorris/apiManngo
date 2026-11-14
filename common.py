@@ -2,21 +2,21 @@
 import logging
 import re
 import uuid
-import werkzeug.exceptions
+from collections.abc import Callable
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from functools import wraps
-from datetime import datetime, date, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any
 
+import werkzeug.exceptions
 from flask import Response, has_request_context, jsonify, request
-from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
+from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 from marshmallow import ValidationError
 from werkzeug.datastructures import Headers
 
+import config
 from extensions import db
 from models import Users
-from utils.date_utils import to_peru_time, get_peru_now
-import config
 
 # Configuración de logging
 logger = logging.getLogger(__name__)
@@ -56,23 +56,23 @@ def obtener_usuario_actual() -> Users:
 def parse_iso_datetime(date_string: str, add_timezone: bool = True) -> datetime:
     """
     Parsea una fecha ISO 8601 de manera robusta, manejando diferentes formatos.
-    
+
     Args:
         date_string (str): Fecha en formato ISO 8601.
         add_timezone (bool): Si True, agrega timezone UTC si no está presente.
-        
+
     Returns:
         datetime: Objeto datetime parseado.
-        
+
     Raises:
         ValueError: Si el formato de fecha es inválido.
     """
     if not date_string:
         raise ValueError("La fecha no puede estar vacía")
-    
+
     # Normalizar la cadena de fecha
     date_string = date_string.strip()
-    
+
     # Manejar diferentes formatos de timezone
     if date_string.endswith('Z'):
         # Formato con Z (Zulu time)
@@ -81,24 +81,24 @@ def parse_iso_datetime(date_string: str, add_timezone: bool = True) -> datetime:
         # No tiene timezone, agregar UTC si se solicita
         if add_timezone:
             date_string += '+00:00'
-    
+
     try:
         # Intentar parsear con timezone
         dt = datetime.fromisoformat(date_string)
-        
+
         # Si no tiene timezone y no se solicitó agregar, retornar sin timezone
         if not add_timezone and dt.tzinfo is None:
             return dt
-            
+
         # Si no tiene timezone pero se solicitó agregar, agregar UTC
         if dt.tzinfo is None and add_timezone:
-            dt = dt.replace(tzinfo=timezone.utc)
-            
+            dt = dt.replace(tzinfo=UTC)
+
         return dt
     except ValueError as e:
-        raise ValueError(f"Formato de fecha inválido: {date_string}. Error: {str(e)}")
+        raise ValueError(f"Formato de fecha inválido: {date_string}. Error: {str(e)}") from e
 
-def _status_5xx_de_respuesta(resultado: Any) -> Optional[int]:
+def _status_5xx_de_respuesta(resultado: Any) -> int | None:
     """Devuelve el status si el handler produjo una respuesta 5xx, si no None."""
     status = None
     if isinstance(resultado, tuple) and len(resultado) >= 2:
@@ -176,15 +176,15 @@ def _log_respuesta_5xx(func: Callable, status: int, error_id: str) -> None:
 def handle_db_errors(func: Callable) -> Callable:
     """
     Decorator para manejo centralizado de errores de base de datos y validación.
-    
+
     Args:
         func (Callable): La función a decorar.
-        
+
     Returns:
         Callable: La función decorada con manejo de errores.
     """
     @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
+    def wrapper(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], int] | Any:
         try:
             # Capturar y sanitizar parámetros de ID para prevenir inyección
             for key, value in kwargs.items():
@@ -193,7 +193,7 @@ def handle_db_errors(func: Callable) -> Callable:
                         kwargs[key] = int(value)
                     except (ValueError, TypeError):
                         return {"message": f"ID inválido: {key}"}, 400
-            
+
             resultado = func(*args, **kwargs)
             status_5xx = _status_5xx_de_respuesta(resultado)
             if status_5xx is not None:
@@ -218,7 +218,7 @@ def handle_db_errors(func: Callable) -> Callable:
             db.session.rollback()
             error_id = uuid.uuid4().hex[:8]
             logger.error(f"Error en {func.__name__} [{error_id}]: {str(e)}", exc_info=True)
-            
+
             # Si es un error de integridad de SQLAlchemy, podemos traducirlo a un 409 o 400
             from sqlalchemy.exc import IntegrityError
             if isinstance(e, IntegrityError):
@@ -228,23 +228,23 @@ def handle_db_errors(func: Callable) -> Callable:
                 if "foreign key" in err_msg or "violates foreign key constraint" in err_msg:
                     return {"message": "El registro hace referencia a una entidad no existente.", "error_id": error_id}, 400
                 return {"message": "Violación de integridad de datos en el servidor.", "error_id": error_id}, 400
-                
+
             return {"message": "Error interno del servidor", "error_id": error_id}, 500
     return wrapper
 
 def rol_requerido(*roles_permitidos: str) -> Callable:
     """
     Decorador para restringir acceso basado en roles.
-    
+
     Args:
         *roles_permitidos (str): Roles permitidos para acceder al recurso.
-        
+
     Returns:
         Callable: El decorador.
     """
     def decorator(fn: Callable) -> Callable:
         @wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
+        def wrapper(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], int] | Any:
             verify_jwt_in_request()
 
             usuario = obtener_usuario_actual()
@@ -268,15 +268,15 @@ def mismo_almacen_o_admin(fn: Callable) -> Callable:
     Decorador para verificar si el usuario tiene acceso al almacén solicitado.
     - Si es admin, tiene acceso a todos los almacenes.
     - Si no es admin, solo tiene acceso a su propio almacén.
-    
+
     Args:
         fn (Callable): La función a decorar.
-        
+
     Returns:
         Callable: La función decorada.
     """
     @wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
+    def wrapper(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], int] | Any:
         verify_jwt_in_request()
 
         usuario = obtener_usuario_actual()
@@ -330,7 +330,7 @@ def mismo_almacen_o_admin(fn: Callable) -> Callable:
         return fn(*args, **kwargs)
     return wrapper
 
-def obtener_payload_normalizado() -> Tuple[Dict[str, Any], Any]:
+def obtener_payload_normalizado() -> tuple[dict[str, Any], Any]:
     """Extrae JSON o multipart/form-data y normaliza IDs numéricos.
 
     Devuelve ``(payload, archivo_comprobante)``. El comprobante solo existe en
@@ -338,6 +338,7 @@ def obtener_payload_normalizado() -> Tuple[Dict[str, Any], Any]:
     y los servicios trabajen con el mismo tipo sin importar el formato.
     """
     import json
+
     from services.authorization import normalizar_ids
 
     if request.content_type and 'multipart/form-data' in request.content_type:
@@ -347,7 +348,7 @@ def obtener_payload_normalizado() -> Tuple[Dict[str, Any], Any]:
             try:
                 data['detalles'] = json.loads(data['detalles'])
             except json.JSONDecodeError:
-                raise werkzeug.exceptions.BadRequest("Formato de detalles inválido")
+                raise werkzeug.exceptions.BadRequest("Formato de detalles inválido") from None
         return normalizar_ids(data), archivo
 
     data = request.get_json(silent=True)
@@ -356,10 +357,10 @@ def obtener_payload_normalizado() -> Tuple[Dict[str, Any], Any]:
     return normalizar_ids(data), None
 
 
-def validate_pagination_params() -> Tuple[int, int]:
+def validate_pagination_params() -> tuple[int, int]:
     """
     Extrae y valida parámetros de paginación de la request.
-    
+
     Returns:
         Tuple[int, int]: Una tupla con (page, per_page).
     """
@@ -371,22 +372,22 @@ def validate_pagination_params() -> Tuple[int, int]:
         page = max(1, int(request.args.get('page', 1)))
     except (ValueError, TypeError):
         page = 1
-        
+
     try:
         per_page = min(int(request.args.get('per_page', config.DEFAULT_ITEMS_PER_PAGE)), config.MAX_ITEMS_PER_PAGE)
     except (ValueError, TypeError):
         per_page = config.DEFAULT_ITEMS_PER_PAGE
-        
+
     return page, per_page
 
-def create_pagination_response(items: List[Any], pagination: Any) -> Dict[str, Any]:
+def create_pagination_response(items: list[Any], pagination: Any) -> dict[str, Any]:
     """
     Crea respuesta estandarizada con paginación.
-    
+
     Args:
         items (List[Any]): Lista de items de la página actual.
         pagination (Any): Objeto de paginación de SQLAlchemy.
-        
+
     Returns:
         Dict[str, Any]: Diccionario con datos y metadatos de paginación.
     """
@@ -406,22 +407,24 @@ def paginar(query, schema=None):
     """
     page, per_page = validate_pagination_params()
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-    
+
     if schema:
         items = schema.dump(pagination.items, many=True)
     else:
         items = pagination.items
-        
+
     return create_pagination_response(items, pagination)
 
-def obtener_saldos_pendientes_clientes(cliente_ids: Optional[List[int]] = None) -> Dict[int, Decimal]:
+def obtener_saldos_pendientes_clientes(cliente_ids: list[int] | None = None) -> dict[int, Decimal]:
     """
     Calcula el saldo pendiente total por cliente utilizando 1 sola consulta SQL agregada.
     Evita el problema N+1 de la propiedad Python.
     """
     from decimal import Decimal
-    from models import Venta, Pago
-    from sqlalchemy import select, func
+
+    from sqlalchemy import func, select
+
+    from models import Pago, Venta
 
     sub_pagos = (
         select(Pago.venta_id, func.coalesce(func.sum(Pago.monto), 0).label('total_pagado'))
@@ -443,27 +446,27 @@ def obtener_saldos_pendientes_clientes(cliente_ids: Optional[List[int]] = None) 
     query = query.group_by(Venta.cliente_id)
     return {row[0]: Decimal(str(row[1])) for row in query.all()}
 
-def validate_password(password: str) -> Tuple[bool, Optional[str]]:
+def validate_password(password: str) -> tuple[bool, str | None]:
     """
     Valida que la contraseña cumpla con los requisitos de seguridad:
     - Mínimo 8 caracteres
     - Al menos una letra
     - Al menos un número
-    
+
     Args:
         password (str): La contraseña a validar.
-        
+
     Returns:
         Tuple[bool, Optional[str]]: (True, None) si es válida, (False, mensaje_error) si no.
     """
     if not password or len(password) < config.MIN_PASSWORD_LENGTH:
         return False, f"La contraseña debe tener al menos {config.MIN_PASSWORD_LENGTH} caracteres"
-    
+
     # Convertir a minúsculas para la validación
     lower_password = password.lower()
     if not (re.search(r'[a-z]', lower_password) and re.search(r'[0-9]', lower_password)):
         return False, "La contraseña debe contener al menos una letra y un número"
-        
+
     return True, None
 
 def make_json_serializable(data: Any) -> Any:
@@ -472,7 +475,7 @@ def make_json_serializable(data: Any) -> Any:
     Handles Decimal -> float, etc.
     """
     import decimal
-    
+
     if isinstance(data, dict):
         return {k: make_json_serializable(v) for k, v in data.items()}
     elif isinstance(data, list):

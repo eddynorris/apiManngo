@@ -1,10 +1,12 @@
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required
 from flask import request
-from models import Producto, PresentacionProducto
-from schemas import producto_schema, productos_schema, presentacion_schema, presentaciones_schema
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, rol_requerido
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, rol_requerido
+from models import PresentacionProducto, Producto
+from schemas import producto_schema, productos_schema
+
 
 class ProductoResource(Resource):
     @jwt_required()
@@ -13,11 +15,11 @@ class ProductoResource(Resource):
         if producto_id:
             producto = Producto.query.get_or_404(producto_id)
             return producto_schema.dump(producto), 200
-        
+
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         productos = Producto.query.paginate(page=page, per_page=per_page, error_out=False)
-        
+
         return {
             "data": productos_schema.dump(productos.items),
             "pagination": {
@@ -55,10 +57,10 @@ class ProductoResource(Resource):
     @handle_db_errors
     def delete(self, producto_id):
         producto = Producto.query.get_or_404(producto_id)
-        
+
         if PresentacionProducto.query.filter_by(producto_id=producto_id).first():
             return {"error": "No se puede eliminar el producto, existen presentaciones asociadas"}, 400
-        
+
         db.session.delete(producto)
         db.session.commit()
         return "Producto eliminado exitosamente", 204

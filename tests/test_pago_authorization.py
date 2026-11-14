@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -60,37 +60,37 @@ def setup_pagos_auth(test_client):
     venta_a = Venta(
         cliente_id=cliente.id, almacen_id=almacen1.id, vendedor_id=user_a.id,
         total=Decimal('100.00'), tipo_pago='credito', estado_pago='parcial',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     venta_b = Venta(
         cliente_id=cliente.id, almacen_id=almacen1.id, vendedor_id=user_b.id,
         total=Decimal('100.00'), tipo_pago='credito', estado_pago='parcial',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     venta_c = Venta(
         cliente_id=cliente.id, almacen_id=almacen2.id, vendedor_id=user_c.id,
         total=Decimal('100.00'), tipo_pago='credito', estado_pago='parcial',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     venta_libre = Venta(
         cliente_id=cliente.id, almacen_id=almacen1.id, vendedor_id=user_a.id,
         total=Decimal('100.00'), tipo_pago='credito', estado_pago='pendiente',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     db.session.add_all([venta_a, venta_b, venta_c, venta_libre])
     db.session.flush()
 
     pago_a = Pago(
         venta_id=venta_a.id, usuario_id=user_a.id, monto=Decimal('10.00'),
-        metodo_pago='efectivo', fecha=datetime.now(timezone.utc),
+        metodo_pago='efectivo', fecha=datetime.now(UTC),
     )
     pago_b = Pago(
         venta_id=venta_b.id, usuario_id=user_b.id, monto=Decimal('20.00'),
-        metodo_pago='efectivo', fecha=datetime.now(timezone.utc),
+        metodo_pago='efectivo', fecha=datetime.now(UTC),
     )
     pago_c = Pago(
         venta_id=venta_c.id, usuario_id=user_c.id, monto=Decimal('30.00'),
-        metodo_pago='efectivo', fecha=datetime.now(timezone.utc),
+        metodo_pago='efectivo', fecha=datetime.now(UTC),
     )
     db.session.add_all([pago_a, pago_b, pago_c])
     db.session.commit()

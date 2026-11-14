@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 import pytz
 
 # Zona horaria de Perú
@@ -15,11 +16,11 @@ def to_peru_time(dt):
     """
     if dt is None:
         return None
-        
+
     if dt.tzinfo is None:
         # Asumir UTC si no tiene timezone
-        dt = dt.replace(tzinfo=timezone.utc)
-        
+        dt = dt.replace(tzinfo=UTC)
+
     return dt.astimezone(PERU_TZ)
 
 def format_peru_date(dt, format_str='%Y-%m-%d %H:%M:%S'):

@@ -6,7 +6,7 @@ más consultas que ese caso base. Un N+1 hace crecer el conteo y falla.
 """
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from flask_jwt_extended import create_access_token
@@ -77,7 +77,7 @@ def _preparar_ventas(n):
             tipo_pago="credito",
             estado_pago="pendiente",
             estado="completado",
-            fecha=datetime.now(timezone.utc) - timedelta(seconds=indice),
+            fecha=datetime.now(UTC) - timedelta(seconds=indice),
         )
         db.session.add(venta)
         db.session.flush()
@@ -93,7 +93,7 @@ def _preparar_ventas(n):
             usuario_id=admin.id,
             monto=Decimal("10.00"),
             metodo_pago="efectivo",
-            fecha=datetime.now(timezone.utc) - timedelta(seconds=indice),
+            fecha=datetime.now(UTC) - timedelta(seconds=indice),
         ))
 
     db.session.commit()

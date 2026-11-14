@@ -1,11 +1,11 @@
-import pytest
 import json
-from decimal import Decimal
-from app import app, db
-from models import (
-    Users, Almacen, Producto, PresentacionProducto, Lote, Inventario, Movimiento
-)
+
+import pytest
 from flask_jwt_extended import create_access_token
+
+from app import app, db
+from models import Almacen, Inventario, Lote, Movimiento, PresentacionProducto, Producto, Users
+
 
 @pytest.fixture(scope='module')
 def test_client():
@@ -32,7 +32,7 @@ def init_database_for_transfer(test_client):
     presentacion = PresentacionProducto(id=1, producto_id=1, nombre='Saco 20kg', capacidad_kg=20, tipo='procesado', precio_venta=50)
     lote = Lote(id=1, producto_id=1, cantidad_disponible_kg=1000)
     db.session.add_all([user, almacen_origen, almacen_destino, producto, presentacion, lote])
-    
+
     # Inventario inicial en el almacén de origen
     inv_origen = Inventario(presentacion_id=1, almacen_id=1, lote_id=1, cantidad=50) # 50 sacos
     db.session.add(inv_origen)
@@ -59,7 +59,7 @@ def test_transferencia_exitosa(test_client, init_database_for_transfer):
         ]
     }
     response = test_client.post('/inventario/transferir', data=json.dumps(payload), headers=headers, content_type='application/json')
-    
+
     assert response.status_code == 200
     assert response.get_json()['mensaje'] == "Transferencia realizada con éxito"
 
@@ -97,7 +97,7 @@ def test_transferencia_stock_insuficiente(test_client, init_database_for_transfe
         ]
     }
     response = test_client.post('/inventario/transferir', data=json.dumps(payload), headers=headers, content_type='application/json')
-    
+
     assert response.status_code == 400
     assert "Stock insuficiente" in response.get_json()['error']
 
@@ -117,6 +117,6 @@ def test_transferencia_mismo_almacen(test_client, init_database_for_transfer):
         ]
     }
     response = test_client.post('/inventario/transferir', data=json.dumps(payload), headers=headers, content_type='application/json')
-    
+
     assert response.status_code == 400
     assert "no pueden ser el mismo" in response.get_json()['error']

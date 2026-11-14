@@ -9,7 +9,8 @@ La política siempre resuelve el actor contra la base de datos vigente; no
 confía únicamente en los claims del JWT ni en un ``almacen_id`` enviado por
 el cliente.
 """
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound
 
@@ -40,7 +41,7 @@ def _convertir_id(valor: Any, campo: str = "ID") -> int:
     raise BadRequest(f"{campo} inválido")
 
 
-def obtener_actor(actor_id: Any) -> Optional[Users]:
+def obtener_actor(actor_id: Any) -> Users | None:
     """Carga el usuario vigente en BD a partir del ID del actor."""
     if actor_id is None:
         return None
@@ -50,7 +51,7 @@ def obtener_actor(actor_id: Any) -> Optional[Users]:
     return usuario
 
 
-def es_admin(usuario: Optional[Users]) -> bool:
+def es_admin(usuario: Users | None) -> bool:
     return usuario is not None and usuario.rol == "admin"
 
 

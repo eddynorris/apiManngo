@@ -1,16 +1,25 @@
-from flask import request
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required
-from sqlalchemy import func, distinct, case
+import logging
 from datetime import datetime
 from decimal import Decimal
-import logging
- # Asumiendo que db viene de extensions, ajustar si es models
-from models import (
-    db, Venta, VentaDetalle, Gasto, PresentacionProducto, 
-    Lote, Pago, Inventario, Almacen
-)
+
+from flask import request
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+from sqlalchemy import distinct, func
+
 from common import handle_db_errors
+
+# Asumiendo que db viene de extensions, ajustar si es models
+from models import (
+    Almacen,
+    Gasto,
+    Inventario,
+    Pago,
+    PresentacionProducto,
+    Venta,
+    VentaDetalle,
+    db,
+)
 from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
@@ -21,7 +30,7 @@ def _get_date_filters(req_args):
     """Parsea y valida fechas de inicio y fin desde los argumentos."""
     fecha_inicio_str = req_args.get('fecha_inicio')
     fecha_fin_str = req_args.get('fecha_fin')
-    
+
     if not fecha_inicio_str or not fecha_fin_str:
         return None, None, None
 
@@ -61,7 +70,7 @@ def _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id):
         func.coalesce(func.sum(ventas_sub.c.total_linea), 0),
         func.count(distinct(ventas_sub.c.venta_id))
     ).first()
-    
+
     total_ventas = resumen_ventas[0] or Decimal('0.00')
     num_ventas = resumen_ventas[1] or 0
 
@@ -83,11 +92,11 @@ def _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id):
         ).select_from(Venta).outerjoin(
             pagos_por_venta_sq, Venta.id == pagos_por_venta_sq.c.venta_id
         ).filter(Venta.id.in_(venta_ids_filtradas))
-        
+
         total_deuda = deuda_total_query.scalar() or Decimal('0.00')
         # En contexto de lote, el 'total_pagado' es derivado: (Venta Filtrada - Deuda)
         # Nota: Esto es una aproximación financiera, ya que el pago no se asigna a líneas específicas.
-        total_pagado = total_ventas - total_deuda if total_ventas > total_deuda else Decimal('0.00') 
+        total_pagado = total_ventas - total_deuda if total_ventas > total_deuda else Decimal('0.00')
     else:
         # Sin filtro de lote, sumamos pagos directos de las ventas filtradas
         total_pagado = db.session.query(func.coalesce(func.sum(Pago.monto), 0))\
@@ -97,7 +106,7 @@ def _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id):
 
     # 4. Gastos
     gastos_q = db.session.query(
-        func.coalesce(func.sum(Gasto.monto), 0), 
+        func.coalesce(func.sum(Gasto.monto), 0),
         func.count(Gasto.id)
     )
     if fecha_inicio and fecha_fin:
@@ -106,7 +115,7 @@ def _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id):
         gastos_q = gastos_q.filter(Gasto.almacen_id == almacen_id)
     if lote_id:
         gastos_q = gastos_q.filter(Gasto.lote_id == lote_id)
-    
+
     resumen_gastos = gastos_q.first()
     total_gastos = resumen_gastos[0]
     num_gastos = resumen_gastos[1]
@@ -115,7 +124,7 @@ def _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id):
     depositos_q = db.session.query(func.coalesce(func.sum(Pago.monto_depositado), 0)).filter(Pago.depositado == True)
     if fecha_inicio and fecha_fin:
         depositos_q = depositos_q.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))
-    
+
     depositado_total = depositos_q.scalar() or Decimal('0.00')
 
     # Cálculos finales
@@ -147,8 +156,9 @@ class ReporteVentasPresentacionResource(Resource):
     @handle_db_errors
     def get(self):
         fecha_inicio, fecha_fin, error = _get_date_filters(request.args)
-        if error: return {'error': error}, 400
-        
+        if error:
+            return {'error': error}, 400
+
         almacen_id = request.args.get('almacen_id', type=int)
         lote_id = request.args.get('lote_id', type=int)
 
@@ -182,7 +192,8 @@ class ResumenFinancieroResource(Resource):
     @handle_db_errors
     def get(self):
         fecha_inicio, fecha_fin, error = _get_date_filters(request.args)
-        if error: return {'error': error}, 400
+        if error:
+            return {'error': error}, 400
 
         almacen_id = request.args.get('almacen_id', type=int)
         lote_id = request.args.get('lote_id', type=int)
@@ -197,13 +208,14 @@ class ReporteUnificadoResource(Resource):
     def get(self):
         # 1. Filtros
         fecha_inicio, fecha_fin, error = _get_date_filters(request.args)
-        if error: return {'error': error}, 400
+        if error:
+            return {'error': error}, 400
         almacen_id = request.args.get('almacen_id', type=int)
         lote_id = request.args.get('lote_id', type=int)
 
         # 2. Resumen Financiero (Reutilizado)
         financiero_data = _calcular_resumen_financiero(fecha_inicio, fecha_fin, almacen_id, lote_id)
-        
+
         # 3. KPIs y Ventas por Presentación
         # Query optimizada para KPIs
         ventas_base_q = db.session.query(
@@ -254,8 +266,8 @@ class ReporteUnificadoResource(Resource):
 
         if almacen_id:
             inv_q = inv_q.filter(Inventario.almacen_id == almacen_id)
-        
-        inv_rows = inv_q.group_by(Inventario.presentacion_id, PresentacionProducto.nombre, 
+
+        inv_rows = inv_q.group_by(Inventario.presentacion_id, PresentacionProducto.nombre,
                                  PresentacionProducto.capacidad_kg, PresentacionProducto.precio_venta,
                                  Almacen.nombre).all()
 
@@ -274,20 +286,20 @@ class ReporteUnificadoResource(Resource):
                     'valor_estimado': Decimal(0),
                     'detalle_almacenes': []
                 }
-            
+
             # Agregamos detalle de almacén
             inv_map[pid]['detalle_almacenes'].append({
                 'almacen': row.a_nombre,
                 'cantidad': int(row.cantidad)
             })
-            
+
             # Sumamos a los totales de la presentación
             cantidad_dec = row.cantidad
             inv_map[pid]['stock_unidades'] += int(cantidad_dec)
             inv_map[pid]['stock_kg'] += cantidad_dec * row.p_capacidad
             val_linea = cantidad_dec * row.p_precio
             inv_map[pid]['valor_estimado'] += val_linea
-            
+
             # KPI Global
             valor_inventario_actual += val_linea
 
@@ -307,16 +319,16 @@ class ReporteUnificadoResource(Resource):
         # 5. Historial Depósitos (Reutilizando lógica de filtros)
         verificado_param = request.args.get('verificado')
         query_dep = db.session.query(Pago).filter(Pago.monto_depositado.isnot(None))
-        
+
         if verificado_param is not None:
             es_verificado = str(verificado_param).strip().lower() in {'true', '1', 'yes', 'y'}
             query_dep = query_dep.filter(Pago.depositado == es_verificado)
         else:
             query_dep = query_dep.filter(Pago.depositado == True)
-            
+
         if fecha_inicio and fecha_fin:
             query_dep = query_dep.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))
-        
+
         dep_resource = DepositosHistorialResource()
         dep_resp, dep_status = dep_resource.get()
         historial_depositos = dep_resp if dep_status == 200 else []
@@ -358,7 +370,7 @@ class DepositosHistorialResource(Resource):
                 fecha_fin = datetime.strptime(fecha_fin_str.strip(), "%Y-%m-%d").date()
                 if fecha_inicio > fecha_fin:
                     return {'error': 'La fecha de inicio no puede ser mayor a la fecha fin.'}, 400
-                
+
                 # Filtrar por rango de fecha de depósito
                 query = query.filter(func.date(Pago.fecha_deposito).between(fecha_inicio, fecha_fin))
             except (ValueError, TypeError):

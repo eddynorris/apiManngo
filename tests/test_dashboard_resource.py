@@ -1,4 +1,3 @@
-import json
 
 # La fixture 'test_client' se inyecta automáticamente desde conftest.py
 # Ya no necesitamos importar Decimal, pytest, os, app, db, ni los modelos aquí.
@@ -16,14 +15,14 @@ def test_dashboard_saldo_pendiente_admin_view_con_detalles(test_client):
     """
     token = get_auth_token(test_client, 'admin', 'adminpass')
     headers = {'Authorization': f'Bearer {token}'}
-    
+
     response = test_client.get('/dashboard', headers=headers)
     assert response.status_code == 200
-    
+
     data = response.get_json()
     # Convertimos la lista a un diccionario para facilitar las búsquedas
     clientes_deuda = {c['nombre']: c for c in data['clientes_con_saldo_pendiente']}
-    
+
     # --- Aserciones Generales ---
     assert len(clientes_deuda) == 3 # Deben aparecer Cliente A, B y C
     assert 'Cliente D (Sin Deuda)' not in clientes_deuda
@@ -61,14 +60,14 @@ def test_dashboard_saldo_pendiente_user_view_con_detalles(test_client):
     """
     token = get_auth_token(test_client, 'vendedor', 'ventapass')
     headers = {'Authorization': f'Bearer {token}'}
-    
+
     response = test_client.get('/dashboard', headers=headers)
     assert response.status_code == 200
-    
+
     data = response.get_json()
     # Convertimos la lista a un diccionario para facilitar las búsquedas
     clientes_deuda = {c['nombre']: c for c in data['clientes_con_saldo_pendiente']}
-    
+
     # --- Aserciones Generales ---
     # Solo deben aparecer clientes con deuda en el Almacén 1
     assert len(clientes_deuda) == 2
@@ -91,4 +90,4 @@ def test_dashboard_saldo_pendiente_user_view_con_detalles(test_client):
     venta_almacen_1 = cliente_c['ventas_pendientes'][0]
     assert venta_almacen_1['total_venta'] == 100.0
     assert venta_almacen_1['saldo_pendiente_venta'] == 70.0
-    assert len(venta_almacen_1['pagos']) == 1 
+    assert len(venta_almacen_1['pagos']) == 1

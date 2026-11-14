@@ -3,17 +3,22 @@ Tests para:
   - InsumoAlertaResource: GET /inventario/alertas-insumos
   - CompraInsumoResource: POST /compras/insumos
 """
-import json
 from decimal import Decimal
-import pytest
 
-from models import (
-    Users, Almacen, Producto, PresentacionProducto, Inventario,
-    Movimiento, Gasto, Proveedor
-)
-from extensions import db
+import pytest
 from werkzeug.security import generate_password_hash
 
+from extensions import db
+from models import (
+    Almacen,
+    Gasto,
+    Inventario,
+    Movimiento,
+    PresentacionProducto,
+    Producto,
+    Proveedor,
+    Users,
+)
 
 # ─────────────────────────────────────────────
 #  Helpers

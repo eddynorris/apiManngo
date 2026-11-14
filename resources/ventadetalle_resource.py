@@ -1,16 +1,16 @@
 from decimal import Decimal, InvalidOperation
 
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt
 from flask import request
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource
 from werkzeug.exceptions import BadRequest, HTTPException, NotFound
 
-from models import Venta, VentaDetalle, PresentacionProducto
-from schemas import venta_detalle_schema, ventas_detalle_schema
-from extensions import db
 from common import handle_db_errors, obtener_payload_normalizado
+from extensions import db
+from models import PresentacionProducto, Venta, VentaDetalle
+from schemas import venta_detalle_schema, ventas_detalle_schema
 from services.authorization import autorizar_venta, normalizar_ids
-from services.venta_service import VentaService, StockInsuficienteError
+from services.venta_service import StockInsuficienteError, VentaService
 
 
 def _actor_id() -> int:

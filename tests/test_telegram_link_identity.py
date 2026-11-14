@@ -1,6 +1,6 @@
+import pytest
 from flask_jwt_extended import create_access_token
 from werkzeug.security import generate_password_hash
-import pytest
 
 from extensions import db
 from models import Almacen, Users

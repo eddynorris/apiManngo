@@ -1,11 +1,14 @@
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
-import pytest
 
-from models import Users, Producto, PresentacionProducto, Lote, Almacen, Movimiento, Inventario
-from extensions import db # Asegúrate de que db esté disponible, si no, se inyectará desde conftest.py
+import pytest
 from werkzeug.security import generate_password_hash
+
+from extensions import (
+    db,  # Asegúrate de que db esté disponible, si no, se inyectará desde conftest.py
+)
+from models import Almacen, Inventario, Lote, Movimiento, PresentacionProducto, Producto, Users
+
 
 def get_auth_token(client, username, password):
     """Obtiene un token JWT para un usuario."""
@@ -68,7 +71,7 @@ def setup_movimiento_data(test_client):
     movimiento3 = Movimiento(tipo='entrada', presentacion_id=presentacion2_prod1.id, lote_id=lote1.id, cantidad=20, fecha=datetime(2023, 1, 18), motivo='Recepción', usuario_id=admin_user.id)
     movimiento4 = Movimiento(tipo='entrada', presentacion_id=presentacion1_prod2.id, lote_id=lote2.id, cantidad=5, fecha=datetime(2023, 2, 1), motivo='Nueva producción', usuario_id=admin_user.id)
     movimiento5 = Movimiento(tipo='salida', presentacion_id=presentacion2_prod1.id, lote_id=lote1.id, cantidad=5, fecha=datetime(2023, 2, 5), motivo='Venta', usuario_id=user_almacen1.id)
-    
+
     db.session.add_all([movimiento1, movimiento2, movimiento3, movimiento4, movimiento5])
     db.session.commit()
 
@@ -91,18 +94,18 @@ def setup_movimiento_data(test_client):
     }
 
 class TestMovimientoResource:
-    
+
     def test_get_all_movimientos_as_admin(self, test_client, setup_movimiento_data):
         """
         Prueba obtener todos los movimientos como admin.
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         response = test_client.get('/movimientos', headers=headers)
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['pagination']['total'] == 5 # Debe haber 5 movimientos en total
         assert len(data['data']) == 5
 
@@ -125,26 +128,26 @@ class TestMovimientoResource:
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         response = test_client.get('/movimientos?tipo=entrada', headers=headers)
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['pagination']['total'] == 3
         for movimiento in data['data']:
             assert movimiento['tipo'] == 'entrada'
-            
+
     def test_get_movimientos_by_type_salida(self, test_client, setup_movimiento_data):
         """
         Prueba filtrar movimientos por tipo 'salida'.
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         response = test_client.get('/movimientos?tipo=salida', headers=headers)
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['pagination']['total'] == 2
         for movimiento in data['data']:
             assert movimiento['tipo'] == 'salida'
@@ -155,12 +158,12 @@ class TestMovimientoResource:
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         # Rango que incluye movimiento1, movimiento2, movimiento3
         response = test_client.get('/movimientos?fecha_inicio=2023-01-01&fecha_fin=2023-01-31', headers=headers)
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['pagination']['total'] == 3
         movimiento_ids = {m['id'] for m in data['data']}
         assert setup_movimiento_data['movimiento1'].id in movimiento_ids
@@ -174,12 +177,12 @@ class TestMovimientoResource:
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         lote1_id = setup_movimiento_data['lote1'].id
         response = test_client.get(f'/movimientos?lote_id={lote1_id}', headers=headers)
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['pagination']['total'] == 4 # movimiento1, movimiento2, movimiento3, movimiento5
         movimiento_ids = {m['id'] for m in data['data']}
         assert setup_movimiento_data['movimiento1'].id in movimiento_ids
@@ -194,12 +197,12 @@ class TestMovimientoResource:
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         presentacion1_prod1_id = setup_movimiento_data['presentacion1_prod1'].id
         response = test_client.get(f'/movimientos?presentacion_id={presentacion1_prod1_id}', headers=headers)
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['pagination']['total'] == 2 # movimiento1, movimiento2
         movimiento_ids = {m['id'] for m in data['data']}
         assert setup_movimiento_data['movimiento1'].id in movimiento_ids
@@ -213,15 +216,15 @@ class TestMovimientoResource:
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         presentacion1_prod1_id = setup_movimiento_data['presentacion1_prod1'].id
         response = test_client.get(
-            f'/movimientos?tipo=entrada&presentacion_id={presentacion1_prod1_id}&fecha_inicio=2023-01-01&fecha_fin=2023-01-31', 
+            f'/movimientos?tipo=entrada&presentacion_id={presentacion1_prod1_id}&fecha_inicio=2023-01-01&fecha_fin=2023-01-31',
             headers=headers
         )
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['pagination']['total'] == 1 # Solo movimiento1
         movimiento_ids = {m['id'] for m in data['data']}
         assert setup_movimiento_data['movimiento1'].id in movimiento_ids
@@ -233,12 +236,12 @@ class TestMovimientoResource:
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         movimiento_id = setup_movimiento_data['movimiento1'].id
         response = test_client.get(f'/movimientos/{movimiento_id}', headers=headers)
         assert response.status_code == 200
         data = response.get_json()
-        
+
         assert data['id'] == movimiento_id
         assert Decimal(data['total_kg']) == Decimal('200.00')
 
@@ -248,11 +251,11 @@ class TestMovimientoResource:
         """
         admin_token = get_auth_token(test_client, 'admin_mov', 'adminpass')
         headers = {'Authorization': f'Bearer {admin_token}'}
-        
+
         response = test_client.get('/movimientos?fecha_inicio=2023/01/01', headers=headers)
         assert response.status_code == 400
         assert "Formato de fecha_inicio inválido" in response.get_json()['error']
 
         response = test_client.get('/movimientos?fecha_fin=invalid-date', headers=headers)
         assert response.status_code == 400
-        assert "Formato de fecha_fin inválido" in response.get_json()['error'] 
+        assert "Formato de fecha_fin inválido" in response.get_json()['error']

@@ -1,12 +1,12 @@
 # services/venta_service.py
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timezone
+
 from sqlalchemy import func
 from werkzeug.exceptions import Conflict
+
 from extensions import db
-from models import Venta, VentaDetalle, Cliente, Movimiento, PresentacionProducto, Pago, Gasto
-from services.stock_service import StockService, StockInsuficienteError
-from services.pago_service import PagoService
+from models import Cliente, Gasto, Movimiento, Pago, PresentacionProducto, Venta, VentaDetalle
 from services.authorization import (
     autorizar_almacen,
     autorizar_venta,
@@ -14,6 +14,9 @@ from services.authorization import (
     normalizar_ids,
     requerir_encontrados,
 )
+from services.pago_service import PagoService
+from services.stock_service import StockInsuficienteError, StockService
+
 
 class VentaService:
     @staticmethod
@@ -54,7 +57,7 @@ class VentaService:
 
         if not detalles_data:
             raise ValueError("La venta debe tener al menos un detalle")
-            
+
         estado = (estado or 'completado').lower()
         if estado not in ['pedido', 'completado']:
             raise ValueError("Estado inválido. Opciones: pedido, completado")
@@ -63,7 +66,7 @@ class VentaService:
         if not cliente:
             raise ValueError("Cliente no encontrado")
 
-        fecha = fecha or datetime.now(timezone.utc)
+        fecha = fecha or datetime.now(UTC)
         total = Decimal('0')
         detalles_para_venta = []
 
@@ -73,13 +76,13 @@ class VentaService:
                 cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
                 if not all([presentacion_id, cantidad_solicitada]):
                     raise ValueError("Cada detalle debe incluir presentacion_id y cantidad")
-                
+
                 pres = db.session.get(PresentacionProducto, presentacion_id)
                 if not pres:
                     raise ValueError(f"Presentación ID {presentacion_id} no encontrada")
-                
+
                 precio_unitario = Decimal(str(detalle_data.get('precio_unitario') or pres.precio_venta))
-                
+
                 nuevo_detalle = VentaDetalle(
                     presentacion_id=presentacion_id,
                     cantidad=cantidad_solicitada,
@@ -142,7 +145,7 @@ class VentaService:
 
         # Derivar tipo de pago
         tipo_pago_derivado = 'contado' if monto_pago > 0 else 'credito'
-        fecha_pedido_val = datetime.now(timezone.utc) if estado == 'pedido' else None
+        fecha_pedido_val = datetime.now(UTC) if estado == 'pedido' else None
         fecha_entrega_val = fecha if estado == 'pedido' else None
 
         nueva_venta = Venta(
@@ -286,12 +289,12 @@ class VentaService:
             for detalle_data in nuevos_detalles_data:
                 presentacion_id = int(detalle_data.get('presentacion_id'))
                 cantidad_solicitada = Decimal(str(detalle_data.get('cantidad')))
-                
+
                 pres = db.session.get(PresentacionProducto, presentacion_id)
                 if not pres:
                     raise ValueError(f"Presentación ID {presentacion_id} no encontrada")
                 precio_unitario = Decimal(str(detalle_data.get('precio_unitario') or pres.precio_venta))
-                
+
                 detalle_obj = VentaDetalle(
                     presentacion_id=presentacion_id,
                     cantidad=cantidad_solicitada,
@@ -318,13 +321,13 @@ class VentaService:
         venta.almacen_id = target_almacen_id
         venta.estado = data.get('estado', venta.estado)
         venta.estado_pago = data.get('estado_pago', venta.estado_pago)
-        
+
         if data.get('fecha'):
             from common import parse_iso_datetime
             venta.fecha = parse_iso_datetime(data.get('fecha'))
         elif is_transition_to_completed or (is_completado and not venta.fecha):
-            venta.fecha = datetime.now(timezone.utc)
-        
+            venta.fecha = datetime.now(UTC)
+
         # Asignar los nuevos detalles
         venta.detalles = nuevos_detalles_obj
         venta.total = nuevo_total
@@ -354,7 +357,7 @@ class VentaService:
                     venta_id=venta.id,
                     monto=saldo_pendiente,
                     metodo_pago=metodo_pago,
-                    fecha=datetime.now(timezone.utc)
+                    fecha=datetime.now(UTC)
                 )
                 PagoService.create_pago(pago_instancia, file_comprobante, vendedor_id)
 

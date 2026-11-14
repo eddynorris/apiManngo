@@ -1,6 +1,6 @@
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -9,8 +9,19 @@ from werkzeug.security import generate_password_hash
 
 from extensions import db
 from models import (
-    Almacen, Cliente, Inventario, Lote, Movimiento, Pago, Pedido,
-    PedidoDetalle, PresentacionProducto, Producto, Users, Venta, VentaDetalle,
+    Almacen,
+    Cliente,
+    Inventario,
+    Lote,
+    Movimiento,
+    Pago,
+    Pedido,
+    PedidoDetalle,
+    PresentacionProducto,
+    Producto,
+    Users,
+    Venta,
+    VentaDetalle,
 )
 from services.authorization import (
     _convertir_id,
@@ -69,9 +80,9 @@ def setup_venta_auth(test_client):
         tipo='procesado', precio_venta=Decimal('50.00'), activo=True,
     )
     lote1 = Lote(producto_id=producto.id, descripcion='Lote Uno',
-                 cantidad_disponible_kg=Decimal('100.00'), fecha_ingreso=datetime(2024, 1, 1, tzinfo=timezone.utc))
+                 cantidad_disponible_kg=Decimal('100.00'), fecha_ingreso=datetime(2024, 1, 1, tzinfo=UTC))
     lote2 = Lote(producto_id=producto.id, descripcion='Lote Dos',
-                 cantidad_disponible_kg=Decimal('100.00'), fecha_ingreso=datetime(2024, 1, 2, tzinfo=timezone.utc))
+                 cantidad_disponible_kg=Decimal('100.00'), fecha_ingreso=datetime(2024, 1, 2, tzinfo=UTC))
     db.session.add_all([presentacion, lote1, lote2])
     db.session.commit()
 
@@ -82,13 +93,13 @@ def setup_venta_auth(test_client):
 
     venta_a = Venta(cliente_id=cliente.id, almacen_id=almacen1.id, vendedor_id=user_a.id,
                     total=Decimal('100.00'), tipo_pago='contado', estado_pago='pendiente', estado='completado',
-                    fecha=datetime.now(timezone.utc))
+                    fecha=datetime.now(UTC))
     venta_b = Venta(cliente_id=cliente.id, almacen_id=almacen1.id, vendedor_id=user_b.id,
                     total=Decimal('100.00'), tipo_pago='contado', estado_pago='parcial', estado='completado',
-                    fecha=datetime.now(timezone.utc))
+                    fecha=datetime.now(UTC))
     venta_c = Venta(cliente_id=cliente.id, almacen_id=almacen2.id, vendedor_id=user_c.id,
                     total=Decimal('100.00'), tipo_pago='contado', estado_pago='parcial', estado='completado',
-                    fecha=datetime.now(timezone.utc))
+                    fecha=datetime.now(UTC))
     db.session.add_all([venta_a, venta_b, venta_c])
     db.session.flush()
 
@@ -106,10 +117,10 @@ def setup_venta_auth(test_client):
     ])
 
     pedido_b = Pedido(cliente_id=cliente.id, almacen_id=almacen1.id, vendedor_id=user_b.id,
-                      fecha_creacion=datetime.now(timezone.utc), fecha_entrega=datetime.now(timezone.utc),
+                      fecha_creacion=datetime.now(UTC), fecha_entrega=datetime.now(UTC),
                       estado='programado', notas='Pedido de B')
     pedido_c = Pedido(cliente_id=cliente.id, almacen_id=almacen2.id, vendedor_id=user_c.id,
-                      fecha_creacion=datetime.now(timezone.utc), fecha_entrega=datetime.now(timezone.utc),
+                      fecha_creacion=datetime.now(UTC), fecha_entrega=datetime.now(UTC),
                       estado='programado', notas='Pedido de C')
     db.session.add_all([pedido_b, pedido_c])
     db.session.flush()

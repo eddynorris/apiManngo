@@ -1,7 +1,7 @@
+import pytest
+from flask_jwt_extended import create_access_token
 from werkzeug.exceptions import Forbidden
 from werkzeug.security import generate_password_hash
-from flask_jwt_extended import create_access_token
-import pytest
 
 from app import app
 from common import mismo_almacen_o_admin, rol_requerido

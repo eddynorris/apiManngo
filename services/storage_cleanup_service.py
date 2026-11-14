@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
 
@@ -53,7 +53,7 @@ def _next_attempt(attempts):
         _CLEANUP_RETRY_BASE_SECONDS * (2 ** max(0, attempts - 1)),
         _CLEANUP_RETRY_MAX_SECONDS,
     )
-    return datetime.now(timezone.utc) + timedelta(seconds=delay)
+    return datetime.now(UTC) + timedelta(seconds=delay)
 
 
 def _record_failed_task(task, error):
@@ -67,7 +67,7 @@ def process_pending_storage_cleanups(limit=100, force=False):
     Reintenta borrados ya confirmados en SQL. Un fallo de Storage deja la tarea
     pendiente; nunca se presenta la limpieza como exitosa en ese caso.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     query = StorageCleanupTask.query
     if not force:
         query = query.filter(or_(

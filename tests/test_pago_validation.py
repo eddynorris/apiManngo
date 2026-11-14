@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -6,8 +6,17 @@ from werkzeug.security import generate_password_hash
 
 from extensions import db
 from models import (
-    Almacen, Cliente, Inventario, Lote, Movimiento, Pago, PresentacionProducto,
-    Producto, Users, Venta, VentaDetalle,
+    Almacen,
+    Cliente,
+    Inventario,
+    Lote,
+    Movimiento,
+    Pago,
+    PresentacionProducto,
+    Producto,
+    Users,
+    Venta,
+    VentaDetalle,
 )
 
 
@@ -56,7 +65,7 @@ def setup_pagos_validation(test_client):
     lote = Lote(
         producto_id=producto.id, descripcion='Lote Validación',
         cantidad_disponible_kg=Decimal('100.00'),
-        fecha_ingreso=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        fecha_ingreso=datetime(2024, 1, 1, tzinfo=UTC),
     )
     db.session.add_all([presentacion, lote])
     db.session.flush()
@@ -70,25 +79,25 @@ def setup_pagos_validation(test_client):
     venta = Venta(
         cliente_id=cliente.id, almacen_id=almacen.id, vendedor_id=admin.id,
         total=Decimal('100.00'), tipo_pago='credito', estado_pago='pendiente',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     venta_parcial = Venta(
         cliente_id=cliente.id, almacen_id=almacen.id, vendedor_id=admin.id,
         total=Decimal('200.00'), tipo_pago='credito', estado_pago='parcial',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     db.session.add_all([venta, venta_parcial])
     db.session.flush()
 
     pago_parcial = Pago(
         venta_id=venta_parcial.id, usuario_id=admin.id, monto=Decimal('50.00'),
-        metodo_pago='efectivo', fecha=datetime.now(timezone.utc),
+        metodo_pago='efectivo', fecha=datetime.now(UTC),
     )
     pago_depositado = Pago(
         venta_id=venta_parcial.id, usuario_id=admin.id, monto=Decimal('100.00'),
-        metodo_pago='deposito', fecha=datetime.now(timezone.utc),
+        metodo_pago='deposito', fecha=datetime.now(UTC),
         depositado=True, monto_depositado=Decimal('80.00'),
-        fecha_deposito=datetime(2024, 1, 10, tzinfo=timezone.utc),
+        fecha_deposito=datetime(2024, 1, 10, tzinfo=UTC),
     )
     db.session.add_all([pago_parcial, pago_depositado])
     db.session.commit()

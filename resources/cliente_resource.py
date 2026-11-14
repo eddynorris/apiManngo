@@ -1,21 +1,24 @@
 # ARCHIVO: cliente_resource.py
-from flask_restful import Resource, reqparse
-from flask_jwt_extended import jwt_required
-from flask import request, send_file
-from models import Cliente, Pedido, Venta, VistaClienteProyeccion
-from schemas import cliente_schema, clientes_schema, ClienteSchema, pedidos_schema
-from extensions import db
-from common import handle_db_errors, validate_pagination_params, create_pagination_response, rol_requerido
-import pandas as pd
-import re
 import io
 import logging
-import calendar
-from sqlalchemy import func, desc, asc, cast, Date, case, text
-from sqlalchemy.orm import aliased
-from sqlalchemy import orm
-from datetime import datetime, timezone, timedelta, date
-from types import SimpleNamespace
+import re
+from datetime import UTC, datetime, timedelta
+
+import pandas as pd
+from flask import request, send_file
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource, reqparse
+from sqlalchemy import Date, asc, cast, desc, func, orm
+
+from common import (
+    create_pagination_response,
+    handle_db_errors,
+    rol_requerido,
+    validate_pagination_params,
+)
+from extensions import db
+from models import Cliente, Pedido, Venta, VistaClienteProyeccion
+from schemas import ClienteSchema, cliente_schema, clientes_schema
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -34,16 +37,16 @@ class ClienteResource(Resource):
             if cliente_id:
                 cliente = Cliente.query.get_or_404(cliente_id)
                 return cliente_schema.dump(cliente), 200
-            
+
             # Construir query con filtros
             query = Cliente.query
-            
+
             # Aplicar filtros para búsqueda por nombre o término de búsqueda genérico
             search_term = request.args.get('nombre') or request.args.get('search')
             if search_term:
                 # Usar ilike para búsqueda case-insensitive. SQLAlchemy previene inyección SQL.
                 query = query.filter(Cliente.nombre.ilike(f'%{search_term}%'))
-                
+
             if telefono := request.args.get('telefono'):
                 # Validar formato básico de teléfono
                 if not re.match(r'^[\d\+\-\s()]+$', telefono):
@@ -55,11 +58,11 @@ class ClienteResource(Resource):
                 # Sanitizar input
                 ciudad = re.sub(r'[^\w\s\-áéíóúÁÉÍÓÚñÑ]', '', ciudad)
                 query = query.filter(Cliente.ciudad.ilike(f'%{ciudad}%'))
-    
+
             # Paginación con validación
             page, per_page = validate_pagination_params()
             resultado = query.paginate(page=page, per_page=per_page, error_out=False)
-            
+
             # Precalcular saldos en lote para evitar N+1
             from common import obtener_saldos_pendientes_clientes
             cliente_ids = [c.id for c in resultado.items]
@@ -70,7 +73,7 @@ class ClienteResource(Resource):
 
             # Respuesta estandarizada
             return create_pagination_response(clientes_schema.dump(resultado.items), resultado), 200
-            
+
         except Exception as e:
             logger.error(f"Error al obtener clientes: {str(e)}")
             db.session.rollback()
@@ -85,33 +88,33 @@ class ClienteResource(Resource):
             # Validar que sea JSON
             if not request.is_json:
                 return {"error": "Se esperaba contenido JSON"}, 400
-                
+
             data = request.get_json()
             if not data:
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
-            
+
             # Validar campos requeridos
             if not data.get('nombre'):
                 return {"error": "El nombre del cliente es obligatorio"}, 400
-            
+
             # Validar teléfono si está presente
             if telefono := data.get('telefono'):
                 if not re.match(r'^[\d\+\-\s()]{3,20}$', telefono):
                     return {"error": "Formato de teléfono inválido"}, 400
-            
+
             # Validar RUC si está presente
             if ruc := data.get('ruc'):
                 if not re.match(r'^\d{11}$', str(ruc)):
                     return {"error": "Formato de RUC inválido. Debe tener exactamente 11 dígitos numéricos"}, 400
-            
+
             # Crear y guardar cliente
             nuevo_cliente = cliente_schema.load(data)
             db.session.add(nuevo_cliente)
             db.session.commit()
-            
+
             logger.info(f"Cliente creado: {nuevo_cliente.nombre}")
             return cliente_schema.dump(nuevo_cliente), 201
-            
+
         except Exception as e:
             logger.error(f"Error al crear cliente: {str(e)}")
             db.session.rollback()
@@ -125,37 +128,37 @@ class ClienteResource(Resource):
         try:
             if not cliente_id:
                 return {"error": "Se requiere ID de cliente"}, 400
-                
+
             cliente = Cliente.query.get_or_404(cliente_id)
-            
+
             # Validar que sea JSON
             if not request.is_json:
                 return {"error": "Se esperaba contenido JSON"}, 400
-                
+
             data = request.get_json()
             if not data:
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
-            
+
             # Validar teléfono si está presente
             if telefono := data.get('telefono'):
                 if not re.match(r'^[\d\+\-\s()]{3,20}$', telefono):
                     return {"error": "Formato de teléfono inválido"}, 400
-                    
+
             # Validar RUC si está presente
             if ruc := data.get('ruc'):
                 if not re.match(r'^\d{11}$', str(ruc)):
                     return {"error": "Formato de RUC inválido. Debe tener exactamente 11 dígitos numéricos"}, 400
-            
+
             # Actualizar cliente
             cliente_actualizado = cliente_schema.load(
                 data,
                 instance=cliente,
                 partial=True
             )
-            
+
             db.session.commit()
             return cliente_schema.dump(cliente_actualizado), 200
-            
+
         except Exception as e:
             logger.error(f"Error al actualizar cliente: {str(e)}")
             db.session.rollback()
@@ -169,9 +172,9 @@ class ClienteResource(Resource):
         try:
             if not cliente_id:
                 return {"error": "Se requiere ID de cliente"}, 400
-                
+
             cliente = Cliente.query.get_or_404(cliente_id)
-            
+
             # Verificar si tiene ventas asociadas
             ventas = Venta.query.filter_by(cliente_id=cliente_id).count()
             if ventas > 0:
@@ -179,15 +182,15 @@ class ClienteResource(Resource):
                     "error": "No se puede eliminar cliente con historial de ventas",
                     "ventas_asociadas": ventas
                 }, 400
-                
+
             # Eliminar cliente
             nombre_cliente = cliente.nombre  # Guardar para el log
             db.session.delete(cliente)
             db.session.commit()
-            
+
             logger.info(f"Cliente eliminado: {cliente_id} - {nombre_cliente}")
             return {"message": "Cliente eliminado exitosamente"}, 200
-            
+
         except Exception as e:
             logger.error(f"Error al eliminar cliente: {str(e)}")
             db.session.rollback()
@@ -233,7 +236,7 @@ class ClienteExportResource(Resource):
                 'ultima_fecha_compra': 'Última Compra',
                 'frecuencia_compra_dias': 'Frecuencia de Compra'
             }
-            
+
             # Filtrar y renombrar columnas
             df_optimizado = df[list(columnas_deseadas.keys())]
             df_optimizado = df_optimizado.rename(columns=columnas_deseadas)
@@ -243,7 +246,7 @@ class ClienteExportResource(Resource):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_optimizado.to_excel(writer, index=False, sheet_name='Clientes')
-            
+
             output.seek(0)
 
             # 5. Enviar el archivo como respuesta
@@ -397,28 +400,28 @@ class ClienteProyeccionResource(Resource):
                 'disponible': False,
                 'mensaje': 'Cliente sin historial de compras'
             }
-        
+
         # Permitir proyección manual incluso si no hay frecuencia calculada
         if (not cliente.frecuencia_compra_dias or cliente.frecuencia_compra_dias <= 0) and not cliente.proxima_compra_manual:
             return {
                 'disponible': False,
                 'mensaje': 'Se necesitan al menos 2 compras para calcular frecuencia o una proyección manual'
             }
-        
+
         try:
-            fecha_actual = datetime.now(timezone.utc)
+            fecha_actual = datetime.now(UTC)
             tipo_proyeccion = 'automatica'
             proxima_fecha = None
-            
+
             # Prioridad: Proyección Manual
             if cliente.proxima_compra_manual:
                 # Convertir date a datetime con timezone
-                proxima_fecha = datetime.combine(cliente.proxima_compra_manual, datetime.min.time()).replace(tzinfo=timezone.utc)
+                proxima_fecha = datetime.combine(cliente.proxima_compra_manual, datetime.min.time()).replace(tzinfo=UTC)
                 tipo_proyeccion = 'manual'
             elif cliente.frecuencia_compra_dias and cliente.frecuencia_compra_dias > 0:
                 # Proyección Automática
                 proxima_fecha = cliente.ultima_fecha_compra + timedelta(days=cliente.frecuencia_compra_dias)
-            
+
             if not proxima_fecha:
                  return {
                     'disponible': False,
@@ -427,7 +430,7 @@ class ClienteProyeccionResource(Resource):
 
             # Calcular días desde última compra
             dias_desde_ultima = (fecha_actual.date() - cliente.ultima_fecha_compra.date()).days if cliente.ultima_fecha_compra else 0
-            
+
             # Calcular retraso o días restantes
             if proxima_fecha.date() < fecha_actual.date():
                 dias_retraso = (fecha_actual.date() - proxima_fecha.date()).days
@@ -442,7 +445,7 @@ class ClienteProyeccionResource(Resource):
                 dias_restantes = (proxima_fecha.date() - fecha_actual.date()).days
                 estado = 'proximo' if dias_restantes <= 3 else 'programado'
                 nivel_urgencia = 'alta' if dias_restantes <= 3 else 'normal'
-            
+
             return {
                 'disponible': True,
                 'tipo_proyeccion': tipo_proyeccion,
@@ -455,23 +458,23 @@ class ClienteProyeccionResource(Resource):
                 'nivel_urgencia': nivel_urgencia,
                 'porcentaje_ciclo': min(100, int((dias_desde_ultima / (cliente.frecuencia_compra_dias or 1)) * 100))
             }
-            
+
         except Exception as e:
             logger.error(f"Error calculando proyección para cliente {cliente.id}: {str(e)}")
             return {
                 'disponible': False,
                 'mensaje': 'Error al calcular proyección'
             }
-    
+
     def _calcular_urgencia(self, dias_retraso, frecuencia_compra):
         """
         Calcula nivel de urgencia basado en el retraso relativo
         """
         if dias_retraso <= 0:
             return 'normal'
-        
+
         porcentaje_retraso = (dias_retraso / frecuencia_compra) * 100
-        
+
         if porcentaje_retraso > 100:  # Más del doble del ciclo
             return 'critica'
         elif porcentaje_retraso > 50:  # 50% de retraso
@@ -480,7 +483,7 @@ class ClienteProyeccionResource(Resource):
             return 'media'
         else:
             return 'baja'
-    
+
     def _calcular_estadisticas_cliente(self, cliente, ventas):
         """
         Calcula estadísticas detalladas del cliente
@@ -498,7 +501,7 @@ class ClienteProyeccionResource(Resource):
             'ultima_actividad': None,
             'tendencia_compra': None
         }
-        
+
         if ventas:
             # Montos
             estadisticas['monto_total_comprado'] = float(sum(v.total for v in ventas))
@@ -506,39 +509,39 @@ class ClienteProyeccionResource(Resource):
                 estadisticas['monto_total_comprado'] / len(ventas), 2
             )
             estadisticas['ultima_actividad'] = ventas[0].fecha.isoformat()
-            
+
             # Contar por estado
             for venta in ventas:
                 estadisticas['ventas_por_estado'][venta.estado_pago] += 1
-            
+
             # Análisis de tendencia (últimas 3 vs anteriores)
             if len(ventas) >= 6:
                 ultimas_3 = sum(v.total for v in ventas[:3]) / 3
                 anteriores_3 = sum(v.total for v in ventas[3:6]) / 3
-                
+
                 diferencia_porcentual = ((ultimas_3 - anteriores_3) / anteriores_3) * 100
-                
+
                 if diferencia_porcentual > 10:
                     estadisticas['tendencia_compra'] = 'creciente'
                 elif diferencia_porcentual < -10:
                     estadisticas['tendencia_compra'] = 'decreciente'
                 else:
                     estadisticas['tendencia_compra'] = 'estable'
-        
+
         return estadisticas
-    
+
     def _calcular_prioridad(self, cliente, proyeccion, total_ventas, monto_total):
         """
         Calcula prioridad del cliente para seguimiento
         """
         puntos = 0
-        
+
         # Retraso (máx 40 puntos)
         if proyeccion and proyeccion.get('disponible'):
             dias_retraso = proyeccion.get('dias_retraso', 0)
             if dias_retraso > 0:
                 puntos += min(40, dias_retraso * 2)
-        
+
         # Valor del cliente (máx 30 puntos)
         if monto_total > 10000:
             puntos += 30
@@ -546,7 +549,7 @@ class ClienteProyeccionResource(Resource):
             puntos += 20
         elif monto_total > 1000:
             puntos += 10
-        
+
         # Frecuencia de compra (máx 20 puntos)
         if total_ventas > 20:
             puntos += 20
@@ -554,14 +557,14 @@ class ClienteProyeccionResource(Resource):
             puntos += 15
         elif total_ventas > 5:
             puntos += 10
-        
+
         # Saldo pendiente (máx 10 puntos)
         saldo = float(cliente.saldo_pendiente)
         if saldo > 1000:
             puntos += 10
         elif saldo > 500:
             puntos += 5
-        
+
         # Clasificar
         if puntos >= 70:
             return 'alta'
@@ -645,13 +648,13 @@ class ClienteProyeccionResource(Resource):
         }
         strategy = strategies.get(order_by, strategies['ultima_compra'])
         return strategy(query)
-    
+
     def _generar_resumen_global(self, clientes):
         """
         Genera resumen ejecutivo de todos los clientes
         """
         total_clientes = len(clientes)
-        
+
         if total_clientes == 0:
             return {
                 'total_clientes': 0,
@@ -659,16 +662,16 @@ class ClienteProyeccionResource(Resource):
                 'con_retraso': 0,
                 'urgencia_critica': 0
             }
-        
-        con_proyeccion = sum(1 for c in clientes 
+
+        con_proyeccion = sum(1 for c in clientes
                             if c.get('proxima_compra_estimada', {}).get('disponible'))
-        
-        con_retraso = sum(1 for c in clientes 
+
+        con_retraso = sum(1 for c in clientes
                          if c.get('tiene_retraso', False))
-        
-        urgencia_critica = sum(1 for c in clientes 
+
+        urgencia_critica = sum(1 for c in clientes
                               if c.get('proxima_compra_estimada', {}).get('nivel_urgencia') == 'critica')
-        
+
         return {
             'total_clientes': total_clientes,
             'con_proyeccion': con_proyeccion,
@@ -697,7 +700,7 @@ class ClienteProyeccionExportResource(Resource):
                 func.count(Venta.id).label('total_ventas'),
                 func.sum(Venta.total).label('monto_total_comprado')
             ).group_by(Venta.cliente_id).subquery()
-            
+
             # --- Subconsulta para agregar estadísticas de pedidos ---
             pedido_stats = db.session.query(
                 Pedido.cliente_id.label('cliente_id'),
@@ -715,7 +718,7 @@ class ClienteProyeccionExportResource(Resource):
             ).outerjoin(
                 pedido_stats, Cliente.id == pedido_stats.c.cliente_id
             )
-            
+
             # Aplicar filtros
             if args['ciudad']:
                 query = query.filter(Cliente.ciudad.ilike(f"%{args['ciudad']}%"))
@@ -723,12 +726,12 @@ class ClienteProyeccionExportResource(Resource):
                 query = query.filter(Cliente.saldo_pendiente >= args['saldo_minimo'])
             if args['frecuencia_minima']:
                 query = query.filter(Cliente.frecuencia_compra_dias >= args['frecuencia_minima'])
-            
+
             # Solo clientes con frecuencia de compra calculada
             query = query.filter(Cliente.frecuencia_compra_dias.isnot(None))
-            
+
             resultados = query.order_by(desc(Cliente.ultima_fecha_compra)).all()
-            
+
             if not resultados:
                 return {"message": "No hay clientes con proyecciones para exportar con los filtros seleccionados"}, 404
 
@@ -738,12 +741,12 @@ class ClienteProyeccionExportResource(Resource):
                 cliente = result.Cliente
                 monto_total = float(result.monto_total_comprado)
                 total_ventas = result.total_ventas
-                
+
                 # Calcular proyección de próxima compra
                 proxima_compra = None
                 if cliente.ultima_fecha_compra and cliente.frecuencia_compra_dias and cliente.frecuencia_compra_dias > 0:
                     proxima_compra = (cliente.ultima_fecha_compra + timedelta(days=cliente.frecuencia_compra_dias)).strftime('%Y-%m-%d')
-                
+
                 data_para_excel.append({
                     'ID': cliente.id,
                     'Nombre': cliente.nombre,
@@ -765,7 +768,7 @@ class ClienteProyeccionExportResource(Resource):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, sheet_name='Clientes Proyecciones')
-            
+
             output.seek(0)
 
             return send_file(

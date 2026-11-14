@@ -1,7 +1,7 @@
 import io
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -59,7 +59,7 @@ def _records(old_key=None, second_pago=False):
         total=Decimal("100.00"),
         tipo_pago="credito",
         estado_pago="pendiente",
-        fecha=datetime.now(timezone.utc),
+        fecha=datetime.now(UTC),
     )
     db.session.add(venta)
     db.session.flush()
@@ -68,7 +68,7 @@ def _records(old_key=None, second_pago=False):
         usuario_id=usuario.id,
         monto=Decimal("50.00"),
         metodo_pago="transferencia",
-        fecha=datetime.now(timezone.utc),
+        fecha=datetime.now(UTC),
         url_comprobante=old_key,
     )
     db.session.add(pago)
@@ -79,7 +79,7 @@ def _records(old_key=None, second_pago=False):
             usuario_id=usuario.id,
             monto=Decimal("50.00"),
             metodo_pago="transferencia",
-            fecha=datetime.now(timezone.utc),
+            fecha=datetime.now(UTC),
             url_comprobante=old_key,
         )
         db.session.add(otro)

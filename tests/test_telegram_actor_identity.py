@@ -1,8 +1,8 @@
 import pytest
 
+import telegram.router as router_module
 from extensions import db
 from models import Users
-import telegram.router as router_module
 from telegram.router import TelegramRouter
 
 

@@ -1,11 +1,12 @@
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
-import pytest
 
-from models import Users, Producto, PresentacionProducto, Lote, Almacen, Inventario, Movimiento
-from extensions import db
+import pytest
 from werkzeug.security import generate_password_hash
+
+from extensions import db
+from models import Almacen, Inventario, Lote, Movimiento, PresentacionProducto, Producto, Users
+
 
 def get_auth_token(client, username, password):
     """Obtiene un token JWT para un usuario."""
@@ -109,7 +110,7 @@ class TestInventarioResource:
 
         assert isinstance(response_data, list) # Asegurar que es una lista
         assert len(response_data) == 1 # Asegurar que es una lista de un elemento
-        
+
         assert response_data[0]['presentacion_id'] == data['presentacion_id']
         assert response_data[0]['almacen_id'] == data['almacen_id']
         assert Decimal(response_data[0]['cantidad']) == Decimal(data['cantidad'])
@@ -189,7 +190,7 @@ class TestInventarioResource:
                 tipo='entrada'
             ).first()
             assert movimiento_db is not None
-        
+
         # Verificar que la cantidad disponible de los lotes se actualizó correctamente
         lote1_after = Lote.query.get(setup_inventario_data['lote1'].id)
         lote2_after = Lote.query.get(setup_inventario_data['lote2'].id)
@@ -221,7 +222,7 @@ class TestInventarioResource:
         response = test_client.post('/inventarios', json=data, headers=headers)
         assert response.status_code == 400
         assert "Campo requerido 'cantidad' faltante en un item" in response.get_json()['error']
-        
+
         # Verificar que no se creó ningún inventario
         assert Inventario.query.count() == 0
 
@@ -313,7 +314,7 @@ class TestInventarioResource:
             "stock_minimo": 5
         }
         test_client.post('/inventarios', json=initial_data, headers=headers)
-        
+
         # Intentar crear el mismo inventario de nuevo
         response = test_client.post('/inventarios', json=initial_data, headers=headers)
         assert response.status_code == 409
@@ -338,7 +339,7 @@ class TestInventarioResource:
         data = {
             "presentacion_id": setup_inventario_data['presentacion1_prod1'].id,
             "almacen_id": setup_inventario_data['almacen1'].id,
-            "cantidad": 1, 
+            "cantidad": 1,
             "lote_id": setup_inventario_data['lote1'].id
         }
         response = test_client.post('/inventarios', json=data, headers=headers)
@@ -396,7 +397,7 @@ class TestInventarioResource:
                 "lote_id": setup_inventario_data['lote1'].id
             }
         ]
-        
+
         initial_lote1_cantidad = Lote.query.get(setup_inventario_data['lote1'].id).cantidad_disponible_kg
 
         response = test_client.post('/inventarios', json=inventarios_data, headers=headers)
@@ -409,4 +410,4 @@ class TestInventarioResource:
 
         # Verificar que la cantidad del lote no se modificó
         lote_after = Lote.query.get(setup_inventario_data['lote1'].id)
-        assert lote_after.cantidad_disponible_kg == initial_lote1_cantidad 
+        assert lote_after.cantidad_disponible_kg == initial_lote1_cantidad

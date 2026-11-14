@@ -1,11 +1,13 @@
-from flask_restful import Resource, reqparse
-from flask import request
-from models import Receta, ComponenteReceta, PresentacionProducto
-from schemas import receta_schema, recetas_schema
-from extensions import db
-from common import handle_db_errors, rol_requerido, MAX_ITEMS_PER_PAGE
-from flask_jwt_extended import jwt_required
 import logging
+
+from flask import request
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, rol_requerido
+from extensions import db
+from models import ComponenteReceta, Receta
+from schemas import receta_schema, recetas_schema
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ class RecetaResource(Resource):
         if id:
             receta = Receta.query.get_or_404(id)
             return receta_schema.dump(receta), 200
-        
+
         # Permitir filtrar por la presentación final
         presentacion_id = request.args.get('presentacion_id')
         if presentacion_id:
@@ -29,9 +31,9 @@ class RecetaResource(Resource):
         # Paginación
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
-        
+
         query = Receta.query.order_by(Receta.id.asc())
-        
+
         recetas_paginadas = query.paginate(page=page, per_page=per_page, error_out=False)
 
         return {
@@ -76,7 +78,7 @@ class RecetaResource(Resource):
                 tipo_consumo=comp_data['tipo_consumo']
             )
             db.session.add(componente)
-        
+
         db.session.commit()
         logger.info(f"Receta creada para la presentación ID: {nueva_receta.presentacion_id}")
         return receta_schema.dump(nueva_receta), 201

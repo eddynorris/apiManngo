@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -54,27 +54,27 @@ def setup_depositos_auth(test_client):
     venta1 = Venta(
         cliente_id=cliente.id, almacen_id=almacen1.id, vendedor_id=user_a.id,
         total=Decimal('100.00'), tipo_pago='credito', estado_pago='parcial',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     venta2 = Venta(
         cliente_id=cliente.id, almacen_id=almacen2.id, vendedor_id=user_c.id,
         total=Decimal('100.00'), tipo_pago='credito', estado_pago='parcial',
-        estado='completado', fecha=datetime.now(timezone.utc),
+        estado='completado', fecha=datetime.now(UTC),
     )
     db.session.add_all([venta1, venta2])
     db.session.flush()
 
     pago_ajeno_mismo_almacen = Pago(
         venta_id=venta1.id, usuario_id=user_b.id, monto=Decimal('50.00'),
-        metodo_pago='efectivo', fecha=datetime.now(timezone.utc),
+        metodo_pago='efectivo', fecha=datetime.now(UTC),
     )
     pago_propio = Pago(
         venta_id=venta1.id, usuario_id=user_a.id, monto=Decimal('50.00'),
-        metodo_pago='efectivo', fecha=datetime.now(timezone.utc),
+        metodo_pago='efectivo', fecha=datetime.now(UTC),
     )
     pago_otro_almacen = Pago(
         venta_id=venta2.id, usuario_id=user_c.id, monto=Decimal('50.00'),
-        metodo_pago='efectivo', fecha=datetime.now(timezone.utc),
+        metodo_pago='efectivo', fecha=datetime.now(UTC),
     )
     db.session.add_all([pago_ajeno_mismo_almacen, pago_propio, pago_otro_almacen])
     db.session.commit()

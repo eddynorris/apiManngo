@@ -1,17 +1,16 @@
 # services/pago_service.py
 import json
 import logging
+from datetime import UTC, datetime
 from decimal import Decimal
-from datetime import datetime, timezone
-from werkzeug.exceptions import NotFound, Forbidden
+
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import Forbidden, NotFound
 
 from common import parse_iso_datetime
 from extensions import db
 from models import Pago, Venta
-from utils.file_handlers import save_file, delete_file
-from services.money import monto_decimal_positivo
 from services.authorization import (
     autorizar_pago,
     autorizar_venta_para_pago,
@@ -19,7 +18,12 @@ from services.authorization import (
     normalizar_ids,
     obtener_actor,
 )
-from services.storage_cleanup_service import track_uploaded_key, enqueue_storage_cleanup
+from services.money import monto_decimal_positivo
+from services.storage_cleanup_service import enqueue_storage_cleanup, track_uploaded_key
+from utils.file_handlers import (  # noqa: F401  (delete_file: punto de parcheo en tests)
+    delete_file,
+    save_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +235,7 @@ class PagoService:
         if es_deposito:
             nuevo_pago.depositado = True
             nuevo_pago.monto_depositado = monto
-            nuevo_pago.fecha_deposito = nuevo_pago.fecha or datetime.now(timezone.utc)
+            nuevo_pago.fecha_deposito = nuevo_pago.fecha or datetime.now(UTC)
 
         db.session.add(nuevo_pago)
         db.session.flush()
@@ -351,11 +355,11 @@ class PagoService:
             if not fecha_pago:
                 raise PagoValidationError(f"Formato de fecha inválido: {fecha_str}")
         except json.JSONDecodeError as e:
-            raise PagoValidationError(f"Formato JSON inválido: {str(e)}")
+            raise PagoValidationError(f"Formato JSON inválido: {str(e)}") from e
         except ValueError as e:
             if isinstance(e, PagoValidationError):
                 raise e
-            raise PagoValidationError(f"Formato de fecha inválido: {str(e)}")
+            raise PagoValidationError(f"Formato de fecha inválido: {str(e)}") from e
 
         pagos_data_list = normalizar_ids(pagos_data_list)
 

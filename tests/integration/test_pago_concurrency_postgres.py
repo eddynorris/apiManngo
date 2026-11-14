@@ -17,7 +17,7 @@ import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -89,7 +89,7 @@ def test_concurrent_payments_cannot_exceed_sale_total():
             tipo_pago="credito",
             estado_pago="pendiente",
             estado="completado",
-            fecha=datetime.now(timezone.utc),
+            fecha=datetime.now(UTC),
         )
         db.session.add(venta)
         db.session.commit()
@@ -120,7 +120,7 @@ def test_concurrent_payments_cannot_exceed_sale_total():
                     venta_id=ids["venta"],
                     monto=Decimal("70.00"),
                     metodo_pago="efectivo",
-                    fecha=datetime.now(timezone.utc),
+                    fecha=datetime.now(UTC),
                 )
                 PagoService.create_pago(
                     nuevo_pago, None, ids["usuario"], actor_id=ids["usuario"]

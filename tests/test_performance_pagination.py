@@ -1,8 +1,9 @@
-import pytest
 from decimal import Decimal
-from models import Cliente, Venta, Pago, Almacen, Users
+
+from common import obtener_saldos_pendientes_clientes, paginar
 from extensions import db
-from common import paginar, obtener_saldos_pendientes_clientes
+from models import Almacen, Cliente, Pago, Users, Venta
+
 
 def test_obtener_saldos_pendientes_clientes_batch(test_client):
     """

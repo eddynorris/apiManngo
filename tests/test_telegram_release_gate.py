@@ -2,8 +2,8 @@ import logging
 
 from extensions import db
 from models import TelegramUpdate
-from telegram.router import TelegramRouter
 from resources import telegram_webhook_resource as webhook_module
+from telegram.router import TelegramRouter
 
 
 class _NoExecutor:

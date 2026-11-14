@@ -5,8 +5,8 @@ Revises: d312602d0682
 Create Date: 2026-07-21 17:44:06.508456
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -45,7 +45,7 @@ def upgrade():
     # 4. Inventario: Añadir clave única compuesta y el índice parcial uq_inventario_sin_lote
     with op.batch_alter_table('inventario', schema=None) as batch_op:
         batch_op.create_unique_constraint('uq_inventario_compuesto', ['presentacion_id', 'almacen_id', 'lote_id'])
-    
+
     op.create_index('uq_inventario_sin_lote', 'inventario', ['presentacion_id', 'almacen_id'], unique=True, postgresql_where=sa.text('lote_id IS NULL'))
 
     # 5. Lotes: Hacer producto_id y peso_humedo_kg nullables en el modelo
@@ -81,7 +81,7 @@ def upgrade():
         batch_op.alter_column('depositado',
                existing_type=sa.BOOLEAN(),
                nullable=False)
-        
+
     # Recrear índices de pagos para usar nombres normalizados de SQLAlchemy
     try:
         op.drop_index('idx_pagos_depositado', 'pagos')
@@ -216,7 +216,7 @@ def downgrade():
     # 7. Pagos: Revertir tipos
     op.drop_index('idx_pago_fecha_deposito', table_name='pagos')
     op.drop_index('idx_pago_depositado_fecha', table_name='pagos')
-    
+
     with op.batch_alter_table('pagos', schema=None) as batch_op:
         batch_op.alter_column('depositado',
                existing_type=sa.BOOLEAN(),

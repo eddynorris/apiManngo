@@ -1,15 +1,16 @@
-import os
 import logging
-import uuid
+import os
 import random
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone, timedelta
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required
+from datetime import UTC, datetime, timedelta
 
+from flask_jwt_extended import jwt_required
+from flask_restful import Resource
+
+from common import handle_db_errors, obtener_usuario_actual
 from extensions import db
 from models import Users
-from common import handle_db_errors, obtener_usuario_actual
 from telegram.router import TelegramRouter
 
 logger = logging.getLogger(__name__)
@@ -85,12 +86,12 @@ class TelegramLinkResource(Resource):
             return {"error": "No se pudo generar un código de vinculación único"}, 503
 
         user.telegram_linking_code = code
-        user.telegram_linking_expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+        user.telegram_linking_expires = datetime.now(UTC) + timedelta(minutes=10)
         db.session.commit()
-        
+
         bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "ManngoBot")
         link = f"https://t.me/{bot_username}?start={code}"
-        
+
         return {
             "codigo": code,
             "enlace": link,

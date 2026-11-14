@@ -1,9 +1,8 @@
-from werkzeug.security import generate_password_hash
 import pytest
+from werkzeug.security import generate_password_hash
 
 from extensions import db
 from models import Users
-
 
 LOGIN_PATH = '/auth'
 USERNAME = 'l4_http_contract'

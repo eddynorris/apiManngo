@@ -1,13 +1,14 @@
 import unittest
-from unittest.mock import patch, MagicMock
-import os
+from unittest.mock import MagicMock, patch
+
 from services.gemini_service import GeminiService
+
 
 class TestGeminiService(unittest.TestCase):
     def setUp(self):
         # Mock environment variables before initializing GeminiService
         with patch.dict('os.environ', {'GOOGLE_API_KEY': 'fake-key'}):
-            with patch('google.generativeai.configure') as mock_configure:
+            with patch('google.generativeai.configure'):
                 self.gemini_service = GeminiService()
 
     @patch('google.generativeai.GenerativeModel')
@@ -16,7 +17,7 @@ class TestGeminiService(unittest.TestCase):
         mock_model = mock_model_class.return_value
         self.gemini_service._model = mock_model
         mock_response = MagicMock()
-        
+
         # Simular una llamada a función 'interpretar_operacion'
         mock_part = MagicMock()
         mock_part.function_call.name = 'interpretar_operacion'
@@ -26,7 +27,7 @@ class TestGeminiService(unittest.TestCase):
             'pagos': [{'monto': 200, 'metodo_pago': 'efectivo'}],
             'gasto_asociado': {'descripcion': 'Taxi', 'monto': 20, 'categoria': 'logistica'}
         }
-        
+
         mock_response.candidates = [MagicMock()]
         mock_response.candidates[0].content.parts = [mock_part]
         mock_model.generate_content.return_value = mock_response
@@ -45,18 +46,18 @@ class TestGeminiService(unittest.TestCase):
         mock_model = mock_model_class.return_value
         self.gemini_service._model = mock_model
         mock_response = MagicMock()
-        
+
         # Simular respuesta de texto sin función
         mock_part = MagicMock()
         del mock_part.function_call # Asegurar que no tenga function_call
         mock_part.text = "No entendí lo que dijiste."
-        
+
         mock_response.candidates = [MagicMock()]
         mock_response.candidates[0].content.parts = [mock_part]
         mock_model.generate_content.return_value = mock_response
 
         result = self.gemini_service.process_command("Hola mundo")
-        
+
         self.assertEqual(result['action'], 'none')
         self.assertEqual(result['message'], "No entendí lo que dijiste.")
 

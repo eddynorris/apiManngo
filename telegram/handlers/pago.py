@@ -1,13 +1,13 @@
-import os
 import logging
+from datetime import datetime
 from decimal import Decimal
-from datetime import datetime, timezone
+
 from sqlalchemy import func
 
 from extensions import db
-from models import Users, Cliente, PresentacionProducto, Inventario, Pago, Gasto, Movimiento, Almacen
+from models import Almacen, Cliente, Gasto, Inventario, Movimiento, Pago
+from services.pago_service import PagoService
 from services.telegram_service import telegram_service
-from services.pago_service import PagoService, PagoValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,6 @@ class PagoHandler:
         from utils.date_parser import parse_telegram_date
         fecha_pago = parse_telegram_date(fecha_str)
 
-        cliente = db.session.get(Cliente, cliente_id)
         from models import Venta
         ventas_pendientes = Venta.query.filter(
             Venta.cliente_id == cliente_id,
@@ -136,7 +135,7 @@ class PagoHandler:
             categoria = args.get("categoria", "logistica")
             if descripcion and monto:
                 gastos_raw = [{"descripcion": descripcion, "monto": monto, "categoria": categoria}]
-        
+
         if not gastos_raw:
             telegram_service.send_message(chat_id, "❌ Error: No se pudo interpretar la descripción o el monto de los gastos.")
             return
@@ -207,14 +206,14 @@ class PagoHandler:
                 "monto": context["monto"],
                 "categoria": context["categoria"]
             }]
-            
+
         almacen_id = context.get("almacen_id", user.almacen_id)
         almacen_nombre = context.get("almacen_nombre", "Desconocido")
-        
+
         fecha_str = context.get("fecha")
         from utils.date_parser import parse_telegram_date_only
         fecha_gasto = parse_telegram_date_only(fecha_str)
-        
+
         registros_creados = []
         for g in gastos_list:
             nuevo_gasto = Gasto(
@@ -288,7 +287,7 @@ class PagoHandler:
         for pago in pagos_pendientes:
             if monto_restante <= 0:
                 break
-            
+
             saldo_deposito_pendiente = pago.monto - (pago.monto_depositado or Decimal("0"))
             if saldo_deposito_pendiente <= 0:
                 continue
@@ -298,7 +297,7 @@ class PagoHandler:
             pago.depositado = True
             pago.fecha_deposito = fecha_deposito
             if referencia:
-                pago.referencia = f"{pago.referencia or ''} | Dep: {referencia}".strip(" | ")
+                pago.referencia = f"{pago.referencia or ''} | Dep: {referencia}".strip(" | ")  # noqa: B005
 
             pagos_afectados.append(f"• Depósito de S/ {abono_deposito:.2f} (de Pago #{pago.id})")
             monto_restante -= abono_deposito
@@ -318,13 +317,13 @@ class PagoHandler:
         planta = Almacen.query.filter_by(es_planta=True).first()
         if not planta:
             planta = Almacen.query.filter(Almacen.nombre.ilike("%planta%")).first()
-            
+
         if planta:
             almacen_id = planta.id
             almacen_nombre = planta.nombre
         else:
             almacen_id, almacen_nombre, _ = resolver_almacen_fn(user, original_text)
-            
+
         if not almacen_id:
             telegram_service.send_message(chat_id, "❌ Error: No se pudo determinar el almacén de producción ('Planta').")
             return
@@ -400,7 +399,7 @@ class PagoHandler:
         gasto_id = None
         if total_gasto > 0:
             nuevo_gasto = Gasto(
-                descripcion=f"Compra de insumos: " + ", ".join([f"{item['cantidad']} {item['producto_nombre']}" for item in items]),
+                descripcion="Compra de insumos: " + ", ".join([f"{item['cantidad']} {item['producto_nombre']}" for item in items]),
                 monto=total_gasto,
                 categoria="insumos",
                 fecha=fecha_operacion.date(),
@@ -436,7 +435,7 @@ class PagoHandler:
                 lote_id=None,
                 cantidad=cantidad,
                 fecha=fecha_operacion,
-                motivo=f"Compra de insumos (Telegram)" + (f" | Gasto #{gasto_id}" if gasto_id else ""),
+                motivo="Compra de insumos (Telegram)" + (f" | Gasto #{gasto_id}" if gasto_id else ""),
                 usuario_id=user.id,
                 tipo_operacion='compra'
             ))
@@ -447,10 +446,10 @@ class PagoHandler:
 
         detalles_txt = "\n".join(insumos_ingresados)
         gasto_info = f"\n💸 <b>Gasto Registrado:</b> S/ {total_gasto:.2f} (Gasto ID: #{gasto_id})" if gasto_id else ""
-        
+
         telegram_service.edit_message(
-            chat_id, 
-            message_id, 
+            chat_id,
+            message_id,
             f"✅ <b>¡Compra de insumos registrada con éxito!</b>\n\n"
             f"🏪 <b>Almacén:</b> {almacen_nombre}\n\n"
             f"📦 <b>Insumos ingresados al stock:</b>\n{detalles_txt}\n"

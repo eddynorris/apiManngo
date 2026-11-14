@@ -1,12 +1,13 @@
 # utils/file_handlers.py
-import os
-import uuid
-import logging
-from werkzeug.utils import secure_filename
-from flask import current_app
-from extensions import supabase
-from PIL import Image
 import io
+import logging
+import uuid
+
+from flask import current_app
+from PIL import Image
+from werkzeug.utils import secure_filename
+
+from extensions import supabase
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ def determine_bucket_and_path(storage_key):
     """
     if not storage_key:
         return None, None
-        
+
     parts = storage_key.split('/', 1)
     if len(parts) == 2 and parts[0] in VALID_BUCKETS:
         bucket_name = parts[0]
@@ -144,7 +145,7 @@ def determine_bucket_and_path(storage_key):
         else:
             bucket_name = 'comprobantes'
             file_path = storage_key  # Se mantiene la ruta completa en el bucket fallback
-            
+
     return bucket_name, file_path
 
 def save_file(file, subfolder, quality=80, max_width=1920):
@@ -250,7 +251,7 @@ def save_file(file, subfolder, quality=80, max_width=1920):
     try:
         if hasattr(file_to_upload, 'seek'):
             file_to_upload.seek(0)
-            
+
         file_bytes = file_to_upload.read() if hasattr(file_to_upload, 'read') else file_to_upload
 
         supabase.storage.from_(bucket_name).upload(
@@ -258,7 +259,7 @@ def save_file(file, subfolder, quality=80, max_width=1920):
             file=file_bytes,
             file_options={"content-type": upload_content_type}
         )
-        
+
         # Devolver la clave en formato 'bucket/path' para mantener compatibilidad
         storage_key = f"{bucket_name}/{file_path}"
         logger.info(f"Archivo subido exitosamente a Supabase Storage. Clave: {storage_key}, Tipo: {upload_content_type}")
@@ -290,18 +291,18 @@ def get_presigned_url(storage_key, expiration=3600):
             path=file_path,
             expires_in=expiration
         )
-        
+
         # El response puede venir como dict o como objeto directo dependiendo de la versión
         url = response.get('signedURL') if isinstance(response, dict) else getattr(response, 'signed_url', None) or getattr(response, 'signedURL', None)
         if not url and isinstance(response, dict) and 'signedUrl' in response:
             url = response['signedUrl']
-            
+
         # Si sigue sin encontrarse, a veces response es un string o tiene una estructura diferente
         if not url:
             # Reintentar obtener de forma cruda si es necesario
             if hasattr(response, 'get'):
                 url = response.get('signedUrl') or response.get('signedURL')
-                
+
         if url:
             logger.info(f"URL pre-firmada generada para: {storage_key}")
             return url

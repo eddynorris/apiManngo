@@ -3,11 +3,13 @@ import logging
 import os
 import sys
 from logging.handlers import RotatingFileHandler
+
 from flask import has_request_context, request
+
 
 class RequestFormatter(logging.Formatter):
     """Formateador personalizado que incluye información de solicitud HTTP"""
-    
+
     def format(self, record):
         if has_request_context():
             record.url = request.url
@@ -20,7 +22,7 @@ class RequestFormatter(logging.Formatter):
                 jwt_identity = get_jwt_identity()
                 if jwt_identity:
                     user_id = jwt_identity
-            except:
+            except Exception:
                 pass
             record.user_id = user_id
         else:
@@ -28,7 +30,7 @@ class RequestFormatter(logging.Formatter):
             record.remote_addr = None
             record.method = None
             record.user_id = None
-            
+
         return super().format(record)
 
 def _get_environment(app):
@@ -41,21 +43,21 @@ def _get_environment(app):
 
 def setup_logging(app):
     """Configura el sistema de logging para la aplicación"""
-    
+
     # Determinar nivel de log según entorno
     log_level_name = os.environ.get('LOG_LEVEL', 'INFO').upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
     environment = _get_environment(app)
-    
+
     # Remover handlers existentes
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-        
+
     # Configurar handler para consola
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
-    
+
     # Configurar formatos según entorno
     if environment == 'production':
         # Formato JSON para producción (más fácil para herramientas de análisis)
@@ -65,33 +67,33 @@ def setup_logging(app):
         # Formato más legible para desarrollo
         console_format = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
         console_format += ' [%(method)s %(url)s IP:%(remote_addr)s User:%(user_id)s]'
-    
+
     console_formatter = RequestFormatter(console_format)
     console_handler.setFormatter(console_formatter)
-    
+
     # Configurar handler para archivo si estamos en producción
     if environment == 'production':
         log_dir = os.environ.get('LOG_DIR', 'logs')
         os.makedirs(log_dir, exist_ok=True)
-        
+
         file_handler = RotatingFileHandler(
-            f"{log_dir}/app.log", 
+            f"{log_dir}/app.log",
             maxBytes=10*1024*1024,  # 10MB
             backupCount=10
         )
         file_handler.setLevel(log_level)
         file_handler.setFormatter(console_formatter)
         root_logger.addHandler(file_handler)
-    
+
     # Añadir handler de consola al logger raíz
     root_logger.addHandler(console_handler)
     root_logger.setLevel(log_level)
-    
+
     # Ajustar nivel de logs para bibliotecas muy verbosas
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
     logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
-    
+
     # Log inicial
     app.logger.info(f"Logging configurado. Nivel: {log_level_name}")
-    
+
     return root_logger

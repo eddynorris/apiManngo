@@ -1,20 +1,20 @@
 # ARCHIVO: movimiento_resource.py
+import logging
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timezone
 
-from flask_restful import Resource
-from flask_jwt_extended import jwt_required, get_jwt
 from flask import request
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import HTTPException, NotFound
 
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, parse_iso_datetime
+from common import MAX_ITEMS_PER_PAGE, handle_db_errors, parse_iso_datetime
 from extensions import db
-from models import Movimiento, Inventario, PresentacionProducto, Lote, Almacen
+from models import Almacen, Inventario, Lote, Movimiento, PresentacionProducto
 from models_stock_audit import MovimientoScope
 from schemas import movimiento_schema, movimientos_schema
 from services.authorization import autorizar_almacen, normalizar_ids
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def _decimal_positivo_finito(valor):
     try:
         numero = Decimal(str(valor))
     except (InvalidOperation, TypeError, ValueError):
-        raise ValueError('cantidad inválida')
+        raise ValueError('cantidad inválida') from None
     if not numero.is_finite() or numero <= 0:
         raise ValueError('cantidad inválida')
     return numero
@@ -48,7 +48,7 @@ def _decimal_positivo_finito(valor):
 
 def _fecha_movimiento(valor):
     if valor is None or valor == '':
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if not isinstance(valor, str):
         raise ValueError('fecha inválida')
     return parse_iso_datetime(valor)
@@ -64,7 +64,7 @@ class MovimientoResource(Resource):
         - Sin ID: Lista paginada con filtros (tipo, producto_id, fecha_inicio, fecha_fin, lote_id, presentacion_id)
         """
         if movimiento_id:
-            
+
             movimiento = Movimiento.query.options(
                 joinedload(Movimiento.presentacion),
                 joinedload(Movimiento.lote),
@@ -72,14 +72,14 @@ class MovimientoResource(Resource):
                 joinedload(Movimiento.lote_origen)
             ).get_or_404(movimiento_id)
             return movimiento_schema.dump(movimiento), 200
-        
+
         query = Movimiento.query.options(
             joinedload(Movimiento.presentacion),
             joinedload(Movimiento.lote),
             joinedload(Movimiento.usuario),
             joinedload(Movimiento.lote_origen)
         )
-        
+
         if tipo := request.args.get('tipo'):
             query = query.filter_by(tipo=tipo)
         if lote_id := request.args.get('lote_id'):
@@ -116,7 +116,7 @@ class MovimientoResource(Resource):
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         movimientos = query.paginate(page=page, per_page=per_page, error_out=False)
-        
+
         return {
             "data": movimientos_schema.dump(movimientos.items),
             "pagination": {
@@ -229,7 +229,7 @@ class MovimientoResource(Resource):
                 inventario.cantidad += cantidad
             else:
                 inventario.cantidad -= cantidad
-            inventario.ultima_actualizacion = datetime.now(timezone.utc)
+            inventario.ultima_actualizacion = datetime.now(UTC)
 
             db.session.commit()
             return movimiento_schema.dump(nuevo_movimiento), 201
@@ -346,7 +346,7 @@ class MovimientoResource(Resource):
                     "codigo": "MOVIMIENTO_TIPO_INVALIDO",
                 }, 409
 
-            inventario.ultima_actualizacion = datetime.now(timezone.utc)
+            inventario.ultima_actualizacion = datetime.now(UTC)
             db.session.delete(scope)
             db.session.delete(movimiento)
             db.session.commit()

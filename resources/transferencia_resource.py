@@ -1,7 +1,7 @@
 # ARCHIVO: resources/transferencia_resource.py
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from flask import request
@@ -13,6 +13,7 @@ from werkzeug.exceptions import HTTPException
 from common import handle_db_errors
 from extensions import db
 from models import Almacen, Inventario, Movimiento, PresentacionProducto
+
 # Imports agregados para el método GET
 from schemas import almacenes_schema
 from services.authorization import autorizar_almacen, normalizar_ids
@@ -31,7 +32,7 @@ def _cantidad_positiva_finita(valor):
     try:
         cantidad = Decimal(str(valor))
     except (ValueError, TypeError, InvalidOperation):
-        raise ValueError('la cantidad debe ser un número positivo')
+        raise ValueError('la cantidad debe ser un número positivo') from None
     if not cantidad.is_finite() or cantidad <= 0:
         raise ValueError('la cantidad debe ser un número positivo')
     return cantidad
@@ -47,7 +48,7 @@ class TransferenciaService:
         self.claims = get_jwt()
         self.usuario_id = self.claims.get('sub')
         self.id_operacion = str(uuid.uuid4())[:8]
-        self.fecha_operacion = datetime.now(timezone.utc)
+        self.fecha_operacion = datetime.now(UTC)
         self.transferencias_validadas = []
 
     def ejecutar_transferencia(self):
@@ -55,7 +56,7 @@ class TransferenciaService:
         Orquesta el proceso completo de validación y ejecución de la transferencia.
         """
         self._validar_y_preparar_datos()
-        
+
         # --- LOCK IN CONSISTENT ORDER TO PREVENT DEADLOCKS ---
         if self.almacen_origen_id < self.almacen_destino_id:
             inventarios_origen = self._obtener_inventarios(self.almacen_origen_id)
@@ -69,7 +70,7 @@ class TransferenciaService:
         transferencias_realizadas = self._actualizar_inventarios_y_crear_movimientos(
             inventarios_origen, inventarios_destino
         )
-        
+
         return {
             "mensaje": "Transferencia realizada con éxito",
             "id_operacion": self.id_operacion,
@@ -123,16 +124,16 @@ class TransferenciaService:
                     'cantidad': cantidad
                 })
             except (ValueError, TypeError, InvalidOperation) as e:
-                raise ValueError(f"Transferencia {i+1}: formato de datos inválido. {e}")
+                raise ValueError(f"Transferencia {i+1}: formato de datos inválido. {e}") from e
 
     def _obtener_inventarios(self, almacen_id):
         """
-        Obtiene todos los registros de inventario necesarios de un almacén 
+        Obtiene todos los registros de inventario necesarios de un almacén
         y los agrupa en una lista por presentacion_id para procesarlos en FIFO.
         """
         from models import Lote
         ids_presentaciones = {t['presentacion_id'] for t in self.transferencias_validadas}
-        
+
         inventarios = Inventario.query.with_for_update(of=Inventario).options(
             joinedload(Inventario.presentacion),
             joinedload(Inventario.lote)
@@ -142,17 +143,17 @@ class TransferenciaService:
             Inventario.almacen_id == almacen_id,
             Inventario.presentacion_id.in_(ids_presentaciones)
         ).order_by(
-            Inventario.presentacion_id, 
+            Inventario.presentacion_id,
             Lote.fecha_ingreso.asc(), # FIFO by lot date
             Inventario.id.asc()       # Fallback FIFO
         ).all()
-        
+
         agrupados = {}
         for inv in inventarios:
             if inv.presentacion_id not in agrupados:
                 agrupados[inv.presentacion_id] = []
             agrupados[inv.presentacion_id].append(inv)
-            
+
         return agrupados
 
     def _validar_stock(self, inventarios_origen):
@@ -198,20 +199,20 @@ class TransferenciaService:
             for inv_orig in invs_origen_disponibles:
                 if cantidad_restante <= 0:
                     break
-                
+
                 if inv_orig.cantidad <= 0:
                     continue
-                    
+
                 cantidad_a_tomar = min(inv_orig.cantidad, cantidad_restante)
-                
+
                 # Descontar del origen
                 inv_orig.cantidad -= cantidad_a_tomar
                 inv_orig.ultima_actualizacion = self.fecha_operacion
                 cantidad_restante -= cantidad_a_tomar
-                
+
                 # Buscar o crear inventario destino CON EL MISMO LOTE
                 inv_dest = next((inv for inv in invs_destino_existentes if inv.lote_id == inv_orig.lote_id), None)
-                
+
                 if inv_dest:
                     inv_dest.cantidad += cantidad_a_tomar
                     inv_dest.ultima_actualizacion = self.fecha_operacion
@@ -231,20 +232,20 @@ class TransferenciaService:
                 motivo_entrada = f"Transferencia desde {self.almacen_origen.nombre} (Op: {self.id_operacion})"
 
                 movimientos_a_crear.append(Movimiento(
-                    tipo='salida', motivo=motivo_salida, 
+                    tipo='salida', motivo=motivo_salida,
                     presentacion_id=transfer['presentacion_id'],
                     lote_id=inv_orig.lote_id,
                     cantidad=cantidad_a_tomar,
                     usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
                 ))
                 movimientos_a_crear.append(Movimiento(
-                    tipo='entrada', motivo=motivo_entrada, 
+                    tipo='entrada', motivo=motivo_entrada,
                     presentacion_id=transfer['presentacion_id'],
                     lote_id=inv_orig.lote_id,
                     cantidad=cantidad_a_tomar,
                     usuario_id=self.usuario_id, tipo_operacion='transferencia', fecha=self.fecha_operacion
                 ))
-                
+
                 transferencias_realizadas_info.append({
                     "presentacion_nombre": inv_orig.presentacion.nombre,
                     "cantidad": str(cantidad_a_tomar),
@@ -267,7 +268,7 @@ class TransferenciaInventarioResource(Resource):
         inventario disponible agrupado.
         """
         almacen_id_filtro = request.args.get('almacen_id', type=int)
-        
+
         try:
             # 1. Obtener todos los almacenes para los selectores del frontend
             almacenes = Almacen.query.order_by(Almacen.nombre).all()
@@ -287,14 +288,14 @@ class TransferenciaInventarioResource(Resource):
 
             if almacen_id_filtro:
                 query = query.filter(Inventario.almacen_id == almacen_id_filtro)
-            
+
             inventario_disponible = query.all()
 
             # 3. Procesar y agrupar los datos eficientemente en Python sumando los stocks de diferentes lotes
             presentaciones_agrupadas = {}
             for inv in inventario_disponible:
                 pres_id = inv.presentacion.id
-                
+
                 # Si es la primera vez que vemos esta presentación, creamos su objeto base
                 if pres_id not in presentaciones_agrupadas:
                     presentaciones_agrupadas[pres_id] = {
@@ -313,14 +314,14 @@ class TransferenciaInventarioResource(Resource):
                         "lote_id": None,  # Mantenemos para compatibilidad con schemas viejos
                         "lote_info": None # Mantenemos para compatibilidad
                     }
-                
+
                 # Sumamos el total de inventario (FIFO se encarga de los lotes internamente al transferir)
                 presentaciones_agrupadas[pres_id]["inventarios_dict"][alm_id]["stock_disponible"] += float(inv.cantidad)
 
             # Extraemos la lista plana de inventarios para la respuesta
             for pres_data in presentaciones_agrupadas.values():
                 pres_data["inventarios"] = list(pres_data.pop("inventarios_dict").values())
-            
+
             return {
                 "almacenes": almacenes_schema.dump(almacenes),
                 "presentaciones_disponibles": list(presentaciones_agrupadas.values())

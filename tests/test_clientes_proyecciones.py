@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from flask import Flask
 
 from resources.cliente_resource import ClienteProyeccionResource

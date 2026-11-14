@@ -14,7 +14,7 @@ import base64
 import io
 import zipfile
 from dataclasses import replace
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
 import pytest
@@ -26,7 +26,6 @@ from cryptography.x509.oid import NameOID
 
 from services import sunat_service as ss
 from services import sunat_xml as sx
-
 
 TOKEN_URL = "https://api-seguridad.sunat.gob.pe/v1/clientessol/synthetic-client/oauth2/token/"
 SEND_URL = "https://api-cpe.sunat.gob.pe/v1/contribuyente/gem/comprobantes/20999999999-09-T001-00000001"
@@ -164,8 +163,8 @@ def signing_material():
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime(2020, 1, 1, tzinfo=timezone.utc))
-        .not_valid_after(datetime(2035, 1, 1, tzinfo=timezone.utc))
+        .not_valid_before(datetime(2020, 1, 1, tzinfo=UTC))
+        .not_valid_after(datetime(2035, 1, 1, tzinfo=UTC))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256())
     )
@@ -225,7 +224,7 @@ def _cdr_xml(response_code="0", doc_id="T001-00000001", doc_type="09",
     </cac:DocumentReference>
   </cac:DocumentResponse>
   <cbc:Note>Nota sintética conservada</cbc:Note>
-</ApplicationResponse>""".encode("utf-8")
+</ApplicationResponse>""".encode()
 
 
 def _zip_b64(xml_bytes):

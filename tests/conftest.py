@@ -1,7 +1,8 @@
-import pytest
 import os
 import sys
 from decimal import Decimal
+
+import pytest
 from flask import has_app_context
 from sqlalchemy.engine import make_url
 
@@ -20,9 +21,21 @@ VALIDATED_DATABASE_URL = os.environ.get('DATABASE_URL', '')
 PG_OPT_IN = environment_status.database_kind == 'postgresql-loopback-disposable'
 install_offline_guards(allow_loopback=environment_status.allow_loopback)
 
-from app import app, db
-from models import Users, Almacen, Cliente, Venta, Pago, Producto, PresentacionProducto, Lote, Inventario, Movimiento
 from werkzeug.security import generate_password_hash
+
+from app import app, db
+from models import (
+    Almacen,
+    Cliente,
+    Inventario,
+    Lote,
+    Movimiento,
+    Pago,
+    PresentacionProducto,
+    Producto,
+    Users,
+    Venta,
+)
 
 
 def _database_url_string(value):
@@ -175,7 +188,7 @@ def setup_test_data():
     cliente4 = Cliente(nombre='Cliente D (Sin Deuda)')
     db.session.add_all([cliente1, cliente2, cliente3, cliente4])
     db.session.commit()
-    
+
     # Productos, Presentaciones, Lotes e Inventario
     prod = Producto(nombre='Test Prod', precio_compra=Decimal('10.00'))
     db.session.add(prod)
@@ -208,7 +221,7 @@ def setup_test_data():
     v5 = Venta(cliente_id=cliente3.id, almacen_id=almacen2.id, vendedor_id=admin_user.id, total=Decimal('50.00'), estado_pago='pendiente', tipo_pago='credito') # Deuda 50
     v6 = Venta(cliente_id=cliente4.id, almacen_id=almacen1.id, vendedor_id=vendedor_user.id, total=Decimal('100.00'), estado_pago='pagado', tipo_pago='contado')
     db.session.add_all([v5, v6])
-    
+
     db.session.commit()
 
 def _clean_active_db_session():

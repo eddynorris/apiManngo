@@ -1,13 +1,13 @@
 # services/produccion_service.py
-import uuid
 import logging
+import uuid
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timezone
 
 from werkzeug.exceptions import BadRequest
 
 from extensions import db
-from models import Lote, Inventario, PresentacionProducto, Movimiento
+from models import Inventario, Lote, Movimiento, PresentacionProducto
 from services.authorization import autorizar_almacen, normalizar_ids
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,7 @@ class ProduccionService:
             lotes_locked = Lote.query.filter(
                 Lote.id.in_(sorted(lote_ids_to_lock))
             ).with_for_update().all()
-            lotes_db = {l.id: l for l in lotes_locked}
+            lotes_db = {lote.id: lote for lote in lotes_locked}
 
         # 2. Bloquear inventarios involucrados en orden consistente de (presentacion_id, lote_id)
         inv_keys_to_lock = set()
@@ -211,7 +211,7 @@ class ProduccionService:
 
         # --- Fase de Ejecución (Transacción Atómica y Segura) ---
         id_ensamblaje = str(uuid.uuid4())
-        fecha_operacion = datetime.now(timezone.utc)
+        fecha_operacion = datetime.now(UTC)
         motivo_base = f"Ensamblaje {id_ensamblaje}: {descripcion}"
 
         # Procesar salidas

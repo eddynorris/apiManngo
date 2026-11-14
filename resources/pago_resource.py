@@ -1,27 +1,25 @@
 # ARCHIVO: resources/pago_resource.py
+import io
 import json
 import logging
-import io
 import re
 import uuid
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import datetime
+from decimal import Decimal
 
 import pandas as pd
 from flask import request, send_file
-from flask_jwt_extended import jwt_required, get_jwt
+from flask_jwt_extended import get_jwt, jwt_required
 from flask_restful import Resource
 from marshmallow import ValidationError
-from sqlalchemy import asc, desc, func, case
+from sqlalchemy import asc, case, desc, func
 from sqlalchemy.orm import joinedload
-from werkzeug.exceptions import BadRequest, NotFound, Forbidden, HTTPException
+from werkzeug.exceptions import BadRequest, Forbidden, HTTPException, NotFound
 
 from common import MAX_ITEMS_PER_PAGE, handle_db_errors, parse_iso_datetime
 from extensions import db
-from models import Almacen, Cliente, Pago, Users, Venta, Gasto
-from schemas import pago_schema, pagos_schema, gastos_schema
-from utils.file_handlers import get_presigned_url, save_file
-from services.money import monto_decimal_positivo
+from models import Gasto, Pago, Venta
+from schemas import gastos_schema, pago_schema, pagos_schema
 from services.authorization import (
     autorizar_pago,
     autorizar_venta_para_pago,
@@ -29,12 +27,14 @@ from services.authorization import (
     normalizar_ids,
     obtener_actor,
 )
-from services.pago_service import PagoService, PagoValidationError, PagoConflictError
+from services.money import monto_decimal_positivo
+from services.pago_service import PagoConflictError, PagoService, PagoValidationError
 from services.storage_cleanup_service import (
     commit_with_storage_finalization,
     rollback_and_compensate,
     track_uploaded_key,
 )
+from utils.file_handlers import get_presigned_url, save_file
 
 # Configuración de Logging
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ class PagoResource(Resource):
         pagos_paginados = query.paginate(page=page, per_page=per_page, error_out=False)
         pagos_dump = pagos_schema.dump(pagos_paginados.items)
 
-        for pago_obj, dump_item in zip(pagos_paginados.items, pagos_dump):
+        for pago_obj, dump_item in zip(pagos_paginados.items, pagos_dump, strict=False):
              _get_presigned_url_for_item(dump_item, pago_obj.url_comprobante)
 
         return {
@@ -536,7 +536,7 @@ class CierreCajaResource(Resource):
 
         monto_en_gerencia_sql = case(
             (
-                (Pago.depositado == True) & (Pago.monto_depositado != None),
+                (Pago.depositado == True) & (Pago.monto_depositado.isnot(None)),
                 Pago.monto - Pago.monto_depositado
             ),
             (

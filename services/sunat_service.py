@@ -36,8 +36,8 @@ import math
 import os
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 import requests
 from lxml import etree
@@ -133,7 +133,7 @@ class SunatConfig:
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> "SunatConfig":
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> SunatConfig:
         env = os.environ if environ is None else environ
         ambiente = str(env.get("SUNAT_AMBIENTE", "local")).strip().lower() or "local"
         return cls(

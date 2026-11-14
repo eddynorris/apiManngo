@@ -1,9 +1,12 @@
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from app import app, db
-from models import Users, Almacen, Producto, PresentacionProducto, Lote, Movimiento
+
+import pytest
 from flask_jwt_extended import create_access_token
+
+from app import app, db
+from models import Almacen, Lote, Movimiento, PresentacionProducto, Producto, Users
+
 
 @pytest.fixture(scope='module')
 def test_client():
@@ -51,7 +54,7 @@ def init_entradas_data(test_client):
     db.session.commit()
 
     # 4. Movimientos de Entrada de Producción y Traslados
-    ahora = datetime.now(timezone.utc)
+    ahora = datetime.now(UTC)
     hace_2_dias = ahora - timedelta(days=2)
     hace_5_dias = ahora - timedelta(days=5)
 

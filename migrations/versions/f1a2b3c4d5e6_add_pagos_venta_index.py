@@ -13,9 +13,8 @@ migración, o si el motor no soporta el marcador (por ejemplo SQLite), no es
 posible demostrar quién creó el índice. En ese caso el downgrade no lo elimina
 para no borrar un índice preexistente.
 """
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = 'f1a2b3c4d5e6'
 down_revision = 'c4d5e6f7a8b9'

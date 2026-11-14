@@ -1,50 +1,51 @@
-from typing import Dict, Tuple, Union, Any
-from flask_restful import Resource, reqparse
+import logging
+from datetime import timedelta
+from typing import Any
+
 from flask_jwt_extended import create_access_token
+from flask_restful import Resource, reqparse
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
-from models import Users, Almacen
-from flask import request
-from common import AUTH_VERSION_CLAIM, validate_password
-from datetime import timedelta
-import logging
+
 import config
+from common import AUTH_VERSION_CLAIM
+from models import Almacen, Users
 
 # Configurar logging
 logger = logging.getLogger(__name__)
 
 class AuthResource(Resource):
-    def post(self) -> Tuple[Dict[str, Any], int]:
+    def post(self) -> tuple[dict[str, Any], int]:
         try:
             parser = reqparse.RequestParser()
             parser.add_argument('username', type=str, required=True, help='El nombre de usuario es requerido')
             parser.add_argument('password', type=str, required=True, help='La contraseña es requerida')
-            
+
             data = parser.parse_args()
-            
+
             # Sanitizar entradas
             username = data['username'].strip()
             password = data['password']
-            
+
             # Validaciones básicas para prevenir ataques simples
             if not username or len(username) < config.MIN_USERNAME_LENGTH:
                 return {'message': f'El nombre de usuario debe tener al menos {config.MIN_USERNAME_LENGTH} caracteres'}, 400
-                
+
             # Find user by username (case insensitive)
             usuario = Users.query.filter(Users.username.ilike(username)).first()
-            
+
             # Verificación real de credenciales
             if not usuario or not check_password_hash(usuario.password, password):
                 # Log de intento fallido (sin exponer qué campo falló)
                 logger.warning(f"Intento de login fallido para el usuario: {username}")
                 return {'message': 'Credenciales inválidas'}, 401
-            
+
             # Determinar expiración del token basado en el rol
             if usuario.rol == 'admin':
                 expires = timedelta(hours=config.JWT_EXPIRES_HOURS_ADMIN)
             else:
                 expires = timedelta(hours=config.JWT_EXPIRES_HOURS_USER)
-                
+
             # Crear token con datos mínimos necesarios
             access_token = create_access_token(
                 identity=str(usuario.id),
@@ -56,17 +57,17 @@ class AuthResource(Resource):
                 },
                 expires_delta=expires
             )
-            
+
             # Obtener nombre del almacén si existe
             nombre_almacen = None
             if usuario.almacen_id:
                 almacen = Almacen.query.get(usuario.almacen_id)
                 if almacen:
                     nombre_almacen = almacen.nombre
-            
+
             # Log de login exitoso
             logger.info(f"Login exitoso para usuario: {username}")
-            
+
             return {
                 'access_token': access_token,
                 'token_type': 'Bearer',
@@ -79,7 +80,7 @@ class AuthResource(Resource):
                     'almacen_nombre': nombre_almacen
                 }
             }, 200
-            
+
         except HTTPException:
             raise
         except Exception as e:

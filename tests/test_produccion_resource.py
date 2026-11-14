@@ -1,11 +1,21 @@
-import pytest
 import json
 from decimal import Decimal
+
+import pytest
+from flask_jwt_extended import create_access_token
+
 from app import app, db
 from models import (
-    Users, Almacen, Producto, PresentacionProducto, Lote, Inventario, Receta, ComponenteReceta, Movimiento
+    Almacen,
+    ComponenteReceta,
+    Inventario,
+    Lote,
+    PresentacionProducto,
+    Producto,
+    Receta,
+    Users,
 )
-from flask_jwt_extended import create_access_token
+
 
 @pytest.fixture(scope='module')
 def test_client():
@@ -53,7 +63,7 @@ def init_database(test_client):
     yield access_token
     db.session.remove()
     db.drop_all()
- 
+
 def test_produccion_exitosa_creando_lote_nuevo(test_client, init_database):
     """Prueba una producción exitosa que crea un nuevo lote de destino."""
     token = init_database
@@ -74,7 +84,7 @@ def test_produccion_exitosa_creando_lote_nuevo(test_client, init_database):
     inv_final = Inventario.query.filter_by(presentacion_id=4, almacen_id=1).first()
     assert inv_final is not None
     assert inv_final.cantidad == 10
- 
+
 def test_produccion_exitosa_a_lote_existente(test_client, init_database):
     """Prueba una producción que consolida el resultado en un lote existente."""
     token = init_database

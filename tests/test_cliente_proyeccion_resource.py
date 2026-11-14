@@ -1,10 +1,12 @@
 import unittest
 from datetime import datetime
+
 from flask import Flask
+from sqlalchemy import func
+
 from extensions import db
 from models import Cliente
 from resources.cliente_resource import ClienteProyeccionResource
-from sqlalchemy import func
 
 
 class ClienteProyeccionResourceDateFilterTests(unittest.TestCase):

@@ -1,14 +1,16 @@
-import os
 import logging
+import os
+
+from dotenv import load_dotenv
 from flask import Flask, jsonify
+from flask_compress import Compress
 from flask_cors import CORS
-from flask_restful import Api
+from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_restful import Api
 from flask_talisman import Talisman
-from flask_compress import Compress
-from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
-from dotenv import load_dotenv
+
 from scripts.offline_test_env import should_skip_dotenv, validate_testing_database_url
 
 # Cargar variables de entorno ANTES de importar extensiones
@@ -18,11 +20,11 @@ if not should_skip_dotenv():
     load_dotenv(env_file)
 
 # Importar extensiones y recursos
-from extensions import db, jwt, swagger, migrate
-from models import Users
 from common import AUTH_VERSION_CLAIM
-from scripts.sync_supabase import sync_supabase_command
+from extensions import db, jwt, migrate, swagger
+from models import Users
 from resources import init_resources
+from scripts.sync_supabase import sync_supabase_command
 
 # Configuración de Logging
 logging.basicConfig(

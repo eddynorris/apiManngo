@@ -11,7 +11,7 @@ import hashlib
 import io
 import zipfile
 from dataclasses import replace
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 
@@ -24,7 +24,6 @@ from cryptography.x509.oid import NameOID
 from lxml import etree
 
 from services import sunat_xml as sx
-
 
 UBL_NS = sx.UBL_NS
 CBC_NS = sx.CBC_NS
@@ -97,8 +96,8 @@ def signing_material():
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime(2020, 1, 1, tzinfo=timezone.utc))
-        .not_valid_after(datetime(2035, 1, 1, tzinfo=timezone.utc))
+        .not_valid_before(datetime(2020, 1, 1, tzinfo=UTC))
+        .not_valid_after(datetime(2035, 1, 1, tzinfo=UTC))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256())
     )
@@ -137,7 +136,7 @@ def _cdr_xml(response_code="0", doc_id="T001-00000001", doc_type="09",
     </cac:DocumentReference>
   </cac:DocumentResponse>
   {notas}
-</ApplicationResponse>""".encode("utf-8")
+</ApplicationResponse>""".encode()
 
 
 def _zip_b64(xml_bytes: bytes, name="R-20999999999-09-T001-00000001.xml") -> str:
@@ -171,7 +170,7 @@ def test_build_escapes_xml_and_preserves_unicode():
     assert root.tag == f"{{{UBL_NS}}}DespatchAdvice"
     assert not xml_bytes.startswith(b"\xef\xbb\xbf")
     assert b"&amp;" in xml_bytes and b"&lt;" in xml_bytes
-    assert "Carbón & <leña> ñandú".encode("utf-8") not in xml_bytes
+    assert "Carbón & <leña> ñandú".encode() not in xml_bytes
 
     descripcion = root.find(f".//{{{CAC_NS}}}Item/{{{CBC_NS}}}Description")
     assert descripcion is not None

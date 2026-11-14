@@ -1,21 +1,24 @@
 import logging
+import uuid
 
 from extensions import db
-from models import Users, Cliente
+from models import Cliente, Users
 from services.gemini_service import gemini_service
 from services.telegram_service import telegram_service
-
-from telegram.resolvers import resolver_almacen, buscar_presentacion, intentar_vinculacion, buscar_cliente_db
 from telegram.context import clear_user_context, update_user_history
-from telegram.state_machine import StateMachine, ConversationState
-from telegram.handlers.venta import VentaHandler
-from telegram.handlers.pago import PagoHandler
-from telegram.handlers.transferencia import TransferenciaHandler
-from telegram.handlers.produccion import ProduccionHandler
-from telegram.handlers.guia_sunat import GuiaSunatHandler
 from telegram.handlers.consulta import ConsultaHandler
-
-import uuid
+from telegram.handlers.guia_sunat import GuiaSunatHandler
+from telegram.handlers.pago import PagoHandler
+from telegram.handlers.produccion import ProduccionHandler
+from telegram.handlers.transferencia import TransferenciaHandler
+from telegram.handlers.venta import VentaHandler
+from telegram.resolvers import (
+    buscar_cliente_db,
+    buscar_presentacion,
+    intentar_vinculacion,
+    resolver_almacen,
+)
+from telegram.state_machine import ConversationState, StateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +53,7 @@ def format_user_friendly_error(e: Exception) -> str:
     """Transforma excepciones internas o de BD en mensajes seguros y amigables para la interfaz de Telegram."""
     err_str = str(e)
     logger.error(f"Excepción en bot de Telegram: {e}", exc_info=True)
-    
+
     # 1. Violaciones de restricción de stock / Check constraints de DB
     if "inventario_cantidad_check" in err_str or "violates check constraint" in err_str or ("inventario" in err_str.lower() and "check" in err_str.lower()):
         return "❌ <b>Operación no realizada:</b> Stock insuficiente en el almacén para cubrir la cantidad solicitada."
@@ -104,7 +107,7 @@ class TelegramRouter:
             if not user:
                 if intentar_vinculacion(chat_id, text):
                     return
-                    
+
                 msg = (
                     f"❌ <b>Acceso Denegado</b>\n\n"
                     f"Tu Telegram Chat ID no está vinculado a ningún usuario en el sistema.\n"
@@ -190,13 +193,13 @@ class TelegramRouter:
     def _handle_flow_response(chat_id, user, result):
         """Procesa la respuesta de un flujo conversacional activo."""
         action = result.get("action")
-        
+
         if action == "create_client":
             # El usuario quiere crear el cliente, iniciar flujo de creación
             client_name = result.get("client_name")
             original_data = result.get("original_data", {})
             telegram_service.send_message(
-                chat_id, 
+                chat_id,
                 f"👤 <b>Crear Nuevo Cliente</b>\n\n"
                 f"Nombre: <b>{client_name}</b>\n\n"
                 f"Para crearlo, necesito al menos un número de teléfono de 9 dígitos.\n"
@@ -204,7 +207,7 @@ class TelegramRouter:
             )
             # Guardar contexto temporal para el siguiente mensaje
             StateMachine.transition_to(
-                user, 
+                user,
                 ConversationState.AWAITING_EXTRA_DATA,
                 action="creating_client",
                 data={
@@ -213,14 +216,14 @@ class TelegramRouter:
                     "original_data": {"action": result.get("original_action"), "data": original_data}
                 }
             )
-            
+
         elif action == "create_client_with_phone":
             # Crear el cliente con el teléfono proporcionado y continuar la venta
             client_name = result.get("client_name")
             phone = result.get("phone")
             original_data = result.get("original_data", {})
             original_action = result.get("original_action", "venta")
-            
+
             # Verificar que no exista ya un cliente con ese teléfono
             existente = Cliente.query.filter_by(telefono=phone).first()
             if existente:
@@ -242,10 +245,10 @@ class TelegramRouter:
                     chat_id,
                     f"✅ Cliente <b>{client_name}</b> creado con teléfono {phone}. Continuando con la venta..."
                 )
-            
+
             # Continuar la operación original con el cliente ya resuelto
             TelegramRouter._resume_operation_with_cliente(chat_id, user, original_action, original_data, cliente)
-            
+
         elif action == "use_generic_client":
             # Usar cliente genérico y continuar la operación original
             original_action = result.get("original_action")
@@ -258,13 +261,13 @@ class TelegramRouter:
                 return
             telegram_service.send_message(chat_id, f"ℹ️ Usando cliente genérico (<b>{cliente.nombre}</b>). Procesando...")
             TelegramRouter._resume_operation_with_cliente(chat_id, user, original_action, original_data, cliente)
-            
+
         elif action == "retry_with_correct_name":
             # El usuario dio el nombre correcto, buscar y continuar
             correct_name = result.get("correct_name")
             original_action = result.get("original_action")
             original_data = result.get("original_data", {})
-            
+
             cliente = buscar_cliente_db(nombre=correct_name)
             if not cliente:
                 # Aún no existe: preguntar de nuevo con el nuevo nombre
@@ -282,22 +285,21 @@ class TelegramRouter:
         elif action == "set_almacen":
             almacen_name = result.get("almacen_name")
             telegram_service.send_message(chat_id, f"🏪 Almacén seleccionado: {almacen_name}. Procesando...")
-            
+
         elif action == "set_price":
             price = result.get("price")
-            item_index = result.get("item_index")
             telegram_service.send_message(chat_id, f"💲 Precio actualizado a S/ {price:.2f}")
-            
+
         elif action == "invalid_price":
             telegram_service.send_message(chat_id, f"❌ {result.get('message')}")
-            
+
         elif action == "invalid_phone":
             telegram_service.send_message(chat_id, f"❌ {result.get('message')}")
-            
+
         elif action == "edit_response":
             # Respuesta a una edición de campo
             TelegramRouter._handle_edit_response(chat_id, user, result)
-            
+
         else:
             telegram_service.send_message(chat_id, "ℹ️ No entendí tu respuesta. Intenta de nuevo o escribe /cancel.")
 
@@ -306,11 +308,11 @@ class TelegramRouter:
         """Reanuda una operación (venta, etc.) con un cliente ya resuelto."""
         args = original_data.get("args", {})
         original_text = original_data.get("original_text", "")
-        
+
         # Asegurar que el nombre del cliente en args coincida con el resuelto
         args = dict(args)
         args["cliente_nombre"] = cliente.nombre
-        
+
         if original_action == "venta":
             VentaHandler.prepare_venta(
                 chat_id, user, args, original_text,
@@ -330,7 +332,7 @@ class TelegramRouter:
         value = result.get("value")
         original_context = result.get("original_context", {})
         message_id = result.get("message_id")
-        
+
         try:
             if edit_action == "edit_cliente":
                 # Buscar el cliente real en la BD para actualizar también el ID
@@ -341,7 +343,7 @@ class TelegramRouter:
                 else:
                     original_context["cliente_nombre"] = value
                 telegram_service.send_message(chat_id, f"✅ Cliente actualizado a: <b>{original_context['cliente_nombre']}</b>")
-                
+
             elif edit_action == "edit_precio":
                 try:
                     new_price = float(value)
@@ -358,7 +360,7 @@ class TelegramRouter:
                 except ValueError:
                     telegram_service.send_message(chat_id, "❌ Precio inválido. Ingresa un número válido.")
                     return
-                    
+
             elif edit_action == "edit_gasto":
                 try:
                     gasto_monto = float(value)
@@ -370,7 +372,7 @@ class TelegramRouter:
                 except ValueError:
                     telegram_service.send_message(chat_id, "❌ Monto inválido. Ingresa un número válido.")
                     return
-                    
+
             elif edit_action == "edit_almacen":
                 from models import Almacen
                 nuevo_almacen = Almacen.query.filter(Almacen.nombre.ilike(f"%{value}%")).first()
@@ -388,7 +390,7 @@ class TelegramRouter:
                         data={"original_context": original_context, "message_id": message_id}
                     )
                     return
-            
+
             # Guardar el contexto actualizado y volver a estado de confirmación
             StateMachine.set_awaiting_confirmation(
                 user,
@@ -396,11 +398,11 @@ class TelegramRouter:
                 original_context,
                 message_id
             )
-            
+
             # Actualizar la tarjeta de confirmación con los nuevos datos
             if original_context.get("action") == "venta" and message_id:
                 TelegramRouter._refresh_venta_card(chat_id, user, original_context, message_id)
-                
+
         except Exception as e:
             logger.error(f"Error en _handle_edit_response: {e}", exc_info=True)
             telegram_service.send_message(chat_id, "❌ Error al procesar la edición. Intenta de nuevo.")
@@ -408,8 +410,7 @@ class TelegramRouter:
     @staticmethod
     def _refresh_venta_card(chat_id, user, context, message_id):
         """Reconstruye y edita la tarjeta de confirmación de venta con datos actualizados."""
-        from telegram.resolvers import resolver_almacen as _resolver_almacen
-        
+
         items = context.get("items", [])
         items_txt = "\n".join([
             f"• {item['cantidad']}x {item['producto_nombre']} (a S/ {item['precio_unitario']:.2f} c/u) = S/ {item.get('subtotal', item['cantidad'] * item['precio_unitario']):.2f}"
@@ -417,7 +418,7 @@ class TelegramRouter:
         ])
         pagos = context.get("pagos", [])
         pagos_txt = "\n".join([f"• S/ {p['monto']:.2f} ({p['metodo_pago']})" for p in pagos]) if pagos else "• Al crédito"
-        
+
         gasto_asociado = context.get("gasto_asociado")
         gasto_txt = f"\n💸 <b>Gasto Asociado:</b> S/ {gasto_asociado.get('monto')} ({gasto_asociado.get('descripcion')})" if gasto_asociado else ""
         fecha = context.get("fecha")
@@ -498,7 +499,7 @@ class TelegramRouter:
             if not context:
                 telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta operación expiró o ya fue procesada.</i>")
                 return
-            
+
             # Extraer el contexto real de la operación (si viene de la máquina de estados, tomar data)
             if "data" in context and context.get("state"):
                 operation_context = context.get("data", context)
@@ -506,7 +507,7 @@ class TelegramRouter:
                 operation_context = context
             # Deepcopy para evitar referencias circulares al serializar a JSON
             operation_context = copy.deepcopy(operation_context)
-            
+
             # Iniciar flujo de edición según el campo
             if field == "cliente":
                 StateMachine.transition_to(
@@ -565,18 +566,18 @@ class TelegramRouter:
             if not context:
                 telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta operación expiró o ya fue procesada.</i>")
                 return
-            
+
             # Si el contexto viene de la máquina de estados (tiene "state" y "data"), desenvolverlo
             if "state" in context and "data" in context:
                 context = context.get("data", context)
-            
+
             if context.get("status") == "processing":
                 return # Ignorar doble click
 
             context["status"] = "processing"
             user.telegram_context = context
             db.session.commit()
-            
+
             # Cambiar a estado de carga para dar feedback visual
             telegram_service.edit_message(chat_id, message_id, "⏳ <i>Procesando operación... Por favor espera.</i>")
 

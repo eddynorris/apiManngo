@@ -1,15 +1,12 @@
-import os
 import logging
 from decimal import Decimal
-from datetime import datetime, timezone
-from sqlalchemy import func
 
 from extensions import db
-from models import Users, Cliente, PresentacionProducto, Inventario, Lote, Venta, VentaDetalle, Pago, Gasto, Movimiento, Almacen, Receta, ComponenteReceta
+from models import Almacen, Cliente, Inventario
 from services.telegram_service import telegram_service
 from services.venta_service import VentaService
 from telegram.resolvers import buscar_cliente_db
-from telegram.state_machine import StateMachine, ConversationState
+from telegram.state_machine import StateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +80,9 @@ class VentaHandler:
                 "original_text": original_text,
                 "args": args
             }
-            
+
             StateMachine.ask_for_client_creation(user, cliente_nombre, "venta", venta_data)
-            
+
             msg = (
                 f"❓ <b>Cliente no encontrado</b>\n\n"
                 f"No encontré un cliente llamado '<b>{cliente_nombre}</b>'.\n\n"
@@ -264,7 +261,7 @@ class VentaHandler:
         almacen_id = context["almacen_id"]
         almacen_nombre = context["almacen_nombre"]
         estado = context.get("estado", "completado")
-        
+
         fecha_str = context.get("fecha")
         from utils.date_parser import parse_telegram_date
         fecha_transaccion = parse_telegram_date(fecha_str)
@@ -301,7 +298,7 @@ class VentaHandler:
 
         total_venta = Decimal(str(context["total"]))
         items_detail = "\n".join([f"  • {item['cantidad']}x {item['producto_nombre']} (a S/ {item['precio_unitario']:.2f} c/u) = S/ {item['subtotal']:.2f}" for item in context.get("items", [])])
-        
+
         if estado == 'pedido':
             telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Pedido registrado con éxito!</b>\n\n<b>Pedido ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Productos:</b>\n{items_detail}\n\n<b>Total Estimado:</b> S/ {total_venta:.2f}\n<b>Pagado/Abono:</b> S/ {monto_pago:.2f}")
         else:
@@ -363,8 +360,8 @@ class VentaHandler:
         db.session.commit()
 
         telegram_service.edit_message(
-            chat_id, 
-            message_id, 
+            chat_id,
+            message_id,
             f"✅ <b>¡Cliente registrado con éxito!</b>\n\n"
             f"<b>ID:</b> #{nuevo_cliente.id}\n"
             f"<b>Nombre:</b> {context['nombre']}\n"
@@ -385,7 +382,7 @@ class VentaHandler:
         enriched_ventas = []
         warnings = []
         total_lote = Decimal("0")
-        
+
         # Almacén por defecto
         user_almacen_id, user_almacen_nombre, is_almacen_explicit = resolver_almacen_fn(user, original_text)
 
@@ -399,7 +396,7 @@ class VentaHandler:
             cliente = buscar_cliente_db(nombre=cliente_nombre)
             if cliente and cliente.nombre.lower() != cliente_nombre.lower():
                 warnings.append(f"No se encontró cliente exacto '{cliente_nombre}', se asumió '{cliente.nombre}' para lote.")
-            
+
             # Resolver Almacén
             almacen_id = user_almacen_id
             almacen_nombre = user_almacen_nombre
@@ -512,7 +509,7 @@ class VentaHandler:
     def execute_ventas_lote(chat_id, user, context, message_id):
         ventas_list = context.get("ventas", [])
         fecha_str = context.get("fecha")
-        
+
         # Resolver fecha del lote
         from utils.date_parser import parse_telegram_date
         fecha_transaccion = parse_telegram_date(fecha_str)

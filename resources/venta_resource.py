@@ -1,25 +1,45 @@
-from flask_restful import Resource, reqparse
-from flask_jwt_extended import jwt_required, get_jwt
+import io
+import logging
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+
+import pandas as pd
 from flask import current_app, request, send_file
-from models import Venta, VentaDetalle, Inventario, Cliente, PresentacionProducto, Almacen, Movimiento, Lote, Users, Gasto, Pago
-from schemas import venta_schema, ventas_schema, clientes_schema, almacenes_schema, presentacion_schema
+from flask_jwt_extended import get_jwt, jwt_required
+from flask_restful import Resource, reqparse
+from sqlalchemy import asc, desc, orm
+from werkzeug.exceptions import HTTPException
+
+from common import (
+    MAX_ITEMS_PER_PAGE,
+    handle_db_errors,
+    obtener_payload_normalizado,
+    parse_iso_datetime,
+)
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, parse_iso_datetime, obtener_payload_normalizado
-from utils.file_handlers import get_presigned_url
-from services.pago_service import PagoService
-from services.venta_service import VentaService, StockInsuficienteError
+from models import (
+    Almacen,
+    Cliente,
+    Inventario,
+    PresentacionProducto,
+    Users,
+    Venta,
+    VentaDetalle,
+)
+from schemas import (
+    almacenes_schema,
+    clientes_schema,
+    presentacion_schema,
+    venta_schema,
+    ventas_schema,
+)
 from services.authorization import autorizar_venta, normalizar_lista_ids
 from services.storage_cleanup_service import (
     commit_with_storage_finalization,
     rollback_and_compensate,
 )
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
-import logging
-from sqlalchemy import asc, desc, orm
-from werkzeug.exceptions import HTTPException
-import pandas as pd
-import io
+from services.venta_service import StockInsuficienteError, VentaService
+from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +78,18 @@ class VentaResource(Resource):
         if venta_id:
             venta = Venta.query.options(*_opciones_carga_ventas()).filter_by(id=venta_id).first_or_404()
             autorizar_venta(current_user_id, venta)
-            
+
             result = venta_schema.dump(venta)
-            
+
             if 'detalles' in result and result['detalles']:
                 for detalle in result['detalles']:
                     if 'presentacion' in detalle and detalle['presentacion'] and 'url_foto' in detalle['presentacion']:
                         s3_key = detalle['presentacion']['url_foto']
                         if s3_key:
                             detalle['presentacion']['url_foto'] = get_presigned_url(s3_key)
-            
+
             return result, 200
-        
+
         filters = {
             "cliente_id": request.args.get('cliente_id'),
             "almacen_id": request.args.get('almacen_id'),
@@ -86,12 +106,12 @@ class VentaResource(Resource):
             query = query.filter_by(vendedor_id=current_user_id)
         elif filters["vendedor_id"]:
             query = query.filter_by(vendedor_id=filters["vendedor_id"])
-        
+
         if filters["cliente_id"]:
             query = query.filter_by(cliente_id=filters["cliente_id"])
         if filters["almacen_id"]:
             query = query.filter_by(almacen_id=filters["almacen_id"])
-        
+
         if filters["estado_pago"]:
             statuses = [status.strip() for status in filters["estado_pago"].split(',') if status.strip()]
             if statuses:
@@ -104,7 +124,7 @@ class VentaResource(Resource):
                 query = query.filter(Venta.fecha.between(fecha_inicio, fecha_fin))
             except ValueError:
                 return {"error": "Formato de fecha inválido. Usa ISO 8601"}, 400
-        
+
         sort_by = request.args.get('sort_by', 'fecha')
         sort_order = request.args.get('sort_order', 'desc').lower()
 
@@ -116,7 +136,7 @@ class VentaResource(Resource):
 
         if sort_by == 'cliente_nombre':
             query = query.join(Cliente, Venta.cliente_id == Cliente.id)
-        
+
         query = query.order_by(order_func(column_to_sort))
 
         if get_all:
@@ -140,7 +160,7 @@ class VentaResource(Resource):
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 10, type=int), MAX_ITEMS_PER_PAGE)
         ventas = query.paginate(page=page, per_page=per_page)
-        
+
         return {
             "data": ventas_schema.dump(ventas.items),
             "pagination": {
@@ -346,17 +366,17 @@ class VentaFormDataResource(Resource):
             for inventario in inventario_disponible:
                 presentacion = inventario.presentacion
                 pres_id = presentacion.id
-                
+
                 if pres_id not in presentaciones_agrupadas:
                     dumped_presentacion = presentacion_schema.dump(presentacion)
-                    
+
                     # Generar URL pre-firmada para la foto
                     if presentacion.url_foto:
                         dumped_presentacion['url_foto'] = get_presigned_url(presentacion.url_foto)
-                    
+
                     dumped_presentacion['stock_disponible'] = 0.0
                     presentaciones_agrupadas[pres_id] = dumped_presentacion
-                
+
                 # Sumar el stock de este lote al total de la presentación
                 presentaciones_agrupadas[pres_id]['stock_disponible'] += float(inventario.cantidad)
 
@@ -476,7 +496,7 @@ class VentaExportResource(Resource):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, sheet_name='Ventas')
-            
+
             output.seek(0)
 
             return send_file(
@@ -509,7 +529,7 @@ class VentaFilterDataResource(Resource):
                 Cliente.id,
                 Cliente.nombre
             ).order_by(Cliente.nombre)
-            
+
             clientes = [{
                 'id': cliente.id,
                 'nombre': cliente.nombre
@@ -527,7 +547,7 @@ class VentaFilterDataResource(Resource):
                     Almacen.id,
                     Almacen.nombre
                 ).filter(Almacen.id == user_almacen_id).order_by(Almacen.nombre)
-            
+
             almacenes = [{
                 'id': almacen.id,
                 'nombre': almacen.nombre
@@ -551,7 +571,7 @@ class VentaFilterDataResource(Resource):
                     Users.rol.in_(['usuario', 'gerente']),
                     Users.almacen_id == user_almacen_id
                 ).order_by(Users.username)
-            
+
             vendedores = [{
                 'id': vendedor.id,
                 'username': vendedor.username
