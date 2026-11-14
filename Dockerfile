@@ -77,6 +77,7 @@ CMD exec gunicorn \
     --threads 2 \
     --timeout "${GUNICORN_TIMEOUT}" \
     --graceful-timeout 30 \
+    --no-control-socket \
     --access-logfile - \
     --logger-class utils.gunicorn_logging.LoggerSinSecretos \
     --error-logfile - \
