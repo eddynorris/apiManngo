@@ -206,28 +206,29 @@ class GeminiService:
                 },
                 {
                     "name": "solicitar_guia_remision",
-                    "description": "Prepara un borrador de guia de remision remitente (GRE) para traslados o envios de productos.",
+                    "description": "Prepara la guia de remision electronica (GRE SUNAT) de un traslado de mercaderia desde la planta u otro almacen hacia un almacen destino, o de una venta ya registrada.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
+                            "venta_id": {"type": "INTEGER", "description": "ID de la venta registrada si la guia es de una venta (ej: 'guia de la venta 123'). Si no, null."},
+                            "almacen_origen": {"type": "STRING", "description": "Almacen de partida (ej: 'planta'). Si no se menciona, null (se usa la planta)."},
+                            "almacen_destino": {"type": "STRING", "description": "Almacen o ciudad de llegada (ej: 'Andahuaylas', 'Abancay', 'Lima')."},
                             "items": {
                                 "type": "ARRAY",
-                                "description": "Lista de productos a trasladar.",
+                                "description": "Productos y cantidades en unidades (sacos, bolsas).",
                                 "items": {
                                     "type": "OBJECT",
                                     "properties": {
-                                        "producto_nombre": {"type": "STRING", "description": "Nombre de la presentacion o producto."},
+                                        "producto_nombre": {"type": "STRING", "description": "Presentacion (ej: 'saco de 20kg', 'saco de 5kg', 'bolsa de 10kg')."},
                                         "cantidad": {"type": "NUMBER", "description": "Cantidad de unidades."}
                                     },
                                     "required": ["producto_nombre", "cantidad"]
                                 }
                             },
-                            "destinatario_documento": {"type": "STRING", "description": "RUC (11 digitos) o DNI (8 digitos) del cliente o destinatario."},
-                            "motivo_traslado": {"type": "STRING", "description": "Motivo del traslado. Por defecto 'venta' si no se especifica. Opciones comunes: 'venta', 'traslado', 'compra', 'devolucion'."},
-                            "placa_vehiculo": {"type": "STRING", "description": "Placa del vehiculo de transporte (ej: ABC-123). Si no se menciona, null."},
-                            "conductor_documento": {"type": "STRING", "description": "DNI del conductor (8 digitos). Si no se menciona, null."}
-                        },
-                        "required": ["items", "destinatario_documento"]
+                            "placa": {"type": "STRING", "description": "Placa del vehiculo si se menciona; si no, null (se usa el predeterminado)."},
+                            "conductor": {"type": "STRING", "description": "Nombre o DNI del conductor si se menciona; si no, null (se usa el predeterminado)."},
+                            "fecha_inicio": {"type": "STRING", "description": "Fecha de inicio del traslado YYYY-MM-DD si se menciona (ej: 'manana'); si no, null (hoy)."}
+                        }
                     }
                 },
                 {
@@ -370,7 +371,7 @@ Mapeo de Herramientas:
 4. registrar_deposito (Depósito de caja al banco): "depositados 500 soles al banco ref 74829"
 5. registrar_produccion (Producción/Ensacado): "hice 60 sacos de 20kg y 100 de 5kg"
 6. registrar_compra_insumos (Compra/Ingreso de insumos): "compre 500 sacos de 20kg y 30 hilos"
-7. solicitar_guia_remision (Guía de remisión/traslado SUNAT): "guia de 20 sacos de 20kg al RUC 20601234567"
+7. solicitar_guia_remision (Guía de remisión SUNAT): "guia de 160 sacos de 20 y 60 de 5 a Andahuaylas", "guia de la venta 123"
 8. registrar_cliente (Crear o registrar cliente): "crear cliente Juan Perez celular 987654321"
 9. registrar_ventas_lote (Registrar múltiples ventas dictadas juntas): "Ventas 24/06/2026: Cliente A 4 sacos de 20kg, Cliente B 1 saco de 20kg"
 10. registrar_transferencia (Traslado físico de inventario entre almacenes): "traslado de planta a abancay 100 sacos de 20kg"

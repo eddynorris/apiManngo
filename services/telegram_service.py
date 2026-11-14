@@ -37,6 +37,30 @@ class TelegramService:
             logger.error(f"Error al enviar mensaje a Telegram: {e}")
             return None
 
+    def send_document(self, chat_id, filename, content: bytes, caption=None):
+        """Envía un archivo (p. ej. el PDF de una guía) como documento de Telegram."""
+        if not self.token:
+            logger.error("No se puede enviar documento: TELEGRAM_BOT_TOKEN no configurada.")
+            return None
+
+        url = f"{self.api_url}/sendDocument"
+        data = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = caption
+        try:
+            response = requests.post(
+                url,
+                data=data,
+                files={"document": (filename, content, "application/pdf")},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            # No registrar la URL: contiene el token del bot.
+            logger.error(f"Error al enviar documento a Telegram: {type(e).__name__}")
+            return None
+
     def edit_message(self, chat_id, message_id, text, reply_markup=None):
         """
         Edita el texto de un mensaje existente.

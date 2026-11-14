@@ -43,9 +43,12 @@ def _cantidad_positiva_finita(valor):
 class TransferenciaService:
     """Encapsula toda la lógica de negocio para las transferencias de inventario."""
 
-    def __init__(self, data):
+    def __init__(self, data, claims=None):
         self.data = data
-        self.claims = get_jwt()
+        # ``claims`` permite usar el servicio fuera de una petición HTTP (bot de
+        # Telegram); la autorización real se hace igual con autorizar_almacen().
+        self.claims = claims if claims is not None else get_jwt()
+        self.movimiento_ids = []
         self.usuario_id = self.claims.get('sub')
         self.id_operacion = str(uuid.uuid4())[:8]
         self.fecha_operacion = datetime.now(UTC)
@@ -253,6 +256,8 @@ class TransferenciaService:
                 })
 
         db.session.add_all(movimientos_a_crear)
+        db.session.flush()
+        self.movimiento_ids = [m.id for m in movimientos_a_crear]
         return transferencias_realizadas_info
 
 

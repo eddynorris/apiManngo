@@ -100,7 +100,8 @@ class TransferenciaHandler:
                 [
                     {"text": "✅ Confirmar Traslado", "callback_data": "confirm:transferencia"},
                     {"text": "❌ Cancelar", "callback_data": "cancel"}
-                ]
+                ],
+                [{"text": "📄 Traslado + Guía SUNAT", "callback_data": "guia:desde_transferencia"}]
             ]
         }
         telegram_service.send_message(chat_id, card, reply_markup)
@@ -120,14 +121,12 @@ class TransferenciaHandler:
             ]
         }
 
-        from unittest.mock import patch
-
         from resources.transferencia_resource import TransferenciaService
 
-        with patch('resources.transferencia_resource.get_jwt', return_value={"sub": user.id, "rol": user.rol, "almacen_id": user.almacen_id}):
-            service = TransferenciaService(payload)
-            result = service.ejecutar_transferencia()
-            db.session.commit()
+        claims = {"sub": user.id, "rol": user.rol, "almacen_id": user.almacen_id}
+        service = TransferenciaService(payload, claims=claims)
+        result = service.ejecutar_transferencia()
+        db.session.commit()
 
         detalles_str = "\n".join([f"• {t['cantidad']}x {t.get('presentacion_nombre', 'Producto')}" for t in transferencias_raw])
 
