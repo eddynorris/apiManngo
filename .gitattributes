@@ -1,0 +1,17 @@
+# El índice ya está en LF; se fija LF también en la copia de trabajo (Windows/WSL/Docker).
+* text=auto eol=lf
+
+# Scripts de Windows
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.zip binary
