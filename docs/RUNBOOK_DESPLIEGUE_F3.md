@@ -42,6 +42,12 @@ docker run --rm -e PGPASSWORD -v ~/backups-manngo:/backup postgres:17-alpine \
   --file=/backup/manngo_$(date +%Y%m%d_%H%M).dump
 ls -lh ~/backups-manngo
 ```
+> Lecciones de la ejecución real (14/11/2026):
+> - El archivo que escribe `pg_dump` dentro del contenedor queda con propietario `root`. Recupéralo con `docker run --rm -v ~/backups-manngo:/b postgres:17-alpine chown $(id -u):$(id -g) /b/<archivo>` y luego `chmod 600`.
+> - Un dump de `pg_dump` 17 no lo lee el `pg_restore` 15. Restaura con el cliente 17 contra el servidor local: `docker run --rm --network container:manngo-restore -e PGPASSWORD=solo-local -v ~/backups-manngo:/b:ro postgres:17-alpine pg_restore -h 127.0.0.1 -U postgres -d postgres --no-owner --no-privileges /b/<archivo>`.
+> - El pooler de Supabase **ignora `PGOPTIONS`**: `default_transaction_read_only` no se aplica. Para consultar producción en solo lectura, envuelve la consulta: `psql ... -c "BEGIN READ ONLY" -f consulta.sql -c "ROLLBACK"`.
+> - Con la CLI de Railway enlazada se puede hacer todo sin copiar secretos: `railway run --service apiManngo -- <script>` inyecta las variables.
+
 **Prueba de restauración** en un PostgreSQL local desechable (nunca en producción):
 ```bash
 docker run -d --rm --name manngo-restore -e POSTGRES_PASSWORD=solo-local -p 127.0.0.1:55433:5432 postgres:17-alpine
