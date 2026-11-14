@@ -24,6 +24,16 @@ from schemas import user_schema, users_schema
 # Configurar logging
 logger = logging.getLogger(__name__)
 
+CAMPOS_TEXTO = ('username', 'password', 'rol')
+
+
+def _error_campos_no_texto(data: dict[str, Any]) -> tuple[dict[str, Any], int] | None:
+    """400 si username/password/rol vienen con un tipo distinto de texto (p. ej. lista o número)."""
+    invalidos = [campo for campo in CAMPOS_TEXTO if campo in data and not isinstance(data[campo], str)]
+    if invalidos:
+        return {"error": f"Los campos {', '.join(invalidos)} deben ser texto"}, 400
+    return None
+
 class UserResource(Resource):
     @jwt_required()
     @rol_requerido('admin')  # Solo admin puede listar usuarios
@@ -81,8 +91,10 @@ class UserResource(Resource):
                 return {"error": "Se esperaba contenido JSON"}, 400
 
             data = request.get_json()
-            if not data:
+            if not data or not isinstance(data, dict):
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
+            if error_tipos := _error_campos_no_texto(data):
+                return error_tipos
 
             # Validaciones preliminares
             if not data.get('username') or len(data.get('username', '')) < config.MIN_USERNAME_LENGTH:
@@ -154,8 +166,10 @@ class UserResource(Resource):
                 return {"error": "Se esperaba contenido JSON"}, 400
 
             data = request.get_json()
-            if not data:
+            if not data or not isinstance(data, dict):
                 return {"error": "Datos JSON vacíos o inválidos"}, 400
+            if error_tipos := _error_campos_no_texto(data):
+                return error_tipos
 
             # Si se cambia el username, verificar que no exista (case insensitive)
             if 'username' in data and data['username'] != usuario.username:
