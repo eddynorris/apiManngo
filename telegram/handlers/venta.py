@@ -292,7 +292,7 @@ class VentaHandler:
             monto_pago=monto_pago,
             metodo_pago=metodo_pago,
             monto_gasto=monto_gasto,
-            permitir_stock_negativo=True
+            permitir_stock_negativo=False  # A24: misma política que la API y las ventas por lote
         )
         db.session.commit()
 
