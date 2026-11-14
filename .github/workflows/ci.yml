@@ -43,3 +43,53 @@ jobs:
         # El runner fuerza FLASK_ENV=testing y SQLite en memoria, limpia credenciales y bloquea la red.
         # Las pruebas de integración PostgreSQL/Redis se omiten salvo --allow-local-postgres/--allow-local-redis.
         run: python scripts/run_tests_offline.py --no-bytecode --no-cache -q
+
+  integration:
+    # Suite completa contra PostgreSQL y Redis desechables del runner (locks de pagos A11,
+    # rate limit compartido A18 y RLS A10 en local). Credenciales sintéticas, solo loopback.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci-test-only
+          POSTGRES_DB: manngo_test_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d manngo_test_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      MANNGO_RUN_PG_TESTS: '1'
+      MANNGO_ALLOW_LOCAL_POSTGRES_TESTS: '1'
+      MANNGO_LOCAL_POSTGRES_URL: postgresql://postgres:ci-test-only@127.0.0.1:5432/manngo_test_ci
+      DATABASE_URL: postgresql://postgres:ci-test-only@127.0.0.1:5432/manngo_test_ci
+      MANNGO_ALLOW_LOCAL_REDIS_TESTS: '1'
+      MANNGO_LOCAL_REDIS_URL: redis://127.0.0.1:6379/0
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements.lock
+          pip install pytest==9.1.1
+
+      - name: Tests con PostgreSQL y Redis
+        run: python scripts/run_tests_offline.py --allow-local-postgres --allow-local-redis --no-bytecode --no-cache -q
