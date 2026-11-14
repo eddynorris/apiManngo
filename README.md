@@ -1,89 +1,49 @@
 # API Manngo
 
-API REST construida con Flask que da soporte al sistema Manngo: gestión de ventas, inventario, producción, compras, pagos, clientes y proveedores de un negocio. Incluye autenticación JWT, subida de archivos a AWS S3, webhook de Telegram, chat asistido con Gemini, integración con SUNAT y sincronización con Supabase.
+API REST en Flask para Manngo, empresa de producción y venta de carbón vegetal y briquetas. Cubre
+inventario multialmacén con lotes, producción por receta, pedidos y ventas, pagos y depósitos, gastos y
+compras de insumos, reportes, proyección de recompra de clientes, un bot de Telegram con IA (Gemini) y la
+preparación de guías de remisión electrónicas de SUNAT.
 
-## Características principales
+La referencia técnica para desarrolladores y agentes es **[AGENTS.md](AGENTS.md)** (stack, estructura,
+comandos, convenciones y zonas sensibles). Los endpoints están documentados en `API_OVERVIEW.md` y
+`API_Endpoints_Documentation.md` (puede haber diferencias con el código: manda `resources/__init__.py`).
 
-- Autenticación y registro de usuarios con JWT (`/auth`, `/registrar`).
-- CRUD de productos, presentaciones, clientes, proveedores, almacenes, lotes y mermas.
-- Ventas con detalle, movimientos de inventario y pedidos (incluida su conversión).
-- Gestión de gastos y pagos (incluidos depósitos bancarios y comprobantes).
-- Módulo de producción: recetas, tipos y reportes de producción.
-- Reportes financieros y dashboard.
-- Webhook de Telegram (ruta protegida por token) y bot de ventas por voz.
-- Chat asistido con IA (Google Gemini).
-- Integración con SUNAT.
-- Sincronización con Supabase y almacenamiento en AWS S3.
-- Rate limiting (Redis opcional), CORS restringido por entorno, cabeceras de seguridad (Talisman), compresión gzip y validación de configuración al arranque.
-- Documentación Swagger/OpenAPI integrada.
-- Ci en GitHub Actions y Dockerfile de producción con gunicorn.
+## Tecnologías
+- Python 3.12, Flask 3.1, Flask-RESTful, SQLAlchemy 2, Flask-Migrate (Alembic), Marshmallow
+- PostgreSQL en Supabase; Supabase Storage para comprobantes y fotos
+- JWT, Flask-Limiter con Redis (obligatorio en producción), Talisman, CORS, Compress, Swagger (Flasgger)
+- Google Gemini (`google-generativeai`), Telegram Bot API, SUNAT GRE (lxml/signxml)
+- gunicorn + Docker; pytest y ruff
 
-## Tecnologías usadas
+## Puesta en marcha
+```bash
+python3 -m venv .venv && . .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install --require-hashes -r requirements.lock
+pip install pytest
+cp .env.example .env                                  # completar DATABASE_URL y JWT_SECRET_KEY (>= 32 caracteres)
+python app.py                                         # http://localhost:5000, /health
+```
 
-- Python 3.11
-- Flask 2.3 y ecosistema: Flask-RESTful, Flask-SQLAlchemy, Flask-JWT-Extended, Flask-Migrate, Flask-Limiter, Flask-Talisman, Flask-CORS, Flask-Compress
-- PostgreSQL (psycopg2) / SQLite en desarrollo, con Alembic
-- Supabase, AWS S3 (boto3), Google Generative AI
-- Redis (respaldo del rate limiting)
-- gunicorn (producción) + Docker
-- pytest (tests), ruff (lint)
+Tests (sin red ni credenciales reales):
+```bash
+python scripts/run_tests_offline.py -q
+```
 
-## Requisitos previos
+Docker (producción):
+```bash
+docker build -t api-manngo .
+docker run -p 8080:8080 --env-file .env.production api-manngo
+```
+En producción hace falta un Redis (`LIMITER_STORAGE_URI=redis://...`; en Railway `${{Redis.REDIS_URL}}`).
+Las migraciones (`flask db upgrade`) son un paso manual del operador, tras un respaldo; ver
+`docs/PREPARACION_DESPLIEGUE.md`.
 
-- Python 3.11+
-- PostgreSQL (o SQLite para desarrollo local)
-- Credenciales de Supabase y/o AWS S3 (según módulos usados)
-- Tokens de Telegram y Google API (para webhook y chat)
-
-## Cómo ejecutar
-
-1. Crear un entorno virtual e instalar las dependencias:
-
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-
-2. Copiar `.env.example` a `.env` y completar los valores (`DATABASE_URL`, `JWT_SECRET_KEY`, `ALLOWED_ORIGINS`, etc.).
-
-3. Aplicar migraciones y levantar el servidor de desarrollo:
-
-   ```bash
-   flask db upgrade
-   flask run
-   ```
-
-   O directamente:
-
-   ```bash
-   python app.py
-   ```
-
-4. Ejecutar los tests:
-
-   ```bash
-   pytest
-   ```
-
-Con Docker (producción):
-
-   ```bash
-   docker build -t api-manngo .
-   docker run -p 8080:8080 api-manngo
-   ```
-
-## Estructura del proyecto
-
-- `app.py` — punto de entrada y configuración de la aplicación.
-- `config.py` / `extensions.py` — configuración y extensiones de Flask.
-- `models.py` / `schemas.py` — modelos SQLAlchemy y esquemas Marshmallow.
-- `resources/` — endpoints (recursos Flask-RESTful) organizados por dominio.
-- `services/` — lógica de negocio (ventas, stock, producción, pagos, Telegram, Gemini, SUNAT).
-- `telegram/` — router y resolvers del bot de Telegram.
-- `scripts/` — comandos CLI (por ejemplo, `sync_supabase`).
-- `migrations/` — migraciones de base de datos (Alembic).
-- `database/` — scripts SQL de inicialización y datos.
-- `docs/` — guías adicionales (Railway, migración S3/Supabase, depósitos bancarios, etc.).
-
-La documentación de la API detallada se encuentra en `API_Endpoints_Documentation.md` y `API_OVERVIEW.md`.
+## Estructura
+- `app.py`: arranque y configuración.
+- `extensions.py`, `config.py`, `common.py`: extensiones, constantes y decoradores.
+- `models.py`, `schemas.py`: modelos SQLAlchemy y schemas Marshmallow.
+- `resources/`: endpoints por dominio. `services/`: lógica de negocio e integraciones.
+- `telegram/`: bot conversacional. `utils/`: fechas, almacenamiento y logging.
+- `migrations/`: Alembic. `scripts/`: runner de tests offline, preflight de despliegue, carga histórica (dry-run) y sync con Supabase.
+- `tests/`: suite pytest. `docs/`: guías y notas de la auditoría.
