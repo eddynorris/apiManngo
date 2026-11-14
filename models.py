@@ -52,6 +52,8 @@ class PresentacionProducto(db.Model):
     precio_venta = db.Column(db.Numeric(12, 2), nullable=False)  # Precio al público
     activo = db.Column(db.Boolean, default=True)
     url_foto = db.Column(db.String(255))
+    # Texto de la línea en la guía de remisión (p. ej. "SACOS DE CARBÓN VEGETAL DE 20 KILOS").
+    descripcion_guia = db.Column(db.String(150), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
@@ -100,12 +102,24 @@ class Almacen(db.Model):
     direccion = db.Column(db.Text)
     ciudad = db.Column(db.String(100))
     es_planta = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
+    # Guía de remisión (SUNAT): ubigeo INEI de 6 dígitos y código de establecimiento
+    # anexo del RUC (4 dígitos). Sin código, los traslados hacia este almacén no
+    # pueden ir con motivo 04 y se emiten como venta a ``cliente_guia``.
+    ubigeo = db.Column(db.String(6), nullable=True)
+    codigo_establecimiento_sunat = db.Column(db.String(4), nullable=True)
+    cliente_guia_id = db.Column(
+        db.Integer,
+        db.ForeignKey('clientes.id', ondelete='SET NULL', use_alter=True,
+                      name='fk_almacenes_cliente_guia'),
+        nullable=True,
+    )
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
 
     # Relaciones existentes (se mantienen)
     inventario = db.relationship('Inventario', backref='almacen', lazy=True)
     ventas = db.relationship('Venta', backref='almacen', lazy=True)
+    cliente_guia = db.relationship('Cliente', foreign_keys=[cliente_guia_id])
 
     def __repr__(self):
         return f'<Almacen {self.nombre}>'
@@ -244,9 +258,12 @@ class Cliente(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(255), nullable=False)
     telefono = db.Column(db.String(20))
-    ruc = db.Column(db.String(20))
+    ruc = db.Column(db.String(20))  # Número de documento (RUC, DNI, CE...) según tipo_documento
+    # Catálogo 06 SUNAT: '1' DNI, '6' RUC, '4' carné de extranjería, '7' pasaporte.
+    tipo_documento = db.Column(db.String(1), nullable=True)
     direccion = db.Column(db.Text)
     ciudad = db.Column(db.String(100))
+    ubigeo = db.Column(db.String(6), nullable=True)
     frecuencia_compra_dias = db.Column(db.Integer)
     ultima_fecha_compra = db.Column(db.DateTime(timezone=True))
     proxima_compra_manual = db.Column(db.Date, nullable=True)  # Fecha manual de próxima compra
@@ -384,6 +401,9 @@ class Movimiento(db.Model):
     cantidad_kg_procesados = db.Column(db.Numeric(10, 2))  # Kg de materia prima utilizados
     eficiencia_conversion = db.Column(db.Numeric(5, 2))  # % de eficiencia en la conversión
     turno_produccion = db.Column(db.String(10))  # "mañana", "tarde", "noche"
+    guia_remision_id = db.Column(
+        db.Integer, db.ForeignKey('guias_remision.id', ondelete='SET NULL'), nullable=True, index=True
+    )
 
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
@@ -543,3 +563,98 @@ class VistaClienteProyeccion(db.Model):
     promedio_compra = db.Column(db.Numeric(12, 2))
     proxima_compra_manual = db.Column(db.Date)
     ultimo_contacto = db.Column(db.DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------------------
+# Guía de Remisión Electrónica (GRE remitente, SUNAT)
+# ---------------------------------------------------------------------------
+
+class Vehiculo(db.Model):
+    __tablename__ = 'vehiculos'
+    id = db.Column(db.Integer, primary_key=True)
+    placa = db.Column(db.String(8), nullable=False, unique=True)  # Sin guiones, mayúsculas
+    descripcion = db.Column(db.String(100))
+    predeterminado = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    activo = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
+
+
+class Conductor(db.Model):
+    __tablename__ = 'conductores'
+    id = db.Column(db.Integer, primary_key=True)
+    tipo_documento = db.Column(db.String(1), nullable=False, default='1', server_default='1')
+    numero_documento = db.Column(db.String(15), nullable=False, unique=True)
+    # Nullable a propósito: la guía no se emite sin ellos (guia_service.faltantes).
+    nombres = db.Column(db.String(100), nullable=True)
+    apellidos = db.Column(db.String(100), nullable=True)
+    licencia = db.Column(db.String(20), nullable=True)
+    predeterminado = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    activo = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
+
+
+class SerieGre(db.Model):
+    """Correlativo por serie. Se bloquea la fila (FOR UPDATE) al reservar un número."""
+    __tablename__ = 'series_gre'
+    serie = db.Column(db.String(4), primary_key=True)
+    ultimo_numero = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+
+    __table_args__ = (
+        CheckConstraint('ultimo_numero >= 0 AND ultimo_numero <= 99999999', name='ck_series_gre_rango'),
+    )
+
+
+class GuiaRemision(db.Model):
+    __tablename__ = 'guias_remision'
+    id = db.Column(db.Integer, primary_key=True)
+    serie = db.Column(db.String(4), nullable=False)
+    numero = db.Column(db.Integer, nullable=True)  # Se asigna al emitir
+    estado = db.Column(db.String(20), nullable=False)
+    motivo = db.Column(db.String(2), nullable=False)  # Catálogo 20: '01' venta, '04' traslado
+    origen_tipo = db.Column(db.String(10), nullable=False)  # 'venta' | 'traslado'
+
+    venta_id = db.Column(db.Integer, db.ForeignKey('ventas.id', ondelete='SET NULL'), nullable=True, index=True)
+    almacen_origen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='RESTRICT'), nullable=False)
+    almacen_destino_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='RESTRICT'), nullable=True)
+    destinatario_cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='RESTRICT'), nullable=True)
+    vehiculo_id = db.Column(db.Integer, db.ForeignKey('vehiculos.id', ondelete='RESTRICT'), nullable=False)
+    conductor_id = db.Column(db.Integer, db.ForeignKey('conductores.id', ondelete='RESTRICT'), nullable=False)
+    fecha_inicio_traslado = db.Column(db.Date, nullable=False)
+
+    datos = db.Column(db.JSON, nullable=False)  # Foto exacta de lo firmado (para consultar el CDR)
+    xml_firmado = db.Column(db.Text)
+    hash_zip = db.Column(db.String(64))
+    ticket = db.Column(db.String(64))
+    cdr_codigo = db.Column(db.String(10))
+    cdr_mensaje = db.Column(db.Text)
+    cdr_observaciones = db.Column(db.JSON)
+    cdr_xml = db.Column(db.Text)
+    qr_url = db.Column(db.Text)
+
+    idempotency_key = db.Column(db.String(64), nullable=False, unique=True)
+    creado_por_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    chat_id = db.Column(db.BigInteger, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
+
+    venta = db.relationship('Venta')
+    almacen_origen = db.relationship('Almacen', foreign_keys=[almacen_origen_id])
+    almacen_destino = db.relationship('Almacen', foreign_keys=[almacen_destino_id])
+    destinatario = db.relationship('Cliente', foreign_keys=[destinatario_cliente_id])
+    vehiculo = db.relationship('Vehiculo')
+    conductor = db.relationship('Conductor')
+    creado_por = db.relationship('Users')
+    movimientos = db.relationship('Movimiento', backref='guia_remision', lazy=True)
+
+    __table_args__ = (
+        UniqueConstraint('serie', 'numero', name='uq_guias_remision_serie_numero'),
+        CheckConstraint("motivo IN ('01', '04')", name='ck_guias_remision_motivo'),
+        CheckConstraint("origen_tipo IN ('venta', 'traslado')", name='ck_guias_remision_origen'),
+        CheckConstraint(
+            "estado IN ('enviada', 'en_proceso', 'aceptada', 'rechazada', 'incierta', 'error')",
+            name='ck_guias_remision_estado',
+        ),
+        Index('idx_guias_remision_estado', 'estado'),
+    )

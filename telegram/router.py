@@ -1,16 +1,19 @@
 import copy
 import logging
+import re
 import uuid
+from datetime import date, timedelta
 
 from extensions import db
-from models import Almacen, Cliente, Users
+from models import Almacen, Cliente, Conductor, GuiaRemision, Users, Vehiculo
+from services import guia_service
 from services.authorization import autorizar_almacen
 from services.gemini_service import gemini_service
 from services.money import monto_decimal_positivo
 from services.telegram_service import telegram_service
 from telegram.context import clear_user_context, update_user_history
 from telegram.handlers.consulta import ConsultaHandler
-from telegram.handlers.guia_sunat import GuiaSunatHandler
+from telegram.handlers.guia_sunat import GuiaSunatHandler, enviar_tarjeta_guia
 from telegram.handlers.pago import PagoHandler
 from telegram.handlers.produccion import ProduccionHandler
 from telegram.handlers.transferencia import TransferenciaHandler
@@ -29,6 +32,7 @@ from telegram.resolvers import (
     resolver_almacen,
 )
 from telegram.state_machine import ConversationState, StateMachine
+from utils.date_utils import get_peru_now
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +159,11 @@ class TelegramRouter:
             if text.lower() in ["/cancel", "/cancelar"]:
                 StateMachine.clear_context(user)
                 telegram_service.send_message(chat_id, "✅ Operación cancelada. ¿En qué más puedo ayudarte?")
+                return
+
+            # /guia T001-5: estado y PDF de una guía (no pasa por Gemini)
+            if text.lower().startswith("/guia"):
+                TelegramRouter._comando_guia(chat_id, user, text)
                 return
 
             # === MÁQUINA DE ESTADOS: Verificar si hay un flujo activo ===
@@ -436,6 +445,16 @@ class TelegramRouter:
                 )
                 return
 
+            elif edit_action == "edit_guia_destinatario":
+                cliente = buscar_cliente_db(nombre=value) if value else None
+                if not cliente:
+                    reintentar(f"❌ No encontré un cliente llamado '<b>{value}</b>'. Escribe otro nombre (o /cancel).")
+                    return
+                original_context["borrador"]["destinatario_cliente_id"] = cliente.id
+                telegram_service.send_message(chat_id, f"✅ Destinatario de la guía: <b>{cliente.nombre}</b>")
+                enviar_tarjeta_guia(chat_id, user, original_context, message_id)
+                return
+
             else:
                 telegram_service.send_message(chat_id, "❌ Campo de edición no reconocido.")
                 return
@@ -474,6 +493,145 @@ class TelegramRouter:
         enviar_tarjeta_venta(chat_id, user, borrador, message_id)
         return True
 
+    # ------------------------------------------------------------------
+    # Guía de remisión
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _callback_guia(chat_id, user, message_id, data):
+        partes = data.split(":")
+        accion = partes[1] if len(partes) > 1 else ""
+        valor = partes[2] if len(partes) > 2 else None
+
+        if accion == "venta" and valor:
+            GuiaSunatHandler.prepare_guia_remision(
+                chat_id, user, {"venta_id": valor}, "", resolver_almacen, buscar_presentacion
+            )
+            return
+
+        contexto = _borrador_actual(user)
+        if accion == "desde_transferencia":
+            if not contexto or contexto.get("action") != "transferencia":
+                telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Este traslado expiró o ya fue procesado.</i>")
+                return
+            try:
+                autorizar_almacen(user.id, contexto["almacen_origen_id"])
+                autorizar_almacen(user.id, contexto["almacen_destino_id"])
+                borrador = guia_service.borrador_traslado(
+                    user, contexto["almacen_origen_id"], contexto["almacen_destino_id"],
+                    [{"presentacion_id": t["presentacion_id"], "cantidad": t["cantidad"]}
+                     for t in contexto.get("transferencias", [])],
+                )
+            except guia_service.GuiaError as exc:
+                telegram_service.send_message(chat_id, f"❌ {exc}")
+                return
+            except Exception:
+                telegram_service.send_message(chat_id, "⛔ No tienes permiso sobre esos almacenes.")
+                return
+            telegram_service.edit_message(chat_id, message_id, "📄 <i>Traslado pasado a guía: revisa la tarjeta de abajo.</i>")
+            enviar_tarjeta_guia(chat_id, user, {
+                "action": "guia_remision", "borrador": borrador, "idempotency_key": uuid.uuid4().hex,
+            })
+            return
+
+        if not contexto or contexto.get("action") != "guia_remision":
+            telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta guía expiró o ya fue procesada.</i>")
+            return
+        tarjeta_id = _message_id_tarjeta(user) or message_id
+        borrador = contexto["borrador"]
+
+        if accion in ("vehiculo", "conductor") and valor is None:
+            modelo = Vehiculo if accion == "vehiculo" else Conductor
+            filas = modelo.query.filter_by(activo=True).order_by(modelo.predeterminado.desc(), modelo.id).all()
+            if not filas:
+                telegram_service.send_message(chat_id, f"⚠️ No hay {accion}s registrados.")
+                return
+            botones = [[{
+                "text": (f"🚛 {f.placa}" if accion == "vehiculo"
+                         else f"🪪 {(f.apellidos or '')} {(f.nombres or '')}".strip()),
+                "callback_data": f"guia:{accion}:{f.id}",
+            }] for f in filas]
+            telegram_service.send_message(chat_id, f"Elige el {accion}:", {"inline_keyboard": botones})
+            return
+
+        if accion in ("vehiculo", "conductor"):
+            modelo = Vehiculo if accion == "vehiculo" else Conductor
+            fila = db.session.get(modelo, int(valor)) if str(valor).isdigit() else None
+            if fila is None or not fila.activo:
+                telegram_service.send_message(chat_id, f"❌ Ese {accion} ya no está disponible.")
+                return
+            borrador[f"{accion}_id"] = fila.id
+            TelegramRouter._reenviar_guia(chat_id, user, contexto, tarjeta_id, message_id)
+            return
+
+        if accion == "fecha" and valor is None:
+            hoy = get_peru_now().date()
+            botones = [[
+                {"text": f"Hoy {hoy.strftime('%d/%m')}", "callback_data": f"guia:fecha:{hoy.isoformat()}"},
+                {"text": f"Mañana {(hoy + timedelta(days=1)).strftime('%d/%m')}",
+                 "callback_data": f"guia:fecha:{(hoy + timedelta(days=1)).isoformat()}"},
+            ]]
+            telegram_service.send_message(chat_id, "¿Cuándo empieza el traslado?", {"inline_keyboard": botones})
+            return
+
+        if accion == "fecha":
+            try:
+                fecha = date.fromisoformat(valor)
+            except (TypeError, ValueError):
+                telegram_service.send_message(chat_id, "❌ Fecha inválida.")
+                return
+            if fecha < get_peru_now().date():
+                telegram_service.send_message(chat_id, "❌ La fecha de inicio no puede ser anterior a hoy.")
+                return
+            borrador["fecha_inicio_traslado"] = fecha.isoformat()
+            TelegramRouter._reenviar_guia(chat_id, user, contexto, tarjeta_id, message_id)
+            return
+
+        if accion == "destinatario":
+            StateMachine.transition_to(
+                user, ConversationState.AWAITING_EXTRA_DATA, action="edit_guia_destinatario",
+                data={"original_context": contexto, "message_id": tarjeta_id},
+            )
+            telegram_service.send_message(
+                chat_id, "👤 <b>Destinatario de la guía</b>\n\nEscribe el nombre del cliente (debe tener DNI o RUC):"
+            )
+            return
+
+        telegram_service.send_message(chat_id, "❌ Opción de guía no reconocida.")
+
+    @staticmethod
+    def _reenviar_guia(chat_id, user, contexto, tarjeta_id, message_id_callback):
+        enviar_tarjeta_guia(chat_id, user, contexto, tarjeta_id)
+        if message_id_callback and message_id_callback != tarjeta_id:
+            telegram_service.edit_message(chat_id, message_id_callback, "✔️ <i>Elegido.</i>", reply_markup=None)
+
+    @staticmethod
+    def _comando_guia(chat_id, user, text):
+        """/guia T001-5 → estado actual (consulta SUNAT si está pendiente) y PDF si fue aceptada."""
+        match = re.match(r"^/guia(?:@\w+)?\s+([A-Za-z0-9]{4})\s*-\s*0*(\d{1,8})\s*$", text.strip())
+        if not match:
+            telegram_service.send_message(chat_id, "Uso: <code>/guia T001-5</code>")
+            return
+        serie, numero = match.group(1).upper(), int(match.group(2))
+        guia = GuiaRemision.query.filter_by(serie=serie, numero=numero).first()
+        if guia is None or (user.rol != "admin" and guia.creado_por_id != user.id):
+            telegram_service.send_message(chat_id, f"No encontré la guía {serie}-{numero}.")
+            return
+        if guia.estado in guia_service.ESTADOS_PENDIENTES:
+            try:
+                guia_service.consultar(guia)
+            except Exception as exc:
+                db.session.rollback()
+                logger.error("Error consultando la guía %s: %s", guia.id, type(exc).__name__)
+        numero_txt = guia_service.numero_completo(guia)
+        if guia.estado == guia_service.ESTADO_ACEPTADA:
+            from services.guia_pdf import generar_pdf
+            telegram_service.send_message(chat_id, f"✅ Guía {numero_txt}: Aceptada por SUNAT.")
+            telegram_service.send_document(chat_id, f"{numero_txt}.pdf", generar_pdf(guia),
+                                           caption=f"Guía de remisión {numero_txt}")
+            return
+        detalle = f"\n{guia.cdr_mensaje}" if guia.cdr_mensaje else ""
+        telegram_service.send_message(chat_id, f"ℹ️ Guía {numero_txt}: estado <b>{guia.estado}</b>.{detalle}")
+
     @staticmethod
     def handle_callback_query(callback_query):
         if not isinstance(callback_query, dict):
@@ -506,6 +664,10 @@ class TelegramRouter:
         if data == "cancel":
             clear_user_context(user)
             telegram_service.edit_message(chat_id, message_id, "❌ <b>Operación cancelada.</b>")
+            return
+
+        if data.startswith("guia:"):
+            TelegramRouter._callback_guia(chat_id, user, message_id, data)
             return
 
         # Manejar callbacks de edición

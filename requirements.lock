@@ -2,7 +2,7 @@ alembic==1.15.2 \
     --hash=sha256:1c72391bbdeffccfe317eefba686cb9a3c078005478885413b95c3b26c57a8a7 \
     --hash=sha256:2e76bd916d547f6900ec4bb5a90aeac1485d2c92536923d0b138c02b126edc53
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask-migrate
 aniso8601==10.0.1 \
     --hash=sha256:25488f8663dd1528ae1f54f94ac1ea51ae25b4d531539b8bc707fed184d16845 \
@@ -26,17 +26,17 @@ blinker==1.9.0 \
     --hash=sha256:b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf \
     --hash=sha256:ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask
 boto3==1.37.37 \
     --hash=sha256:752d31105a45e3e01c8c68471db14ae439990b75a35e72b591ca528e2575b28f \
     --hash=sha256:d125cb11e22817f7a2581bade4bf7b75247b401888890239ceb5d3e902ccaf38
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 botocore==1.37.37 \
     --hash=sha256:3eadde6fed95c4cb469cc39d1c3558528b7fa76d23e7e16d4bddc77250431a64 \
     --hash=sha256:eb730ff978f47c02f0c8ed07bccdc0db6d8fa098ed32ac31bee1da0e9be480d1
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   boto3
     #   s3transfer
 brotli==1.2.1 ; platform_python_implementation != 'PyPy' \
@@ -495,7 +495,7 @@ click==8.1.8 \
     --hash=sha256:63c132bbbed01578a06712a2d1f497bb62d9c1c0d329b7903a866228027263b2 \
     --hash=sha256:ed53c9d8990d83c2a27deae68e4ee337473f6330c040a31d4225c9574d16096a
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask
 colorama==0.4.6 ; sys_platform == 'win32' \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
@@ -564,7 +564,7 @@ cryptography==50.0.2 \
     --hash=sha256:fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb \
     --hash=sha256:fdd28f912fccfec1846a94e2e1e8f9b0012f557f0c46fe4f3eb0d7a87afcf90b
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   google-auth
     #   signxml
 deprecated==3.0.0 \
@@ -583,12 +583,12 @@ et-xmlfile==2.0.0 \
     # via openpyxl
 flasgger==0.9.7.1 \
     --hash=sha256:ca098e10bfbb12f047acc6299cc70a33851943a746e550d86e65e60d4df245fb
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask==3.1.3 \
     --hash=sha256:0ef0e52b8a9cd932855379197dd8f94047b359ca0a78695144304cb45f87c9eb \
     --hash=sha256:f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flasgger
     #   flask-compress
     #   flask-cors
@@ -601,41 +601,112 @@ flask==3.1.3 \
 flask-compress==1.17 \
     --hash=sha256:1ebb112b129ea7c9e7d6ee6d5cc0d64f226cbc50c4daddf1a58b9bd02253fbd8 \
     --hash=sha256:415131f197c41109f08e8fdfc3a6628d83d81680fb5ecd0b3a97410e02397b20
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask-cors==6.0.5 \
     --hash=sha256:30c5031552cd59f620ac0c8211dac45b345d3b2df310e7721879e4f46ef9c601 \
     --hash=sha256:68fcf75693e961f3af26683b23c4b9a8fb6b64de17d20d0c37b95e8de7ab2ed8
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask-jwt-extended==4.7.4 \
     --hash=sha256:78fd0f460317facf3a0084a6457ffaf2f1dda9eefbd576f94cea35b0eadd5531 \
     --hash=sha256:daad1981117f4972d63c363d013f290de307aad781a935921b603b714817393c
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask-limiter==4.1.1 \
     --hash=sha256:ca11608fc7eec43dcea606964ca07c3bd4ec1ae89043a0f67f717899a4f48106 \
     --hash=sha256:e1ae13e06e6b3e39a4902e7d240b901586b25932c2add7bd5f5eeb4bdc11111b
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask-marshmallow==1.3.0 \
     --hash=sha256:27a35d0ce5dcba161cc5f2f4764afbc2536c93fa439a793250b827835e3f3be6 \
     --hash=sha256:c0a0644b46406851873ab41c1e8a7de3ef27fa69b00b89bf630f1696ec0813a0
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask-migrate==4.1.0 \
     --hash=sha256:1a336b06eb2c3ace005f5f2ded8641d534c18798d64061f6ff11f79e1434126d \
     --hash=sha256:24d8051af161782e0743af1b04a152d007bad9772b2bca67b7ec1e8ceeb3910d
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask-restful==0.3.10 \
     --hash=sha256:1cf93c535172f112e080b0d4503a8d15f93a48c88bdd36dd87269bdaf405051b \
     --hash=sha256:fe4af2ef0027df8f9b4f797aba20c5566801b6ade995ac63b588abf1a59cec37
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 flask-sqlalchemy==3.1.1 \
     --hash=sha256:4ba4be7f419dc72f4efd8802d69974803c37259dd42f3913b0dcf75c9447e0a0 \
     --hash=sha256:e4b68bb881802dda1a7d878b2fc84c06d1ee57fb40b874d3dc97dabfa36b8312
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask-migrate
 flask-talisman==1.1.0 \
     --hash=sha256:3c42b610ebe49b0e35ca150e179bf51aa1da01e4635b49a674868ea681046208 \
     --hash=sha256:c5f486f5f54420729f84b3c3850cd63f96e8b033a9629bee66c524ea363797ff
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
+fonttools==4.68.0 \
+    --hash=sha256:039142b75a068c93f8596ef68787f82c74940b9153d24c224ab31e750eb083a2 \
+    --hash=sha256:03c9ef1272e464747f67c623f76449b888da6d5de7fb46275bb36488b9ceedba \
+    --hash=sha256:04365b897c9ee29a048b6d4db74c75c38b70aa6d1074726fbdd7ea1a23aa8ed2 \
+    --hash=sha256:04a4868dcfcc23f00bb033147d5afc1a118a992842644c3eb9da55467ab4fd74 \
+    --hash=sha256:054a4d5de7e1f973ab9789e9ae3f20238774783ca9bf7ee0359aebae4de9400c \
+    --hash=sha256:0841a4dac69efda309fca2ed0834186ee66d39787f1d26430ed7f779a699a096 \
+    --hash=sha256:08851f7d2b983412f490b73a7c56f17cbda1d4d85d2ad3f857564bf15b5d9475 \
+    --hash=sha256:1695cd2e1f9768fe3f14d369ce6ef1b3e8561069cc9e47059571985d1ea42614 \
+    --hash=sha256:1782f2cf952eb262c4126b1f57b5f0e027e71bf2b632350a033dec526f448428 \
+    --hash=sha256:1dde2f0ec3fd0fb43cf818593b38a8202eb7f3b59cae86289a8b19fbf6f6313b \
+    --hash=sha256:35425bba603cf9d72c9f3c173ea6c98632164f3bdfb1ce1a3dcc928979c6ec6d \
+    --hash=sha256:362443ab355701d6fd26b10d022cd6c8456e1e248f80103c44cbe5ef0228f87f \
+    --hash=sha256:39913c1f576af86c69519dc351302332561ee62b39fed04dcfa8019d9c2d129f \
+    --hash=sha256:3b9b87645bcdbfc3f30240e2758a37bbef4fdd0f708683b2bfceb60975d63e59 \
+    --hash=sha256:3edce69ecdefa73ab1041901ca22eefed6ebb93a77bc77e889d940479f25bf7d \
+    --hash=sha256:419bf78474adaa6fb320a06822f4f941b19345d598a9de379d6e2f0e4d819df6 \
+    --hash=sha256:4b9c89b5876f1a74b1341632dfaf4c4c2be565d76c060445df401ebe7a4ceefa \
+    --hash=sha256:4bc352572abc800177fba513995c01b1cfbe8c810ac2506cbf29f0795ae061c5 \
+    --hash=sha256:4be32afa53ba3dea243b95b62e9b2e6ed6cf7096acd741d379c12f4113694ddc \
+    --hash=sha256:4da99b83ae17f531838bc750abf56164ff37e1543e8e9b2b5403548f50497ce0 \
+    --hash=sha256:5083a456d68d2995ab78600ccb18ec08c42f9bc14f0ef80c12e2e5b11cc371ce \
+    --hash=sha256:53f2387d7e3816763f30e08d14263be18e28ead53d4dc20a82f9280d0c99d88a \
+    --hash=sha256:573ccce8b5fd9b6952dcbc5d896255041ab330cc33520d13b1266fca859d8aba \
+    --hash=sha256:664dfa7a4869b3c827dfc2c38dbbb7a58d53e97933d1bd51ee6729792ee73d50 \
+    --hash=sha256:6aea5cdbc32f5fd202cf8dec053a784b08692f8b1992af80eba32bef82bf84c7 \
+    --hash=sha256:6e73d4b1526343b45bbafa9badc0396a49d902f9a1774666ed4244f1df717629 \
+    --hash=sha256:6ed796b220654b4d37ad20af73419ec7969b669dd678cab88afb602c5683a331 \
+    --hash=sha256:73294e233070f71e2b3653b6bd8564af676d57f26d075761fb06d1ab2e4a7a5d \
+    --hash=sha256:7ab8097e7e191784974c5608eb95fb31e1243fe3054cb66778ac82558e9b36f8 \
+    --hash=sha256:81ea963d4390bb9e79f91a905310d91ac7ff7675d8e1c0cfc0f1712521c41a43 \
+    --hash=sha256:82b8024fbdcddc399b1e21575b9b82f46b8391e711a44d6bd4a1616b0aca3681 \
+    --hash=sha256:83bd3d558c15f4e1d87b8f3fcfb337c2bce63c7e5c05212abc8fdcf15e216c54 \
+    --hash=sha256:86d319a1feedfc75c8ff582d947b21fa1854e2829cb8cf9428784d750a05f1d9 \
+    --hash=sha256:93afd51f30ae38f7d826f4632eb799a06bd94e1fb4bc59fdce6d291e93491027 \
+    --hash=sha256:956230858b7a7bb9f5e0971ae07dc64b6155307304acd8c62aedca30e6aae874 \
+    --hash=sha256:95628bbc5ea81d5761268f4c4f1ba709af510b970f363498ac801c0c1fd7a4a8 \
+    --hash=sha256:9b6e4ae9763c67df2b0f4c4f1a0b18e47ee6572eb602b82e798acc88b64a6137 \
+    --hash=sha256:9d80813ae74b969ef2166a3040b591826e80ecd879bdeab7f13f4e8eaf08b345 \
+    --hash=sha256:9fee5880486c3fd6f45f5a1679a9f4291ae74e503d725de7f1e30efa2d627440 \
+    --hash=sha256:a325e6d7f96f20b3004658c5ed17ccfce5b66277b43ccd883035c61be6945275 \
+    --hash=sha256:a6837def5de49772b82683dadd836df214def04b307cb98d0e7723d49e7e15bb \
+    --hash=sha256:ab6505dfbe3199453d8542b25f55c1ea3260d38029d9db58c0c7304d438abdc0 \
+    --hash=sha256:b2ee7b9c1a5e1d637073c39b0978956febad7e862a1269719f527934c65535a4 \
+    --hash=sha256:b41e71b2657c9843b2327b4e3c116db1757dc8cd05d978cd47cb5061272d4997 \
+    --hash=sha256:b5a015b322275d3d745b06d5e69cf74ef4b1ce2dae02afbe4826cb186d8527a3 \
+    --hash=sha256:b612613f0165f560571c4e372af0ebbb1c4b36067de409922dcea349beb8bb20 \
+    --hash=sha256:b637d82a488116da2869afbddccfd93ca14e3c47b404c8ec5a9bad9d4381b08c \
+    --hash=sha256:b65c2f3c4449383429507a7e1b372bd759f60a2df8ddc8d6c1cf9010585576b1 \
+    --hash=sha256:b6f7c5fabf5b1d9ca79f204664f2c3e2f8218e50aebc43e85e02df0b2d9cc313 \
+    --hash=sha256:bd5b047ed8f16b83d0344fef053668712ab9c88e2e46d8612ec41df83c5222e1 \
+    --hash=sha256:cbb63b26d33acc3eb61f544c22a0cadbe01682fc064b266bb0e33fa66cea853f \
+    --hash=sha256:cd4b0d00523cae1e5e1eaed1d2b85ef342cec000f58d0738e12b064d72a7bbc2 \
+    --hash=sha256:cea1969b9bfe230cb3fd66f1c66da5a63a9a917d9cd25a0839524d3d1a88b40e \
+    --hash=sha256:d225096687fc3bac0ebe3357e95b2dd8b0a49d191f016db0771d537ccdd6f47e \
+    --hash=sha256:d76f8fdcb6936f5e1045a0c9dd721a4bf11112e60d1e243bfa1d39f06a8b3104 \
+    --hash=sha256:d8d5674de2b614575f0751671727056af042ac1d61beacb59a298d74282fa492 \
+    --hash=sha256:e00bfc6fc0158f156d34f923829e6f62ca00df2e0ea42ba3b0db4089b6d921c2 \
+    --hash=sha256:e3ecdb0b248cd0bf43100a8b3cb40f7b45d52ea4be8616edea5dea8fefe90229 \
+    --hash=sha256:e80ac66627a01698675ce6e98d90ea9817d1e06644129ec8b0093f66ff1cbeac \
+    --hash=sha256:f0b39924698a85bee107184a3c2ee9ae27248144977160534f7d558831db50cf \
+    --hash=sha256:f15de48b82a816c72f358e772792801bd3788a156caa76e1806cb0aa8148cd61 \
+    --hash=sha256:f265c85432c398d86f26add143423924a4747879b2dce001a3ffe0a5fed30638 \
+    --hash=sha256:fde43b9785c7f105aa563b6b5481edabea4ab6be7d9ef14ff4d76225950923e8 \
+    --hash=sha256:fe80d05dd85e6ac58d0cd4fa10ddb96252a6f1046ee0fd00cd1d48f0c25921ac \
+    --hash=sha256:fedc183bdbc3fdbfbdca26e0e04566d089cbb404712509a4e824608e9304cc77
+    # via fpdf2
+fpdf2==2.9.0 \
+    --hash=sha256:af2e7e06a5a2f9e32e24b146b56f58166142dfff45f55370ab03bfac9c8e3e21 \
+    --hash=sha256:e57f9eb183a61bbfc1a16ccb3eb68654f9ef3de0d9a78e37015a0df2eb29ab89
+    # via -r requirements.txt
 google-ai-generativelanguage==0.6.15 \
     --hash=sha256:5a03ef86377aa184ffef3662ca28f19eeee158733e45d7947982eb953c6ebb6c \
     --hash=sha256:8f6d9dc4c12b065fe2d0289026171acea5183ebf2d0b11cefe12f3821e159ec3
@@ -666,7 +737,7 @@ google-auth-httplib2==0.4.4 \
     # via google-api-python-client
 google-generativeai==0.8.5 \
     --hash=sha256:22b420817fb263f8ed520b33285f45976d5b21e904da32b80d4fd20c055123a2
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 googleapis-common-protos==1.75.0 \
     --hash=sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd \
     --hash=sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed
@@ -830,7 +901,7 @@ grpcio-status==1.71.2 \
 gunicorn==26.2.0 \
     --hash=sha256:62b864895d9ebff0b2f9867ba04fe811c93121596540830c9c916d0769668447 \
     --hash=sha256:bd249d0b3f7972f7432f0a6b6ff3b3ee2d129f70cd1ff6c09a9dd9e29a2b88e3
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -877,13 +948,13 @@ itsdangerous==2.2.0 \
     --hash=sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef \
     --hash=sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask
 jinja2==3.1.6 \
     --hash=sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask
 jmespath==1.1.0 \
     --hash=sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d \
@@ -1081,7 +1152,7 @@ lxml==6.1.3 \
     --hash=sha256:febd35ef45f603c2d74b74655efdbf45e14f55fc0aef4ac82b663ca829b283e0 \
     --hash=sha256:ff88a92cafde90888511242d1c54afcc1a8adbb6dc0a88fa7f87e29e92400d4a
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   signxml
 mako==1.4.3 \
     --hash=sha256:723296007c870bfd6b3f0c3230dba7198096e5269297ebf5e4eff9e7ffa39d4f \
@@ -1150,7 +1221,7 @@ markupsafe==3.0.2 \
     --hash=sha256:f8b3d067f2e40fe93e1ccdd6b2e1d16c43140e76f02fb1319a05cf2b79d99430 \
     --hash=sha256:fcabf5ff6eea076f859677f5f0b6b5c1a51e70a376b0579e0eadef8db48c6b50
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask
     #   jinja2
     #   mako
@@ -1159,13 +1230,13 @@ marshmallow==3.26.2 \
     --hash=sha256:013fa8a3c4c276c24d26d84ce934dc964e2aa794345a0f8c7e5a7191482c8a73 \
     --hash=sha256:bbe2adb5a03e6e3571b573f42527c6fe926e17467833660bebd11593ab8dfd57
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask-marshmallow
     #   marshmallow-sqlalchemy
 marshmallow-sqlalchemy==1.4.1 \
     --hash=sha256:9a3dd88a2b24f425fbffb3fea8aeb7f424a932fc97372a9f1338b7a379396191 \
     --hash=sha256:b4aa964356d00e178bdb8469a28daa9022b375ff4f5c04f8e2b9aafe1e65c529
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 mistune==3.4.0 \
     --hash=sha256:2eaf7952af928ca8d33b779762effc1da517b62c6ad85ec8ca957e3b07b9782a \
     --hash=sha256:d03cec4c8620f21517a996d82d14f3b59c30d79bda2cc6c56bd32b839f18ce6b
@@ -1241,7 +1312,7 @@ numpy==2.5.4 \
 openpyxl==3.1.5 \
     --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2 \
     --hash=sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 ordered-set==4.1.0 \
     --hash=sha256:046e1132c71fcf3330438a539928932caf51ddbc582496833e23de611de14562 \
     --hash=sha256:694a8e44c87657c59292ede72891eb91d34131f6531463aab3009191c77364a8
@@ -1250,7 +1321,7 @@ packaging==24.2 \
     --hash=sha256:09abb1bccd265c01f4a3aa3f7a7db064b36514d2cba19a2f694fe6150451a759 \
     --hash=sha256:c228a6dc5e932d346bc5739379109d49e8853dd8223571c7c5b55260edc0b97f
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   deprecation
     #   flasgger
     #   limits
@@ -1314,7 +1385,7 @@ pandas==3.1.0 \
     --hash=sha256:eee72bba8a72f0bf9522132e5c87cd10fce9d77440b50f65326b093ec9fb8d43 \
     --hash=sha256:f1a93c24175129bfc9922ef748ddae1d8137c743ed835e2615be329f606fed4d \
     --hash=sha256:f4772320b7735d96dbbef437129f840dec4175f8a18a2391bd1222ed8943825c
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 pillow==13.0.0 \
     --hash=sha256:02464da86f561f410e13b061ec37c3068a9cb557a095494157742d07b3c24a27 \
     --hash=sha256:04a63720f79e22fd54d897c233a68314c50ca0603360f54ce2bd5db8f0f43782 \
@@ -1399,7 +1470,9 @@ pillow==13.0.0 \
     --hash=sha256:fc481f742ccda20e9ed760b8f978dff50f2a4e9bc253ac167fb0a05b0783ef52 \
     --hash=sha256:ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b \
     --hash=sha256:ffea6b2986a797c84b6d1d27d4f43e0b83c73fc16281a930891cd237cf0d08fe
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via
+    #   -r requirements.txt
+    #   fpdf2
 postgrest==1.1.1 \
     --hash=sha256:98a6035ee1d14288484bfe36235942c5fb2d26af6d8120dfe3efbe007859251a \
     --hash=sha256:f3bb3e8c4602775c75c844a31f565f5f3dd584df4d36d683f0b67d01a86be322
@@ -1498,7 +1571,7 @@ psycopg2-binary==2.9.10 \
     --hash=sha256:f758ed67cab30b9a8d2833609513ce4d3bd027641673d4ebc9c067e4d208eec1 \
     --hash=sha256:f8157bed2f51db683f31306aa497311b560f2265998122abe1dce6428bd86567 \
     --hash=sha256:ffe8ed017e4ed70f68b7b371d84b7d4a790368db9203dfc2d222febd3a9c8863
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 pyasn1==0.6.4 \
     --hash=sha256:9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81 \
     --hash=sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b
@@ -1662,7 +1735,7 @@ pyjwt==2.15.1 \
     --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193 \
     --hash=sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask-jwt-extended
     #   gotrue
 pyparsing==3.3.3 \
@@ -1679,12 +1752,12 @@ python-dateutil==2.9.0.post0 \
 python-dotenv==1.2.4 \
     --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc \
     --hash=sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 pytz==2025.1 \
     --hash=sha256:89dd22dca55b46eac6eda23b2d72721bf1bdfef212645d81513ef5d03038de57 \
     --hash=sha256:c2db42be2a2518b28e65f9207c4d05e6ff547d1efa4086469ef855e4ab70178e
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask-restful
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
@@ -1761,7 +1834,7 @@ pyyaml==6.0.3 \
     --hash=sha256:fa160448684b4e94d80416c0fa4aac48967a969efe22931448d853ada8baf926 \
     --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flasgger
 realtime==2.6.0 \
     --hash=sha256:a0512d71044c2621455bc87d1c171739967edc161381994de54e0989ca6c348e \
@@ -1770,7 +1843,7 @@ realtime==2.6.0 \
 redis==8.1.0 \
     --hash=sha256:6e1a19beef9225c83efd689c7e6b7da2d5215b1f42cd13b7fc3714d0a09c7b25 \
     --hash=sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 referencing==0.37.0 \
     --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231 \
     --hash=sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8
@@ -1781,7 +1854,7 @@ requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   google-api-core
 rpds-py==2026.9.1 \
     --hash=sha256:00ba2d8c7dd4ee537978ddf4b3fbd712bef2d8751603f7f3146b3f4287768e25 \
@@ -1919,14 +1992,18 @@ s3transfer==0.11.5 \
     --hash=sha256:757af0f2ac150d3c75bc4177a32355c3862a98d20447b69a0161812992fe0bd4 \
     --hash=sha256:8c8aad92784779ab8688a61aefff3e28e9ebdce43142808eaa3f0b0f402f68b7
     # via boto3
+segno==1.6.6 \
+    --hash=sha256:28c7d081ed0cf935e0411293a465efd4d500704072cdb039778a2ab8736190c7 \
+    --hash=sha256:e60933afc4b52137d323a4434c8340e0ce1e58cec71439e46680d4db188f11b3
+    # via -r requirements.txt
 setuptools==84.2.1 \
     --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc \
     --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 signxml==5.2.0 \
     --hash=sha256:18aa6c3dc6833c7f441d9d20875ea50fe50149402f87061c27d0b6ea7f039096 \
     --hash=sha256:47667e55d3bf974ba69cbc489610890d27052d4584a29c3d29e7cf578d50a429
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -1993,7 +2070,7 @@ sqlalchemy==2.0.38 \
     --hash=sha256:f53c0d6a859b2db58332e0e6a921582a02c1677cc93d4cbb36fdf49709b327b2 \
     --hash=sha256:f9d57f1b3061b3e21476b0ad5f0397b112b94ace21d1f439f2db472e568178ae
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   alembic
     #   flask-sqlalchemy
     #   marshmallow-sqlalchemy
@@ -2008,7 +2085,7 @@ strenum==0.4.15 \
 supabase==2.17.0 \
     --hash=sha256:2dd804fae8850cebccc9ab8711c2ee9e2f009e847f4c95c092a4423778e3c3f6 \
     --hash=sha256:3207314b540db7e3339fa2500bd977541517afb4d20b7ff93a89b97a05f9df38
-    # via -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    # via -r requirements.txt
 supafunc==0.10.1 \
     --hash=sha256:26df9bd25ff2ef56cb5bfb8962de98f43331f7f8ff69572bac3ed9c3a9672040 \
     --hash=sha256:a5b33c8baecb6b5297d25da29a2503e2ec67ee6986f3d44c137e651b8a59a17d
@@ -2126,7 +2203,7 @@ werkzeug==3.1.9 \
     --hash=sha256:55ca7c70a75689be937aa27f8ff4b018f06ff4838fc73045560bf0f5a1291060 \
     --hash=sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab
     # via
-    #   -r /mnt/c/Users/Usuario/Documents/Proyectos/apiFlaskManngo/requirements.txt
+    #   -r requirements.txt
     #   flask
     #   flask-cors
     #   flask-jwt-extended

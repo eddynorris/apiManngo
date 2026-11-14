@@ -7,7 +7,9 @@ from models import (
     Cliente,
     ComandoVozLog,
     ComponenteReceta,
+    Conductor,
     Gasto,
+    GuiaRemision,
     Inventario,
     Lote,
     Merma,
@@ -20,6 +22,7 @@ from models import (
     Proveedor,
     Receta,  # Added for voice command audit
     Users,
+    Vehiculo,
     Venta,
     VentaDetalle,
 )
@@ -41,6 +44,7 @@ class AlmacenSchema(SQLAlchemyAutoSchema):
         unknown = EXCLUDE
         sqla_session = db.session
         exclude = ("inventario", "ventas")  # Excluir relaciones recursivas
+        include_fk = True  # cliente_guia_id (destinatario de guías de traslado)
 
 class UserSchema(SQLAlchemyAutoSchema):
     almacen = fields.Nested(AlmacenSchema, only=("id", "nombre"))
@@ -353,3 +357,38 @@ componentes_receta_schema = ComponenteRecetaSchema(many=True)
 # Esquemas de auditoría de comandos de voz
 comando_voz_log_schema = ComandoVozLogSchema()
 comandos_voz_log_schema = ComandoVozLogSchema(many=True)
+
+
+# Guía de remisión electrónica
+class VehiculoSchema(SQLAlchemyAutoSchema):
+    class Meta:
+        model = Vehiculo
+        load_instance = True
+        unknown = EXCLUDE
+        sqla_session = db.session
+
+
+class ConductorSchema(SQLAlchemyAutoSchema):
+    class Meta:
+        model = Conductor
+        load_instance = True
+        unknown = EXCLUDE
+        sqla_session = db.session
+
+
+class GuiaRemisionSchema(SQLAlchemyAutoSchema):
+    """Solo lectura: no expone XML, CDR ni la huella interna."""
+
+    class Meta:
+        model = GuiaRemision
+        load_instance = False
+        include_fk = True
+        exclude = ("xml_firmado", "cdr_xml", "datos", "idempotency_key", "chat_id")
+
+
+vehiculo_schema = VehiculoSchema()
+vehiculos_schema = VehiculoSchema(many=True)
+conductor_schema = ConductorSchema()
+conductores_schema = ConductorSchema(many=True)
+guia_remision_schema = GuiaRemisionSchema()
+guias_remision_schema = GuiaRemisionSchema(many=True)

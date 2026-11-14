@@ -10,6 +10,7 @@ from .cliente_resource import (
 from .compra_insumo_resource import CompraInsumoResource, InsumoAlertaResource
 from .dashboard_resource import DashboardResource
 from .gasto_resource import GastoExportResource, GastoResource
+from .guia_resource import ConductorResource, GuiaRemisionResource, VehiculoResource
 from .inventario_resource import InventarioGlobalResource, InventarioResource
 from .lote_resource import LoteResource
 from .merma_resource import MermaResource
@@ -55,6 +56,9 @@ from .voice_resource import VoiceCommandResource
 
 __all__ = [
     'AlmacenResource',
+    'ConductorResource',
+    'GuiaRemisionResource',
+    'VehiculoResource',
     'AuthResource',
     'ChatResource',
     'ClienteExportResource',
@@ -188,3 +192,8 @@ def init_resources(api, limiter=None):
     api.add_resource(VoiceCommandResource, '/voice/command')
     api.add_resource(TelegramWebhookResource, '/telegram/webhook/<string:webhook_token>')
     api.add_resource(TelegramLinkResource, '/telegram/vincular')
+
+    # Guía de remisión electrónica (SUNAT)
+    api.add_resource(VehiculoResource, '/vehiculos', '/vehiculos/<int:registro_id>')
+    api.add_resource(ConductorResource, '/conductores', '/conductores/<int:registro_id>')
+    api.add_resource(GuiaRemisionResource, '/guias', '/guias/<int:guia_id>')

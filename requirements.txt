@@ -64,3 +64,6 @@ flasgger==0.9.7.1
 
 # Caching and Rate Limiting backend
 redis>=5.0.0
+# Guía de remisión: PDF de representación impresa y QR
+fpdf2==2.9.0
+segno==1.6.6

@@ -1,265 +1,298 @@
+"""Guía de remisión (GRE remitente) desde Telegram.
+
+La tarjeta muestra exactamente lo que se firmará (``guia_service``). Nada se
+inventa: si falta un dato, la tarjeta lo dice y no ofrece «Emitir». En un
+traslado, al emitir se registra también la transferencia de inventario y sus
+movimientos quedan enlazados a la guía.
+"""
 import logging
-import os
-import time
-from datetime import UTC, datetime
-from decimal import Decimal
+import re
+import uuid
+from datetime import date
 
 from extensions import db
-from models import Almacen, Cliente
-from services.sunat_service import sunat_service
+from models import Almacen, Cliente, Conductor, Vehiculo
+from services import guia_service
+from services.authorization import autorizar_almacen
 from services.telegram_service import telegram_service
+from telegram.state_machine import StateMachine
 
 logger = logging.getLogger(__name__)
+
+TIPOS_DOC = {"1": "DNI", "4": "CE", "6": "RUC", "7": "Pasaporte"}
+
+
+def _fecha_ddmmaaaa(iso: str) -> str:
+    try:
+        return date.fromisoformat(iso).strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        return str(iso)
+
+
+def _num(valor) -> str:
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return str(valor)
+    return f"{numero:,.0f}" if numero == int(numero) else f"{numero:,.2f}"
+
+
+def construir_tarjeta_guia(contexto, usuario):
+    b = contexto["borrador"]
+    origen = db.session.get(Almacen, b.get("almacen_origen_id") or 0)
+    destino = db.session.get(Almacen, b.get("almacen_destino_id") or 0) if b.get("almacen_destino_id") else None
+    cliente = db.session.get(Cliente, b.get("destinatario_cliente_id") or 0) if b.get("destinatario_cliente_id") else None
+    vehiculo = db.session.get(Vehiculo, b.get("vehiculo_id") or 0) if b.get("vehiculo_id") else None
+    conductor = db.session.get(Conductor, b.get("conductor_id") or 0) if b.get("conductor_id") else None
+    es_traslado = b.get("origen_tipo") == "traslado"
+
+    if b.get("motivo") == guia_service.MOTIVO_TRASLADO_PROPIO:
+        motivo_txt = "Traslado entre establecimientos de la misma empresa"
+        destinatario_txt = "La propia empresa"
+    else:
+        motivo_txt = "Venta"
+        destinatario_txt = (
+            f"{cliente.nombre} ({TIPOS_DOC.get(cliente.tipo_documento, 'doc.')} {cliente.ruc or '—'})"
+            if cliente else "— sin destinatario —"
+        )
+    llegada_txt = destino.nombre if es_traslado and destino else (cliente.nombre if cliente else "—")
+
+    bienes_txt = "\n".join(
+        f"• {bien['descripcion']} = {_num(bien.get('peso_kg'))} kg" for bien in b.get("bienes", [])
+    )
+    conductor_txt = (
+        f"{conductor.apellidos or ''} {conductor.nombres or ''}".strip() or conductor.numero_documento
+        if conductor else "—"
+    )
+
+    texto = (
+        "🚚 <b>Guía de Remisión Electrónica (borrador)</b>\n\n"
+        f"📤 <b>Partida:</b> {origen.nombre if origen else '—'}\n"
+        f"📥 <b>Llegada:</b> {llegada_txt}\n"
+        f"📝 <b>Motivo:</b> {motivo_txt}\n"
+        f"👤 <b>Destinatario:</b> {destinatario_txt}\n"
+        f"📦 <b>Bienes:</b>\n{bienes_txt}\n"
+        f"⚖️ <b>Peso bruto total:</b> {_num(b.get('peso_total_kg'))} kg\n"
+        f"🚛 <b>Vehículo:</b> {vehiculo.placa if vehiculo else '—'}\n"
+        f"🪪 <b>Conductor:</b> {conductor_txt}\n"
+        f"📅 <b>Inicio del traslado:</b> {_fecha_ddmmaaaa(b.get('fecha_inicio_traslado'))}\n"
+    )
+    if es_traslado:
+        texto += (f"\n📦 Al emitir se registra también el traslado de inventario "
+                  f"{origen.nombre if origen else ''} → {destino.nombre if destino else ''}.\n")
+
+    falta = guia_service.faltantes(b)
+    habilitado = guia_service.envio_habilitado()
+    if falta:
+        texto += "\n⚠️ <b>Falta completar:</b>\n" + "\n".join(f"• {f}" for f in falta) + "\n"
+    if not habilitado:
+        texto += "\n⛔ El envío a SUNAT está deshabilitado: todavía no se pueden emitir guías.\n"
+
+    filas = [
+        [{"text": "🚛 Vehículo", "callback_data": "guia:vehiculo"},
+         {"text": "🪪 Conductor", "callback_data": "guia:conductor"}],
+        [{"text": "📅 Fecha de inicio", "callback_data": "guia:fecha"}],
+    ]
+    if es_traslado and b.get("motivo") == guia_service.MOTIVO_VENTA:
+        filas[1].append({"text": "👤 Destinatario", "callback_data": "guia:destinatario"})
+    ultima = []
+    if not falta and habilitado:
+        ultima.append({"text": "✅ Emitir Guía", "callback_data": "confirm:guia_remision"})
+    ultima.append({"text": "❌ Cancelar", "callback_data": "cancel"})
+    filas.append(ultima)
+    return texto, {"inline_keyboard": filas}
+
+
+def _message_id(respuesta):
+    if isinstance(respuesta, dict) and isinstance(respuesta.get("result"), dict):
+        return respuesta["result"].get("message_id")
+    return None
+
+
+def enviar_tarjeta_guia(chat_id, user, contexto, message_id_anterior=None):
+    texto, teclado = construir_tarjeta_guia(contexto, user)
+    nuevo_id = _message_id(telegram_service.send_message(chat_id, texto, teclado))
+    if message_id_anterior:
+        telegram_service.edit_message(
+            chat_id, message_id_anterior, "✏️ <i>Guía actualizada: revisa la tarjeta de abajo.</i>",
+            reply_markup=None,
+        )
+    StateMachine.set_awaiting_confirmation(user, "guia_remision", contexto, nuevo_id or message_id_anterior)
+
+
+def _almacen_por_nombre(nombre):
+    if not nombre or not str(nombre).strip():
+        return None
+    return Almacen.query.filter(Almacen.nombre.ilike(f"%{str(nombre).strip()}%")).order_by(Almacen.id).first()
+
+
+def _vehiculo_por_placa(placa):
+    normal = re.sub(r"[\s-]", "", str(placa)).upper()
+    return Vehiculo.query.filter_by(placa=normal, activo=True).first()
+
+
+def _conductor_por_texto(texto):
+    valor = str(texto).strip()
+    if not valor:
+        return None
+    exacto = Conductor.query.filter_by(numero_documento=valor, activo=True).first()
+    if exacto:
+        return exacto
+    patron = f"%{valor}%"
+    return Conductor.query.filter(
+        Conductor.activo.is_(True),
+        (Conductor.nombres.ilike(patron)) | (Conductor.apellidos.ilike(patron)),
+    ).order_by(Conductor.id).first()
+
+
+def _sin_permiso(chat_id):
+    telegram_service.send_message(chat_id, "⛔ No tienes permiso sobre ese almacén para hacer la guía.")
+
 
 class GuiaSunatHandler:
     @staticmethod
     def prepare_guia_remision(chat_id, user, args, text, resolver_almacen_fn, buscar_presentacion_fn):
-        items_raw = args.get("items", [])
-        dest_doc = str(args.get("destinatario_documento", "")).strip()
-        motivo = args.get("motivo_traslado", "venta")
-        placa = args.get("placa_vehiculo")
-        chofer_dni = args.get("conductor_documento")
+        args = args or {}
+        try:
+            vehiculo_id = conductor_id = None
+            if args.get("placa"):
+                vehiculo = _vehiculo_por_placa(args["placa"])
+                if not vehiculo:
+                    telegram_service.send_message(chat_id, f"❌ No encontré el vehículo con placa {args['placa']}.")
+                    return
+                vehiculo_id = vehiculo.id
+            if args.get("conductor"):
+                conductor = _conductor_por_texto(args["conductor"])
+                if not conductor:
+                    telegram_service.send_message(chat_id, f"❌ No encontré al conductor «{args['conductor']}».")
+                    return
+                conductor_id = conductor.id
 
-        if not items_raw or not dest_doc:
-            telegram_service.send_message(chat_id, "❌ Error: Debes especificar al menos un producto y el RUC/DNI del destinatario.")
+            if args.get("venta_id"):
+                from models import Venta
+                venta = db.session.get(Venta, int(args["venta_id"]))
+                if venta is None:
+                    telegram_service.send_message(chat_id, f"❌ No existe la venta #{args['venta_id']}.")
+                    return
+                try:
+                    autorizar_almacen(user.id, venta.almacen_id)
+                except Exception:
+                    _sin_permiso(chat_id)
+                    return
+                borrador = guia_service.borrador_venta(
+                    user, venta.id, fecha_inicio=args.get("fecha_inicio"),
+                    vehiculo_id=vehiculo_id, conductor_id=conductor_id,
+                )
+            else:
+                destino = _almacen_por_nombre(args.get("almacen_destino"))
+                if destino is None:
+                    telegram_service.send_message(
+                        chat_id, "❌ Indica el almacén de destino de la guía (p. ej. «a Andahuaylas»)."
+                    )
+                    return
+                origen = _almacen_por_nombre(args.get("almacen_origen"))
+                if origen is None:
+                    origen = Almacen.query.filter_by(es_planta=True).order_by(Almacen.id).first()
+                if origen is None and user.almacen_id:
+                    origen = db.session.get(Almacen, user.almacen_id)
+                if origen is None:
+                    telegram_service.send_message(chat_id, "❌ No pude determinar el almacén de partida.")
+                    return
+                try:
+                    autorizar_almacen(user.id, origen.id)
+                    autorizar_almacen(user.id, destino.id)
+                except Exception:
+                    _sin_permiso(chat_id)
+                    return
+
+                items = []
+                for item in args.get("items") or []:
+                    nombre = item.get("producto_nombre")
+                    presentacion = buscar_presentacion_fn(nombre, ['procesado', 'briqueta', 'insumo'])
+                    if presentacion is None:
+                        telegram_service.send_message(chat_id, f"❌ No encontré el producto «{nombre}».")
+                        return
+                    items.append({"presentacion_id": presentacion.id, "cantidad": item.get("cantidad")})
+                if not items:
+                    telegram_service.send_message(chat_id, "❌ Indica qué productos y cantidades van en la guía.")
+                    return
+                borrador = guia_service.borrador_traslado(
+                    user, origen.id, destino.id, items, fecha_inicio=args.get("fecha_inicio"),
+                    vehiculo_id=vehiculo_id, conductor_id=conductor_id,
+                )
+        except guia_service.GuiaError as exc:
+            telegram_service.send_message(chat_id, f"❌ {exc}")
             return
 
-        items_validados = []
-        warnings = []
-        for item in items_raw:
-            prod_name = item.get("producto_nombre")
-            cant = Decimal(str(item.get("cantidad", 1)))
-
-            presentacion = buscar_presentacion_fn(prod_name, ['procesado', 'briqueta'])
-            if not presentacion:
-                warnings.append(f"⚠️ No se encontró la presentación '{prod_name}'. Se usará el nombre crudo.")
-                items_validados.append({
-                    "presentacion_id": None,
-                    "presentacion_nombre": prod_name,
-                    "cantidad": float(cant),
-                    "peso_total_kg": float(cant * 20.0)
-                })
-            else:
-                items_validados.append({
-                    "presentacion_id": presentacion.id,
-                    "presentacion_nombre": presentacion.nombre,
-                    "cantidad": float(cant),
-                    "peso_total_kg": float(cant * presentacion.capacidad_kg)
-                })
-
-        cliente = Cliente.query.filter_by(ruc=dest_doc).first()
-        if not cliente:
-            cliente = Cliente.query.filter(
-                (Cliente.telefono.ilike(f"%{dest_doc}%")) |
-                (Cliente.direccion.ilike(f"%{dest_doc}%"))
-            ).first()
-
-        if not cliente:
-            cliente = Cliente.query.filter(Cliente.nombre.ilike(f"%{dest_doc}%")).first()
-
-        if cliente and cliente.ruc:
-            dest_doc = cliente.ruc
-
-        dest_nombre = cliente.nombre if cliente else "Cliente Externo"
-        dest_direccion = cliente.direccion if (cliente and cliente.direccion) else os.environ.get("SUNAT_DEFAULT_LLEGADA_DIRECCION", "PSJE MANUEL ODRIA SN - TAMBURCO - ABANCAY - APURIMAC").strip()
-        dest_ciudad = cliente.ciudad if (cliente and cliente.ciudad) else "Tamburco"
-
-        partida_direccion = os.environ.get("SUNAT_DEFAULT_PARTIDA_DIRECCION", "PANAMERICANA KM 384 - COLCABAMBA - AYMARAES - APURIMAC").strip()
-        if not partida_direccion:
-            planta = Almacen.query.filter_by(es_planta=True).first()
-            partida_direccion = planta.direccion if (planta and planta.direccion) else "PANAMERICANA KM 384 - COLCABAMBA - AYMARAES - APURIMAC"
-        partida_ciudad = "Colcabamba"
-
-        if not placa:
-            placa = os.environ.get("SUNAT_DEFAULT_PLACA", "D8M790").strip()
-        if not chofer_dni:
-            chofer_dni = os.environ.get("SUNAT_DEFAULT_CHOFER_DNI", "31033519").strip()
-
-        context_data = {
-            "action": "guia_remision",
-            "items": items_validados,
-            "destinatario_documento": dest_doc,
-            "destinatario_nombre": dest_nombre,
-            "direccion_llegada": dest_direccion,
-            "ciudad_llegada": dest_ciudad,
-            "direccion_partida": partida_direccion,
-            "ciudad_partida": partida_ciudad,
-            "ubigeo_partida": os.environ.get("SUNAT_DEFAULT_PARTIDA_UBIGEO", "030303").strip(),
-            "ubigeo_llegada": os.environ.get("SUNAT_DEFAULT_LLEGADA_UBIGEO", "030102").strip(),
-            "motivo_traslado": motivo,
-            "placa_vehiculo": placa,
-            "conductor_documento": chofer_dni
-        }
-
-        user.telegram_context = context_data
-        db.session.commit()
-
-        prod_txt = "\n".join([f"• {item['cantidad']}x {item['presentacion_nombre']} (Peso tot: {item['peso_total_kg']} kg)" for item in items_validados])
-        warnings_txt = "\n".join(warnings) if warnings else ""
-
-        card = (
-            f"📋 <b>Confirmar Guía de Remisión (SUNAT)</b>\n\n"
-            f"🏢 <b>Destinatario Doc:</b> {dest_doc}\n"
-            f"👤 <b>Nombre:</b> {dest_nombre}\n"
-            f"📍 <b>Partida:</b> {partida_direccion}\n"
-            f"🏁 <b>Llegada:</b> {dest_direccion}\n"
-            f"🚛 <b>Placa:</b> {placa}\n"
-            f"🪪 <b>DNI Chofer:</b> {chofer_dni}\n"
-            f"📝 <b>Motivo:</b> {motivo.capitalize()}\n\n"
-            f"📦 <b>Bienes a Trasladar:</b>\n{prod_txt}\n\n"
-        )
-        if warnings_txt:
-            card += f"{warnings_txt}\n\n"
-        card += "¿Confirmas la emisión electrónica de la guía en SUNAT?"
-
-        reply_markup = {
-            "inline_keyboard": [
-                [
-                    {"text": "✅ Emitir Guía", "callback_data": "confirm:guia_remision"},
-                    {"text": "❌ Cancelar", "callback_data": "cancel"}
-                ]
-            ]
-        }
-        telegram_service.send_message(chat_id, card, reply_markup)
+        contexto = {"action": "guia_remision", "borrador": borrador, "idempotency_key": uuid.uuid4().hex}
+        enviar_tarjeta_guia(chat_id, user, contexto)
 
     @staticmethod
     def execute_guia_remision(chat_id, user, context, message_id):
-        items = context["items"]
-        dest_doc = context["destinatario_documento"]
-        dest_nombre = context["destinatario_nombre"]
-        dir_llegada = context["direccion_llegada"]
-        _ciudad_llegada = context["ciudad_llegada"]  # exige la clave aunque no se use
-        dir_partida = context["direccion_partida"]
-        _ciudad_partida = context["ciudad_partida"]  # exige la clave aunque no se use
-        motivo = context["motivo_traslado"]
-        placa = context["placa_vehiculo"]
-        chofer_dni = context["conductor_documento"]
+        borrador = context["borrador"]
+        clave = context["idempotency_key"]
 
-        ruc_emisor = os.environ.get("SUNAT_RUC", "20601234567").strip()
-        razon_social_emisor = "EMPRESA DE CARBON SAC"
+        def responder(texto):
+            telegram_service.edit_message(chat_id, message_id, texto)
 
-        default_chofer_dni = os.environ.get("SUNAT_DEFAULT_CHOFER_DNI", "00000000").strip()
-        default_chofer_licencia = os.environ.get("SUNAT_DEFAULT_CHOFER_LICENCIA", f"Q{default_chofer_dni}").strip()
-        default_chofer_nombre = os.environ.get("SUNAT_DEFAULT_CHOFER_NOMBRE", "CHOFER TELEGRAM").strip()
+        falta = guia_service.faltantes(borrador)
+        if falta:
+            StateMachine.clear_context(user)
+            responder("❌ <b>No se emitió la guía.</b> Falta:\n" + "\n".join(f"• {f}" for f in falta))
+            return
+        if not guia_service.envio_habilitado():
+            StateMachine.clear_context(user)
+            responder("⛔ <b>No se emitió la guía:</b> el envío a SUNAT está deshabilitado.")
+            return
 
-        if chofer_dni == default_chofer_dni:
-            chofer_licencia = default_chofer_licencia
-            chofer_nombre = default_chofer_nombre
-        else:
-            chofer_licencia = f"Q{chofer_dni}"
-            chofer_nombre = "CHOFER TELEGRAM"
-
-        motivo_map = {
-            "venta": "01",
-            "traslado": "04",
-            "compra": "02",
-            "devolucion": "06"
-        }
-        cod_motivo = motivo_map.get(motivo.lower(), "13")
-
-        numero_correlativo = int(time.time()) % 1000000
-        fecha_emision = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        tipo_doc_dest = "6" if len(dest_doc) == 11 else "1"
-        peso_bruto_total = sum(item["peso_total_kg"] for item in items)
-
-        detalles_sunat = []
-        for idx, item in enumerate(items):
-            detalles_sunat.append({
-                "codigo": f"P{idx+1:03d}",
-                "descripcion": item["presentacion_nombre"],
-                "whitespace_desc": item["presentacion_nombre"],
-                "cantidad": float(item["whitespace_desc"] if "whitespace_desc" in item else item["cantidad"]),
-                "unidadMedida": "NIU"
-            })
-            if "whitespace_desc" in detalles_sunat[-1]:
-                del detalles_sunat[-1]["whitespace_desc"]
-            detalles_sunat[-1]["cantidad"] = float(item["cantidad"])
-
-        payload = {
-            "serie": "T001",
-            "numero": numero_correlativo,
-            "fechaEmision": fecha_emision,
-            "motivoTraslado": cod_motivo,
-            "modalidadTransporte": "02",
-            "unidadMedidaPeso": "KGM",
-            "pesoBrutoTotal": float(peso_bruto_total),
-            "remitente": {
-                "numeroDocumento": ruc_emisor,
-                "tipoDocumento": "6",
-                "nombre": razon_social_emisor
-            },
-            "destinatario": {
-                "numeroDocumento": dest_doc,
-                "tipoDocumento": tipo_doc_dest,
-                "nombre": dest_nombre
-            },
-            "puntoPartida": {
-                "direccion": dir_partida,
-                "ubigeo": context.get("ubigeo_partida", "030303")
-            },
-            "puntoLlegada": {
-                "direccion": dir_llegada,
-                "ubigeo": context.get("ubigeo_llegada", "030102")
-            },
-            "detalles": detalles_sunat,
-            "chofer": {
-                "tipoDocumento": "1",
-                "numeroDocumento": chofer_dni,
-                "licencia": chofer_licencia,
-                "nombre": chofer_nombre
-            },
-            "vehiculo": {
-                "placa": placa
+        movimiento_ids = None
+        if borrador.get("origen_tipo") == "traslado":
+            from resources.transferencia_resource import TransferenciaService
+            payload = {
+                "almacen_origen_id": borrador["almacen_origen_id"],
+                "almacen_destino_id": borrador["almacen_destino_id"],
+                "transferencias": [
+                    {"presentacion_id": b["presentacion_id"], "cantidad": b["cantidad"]}
+                    for b in borrador["bienes"]
+                ],
             }
-        }
-
-        telegram_service.edit_message(chat_id, message_id, "📡 <i>Transmitiendo Guía de Remisión a la SUNAT...</i>")
+            claims = {"sub": user.id, "rol": user.rol, "almacen_id": user.almacen_id}
+            try:
+                servicio = TransferenciaService(payload, claims=claims)
+                servicio.ejecutar_transferencia()
+                movimiento_ids = list(servicio.movimiento_ids)
+            except Exception as exc:
+                db.session.rollback()
+                StateMachine.clear_context(user)
+                detalle = str(exc) if isinstance(exc, ValueError) else "error al mover el inventario"
+                responder(f"❌ <b>No se registró el traslado ni la guía:</b> {detalle}")
+                return
 
         try:
-            res = sunat_service.emitir_guia_remision(payload)
-            ticket = res.get("numTicket")
+            guia = guia_service.emitir(borrador, user, clave, chat_id=chat_id, movimiento_ids=movimiento_ids)
+        except guia_service.GuiaError as exc:
+            db.session.rollback()
+            StateMachine.clear_context(user)
+            responder(f"❌ <b>No se pudo emitir la guía:</b> {exc}")
+            return
 
-            if ticket:
-                telegram_service.edit_message(chat_id, message_id, f"✅ <b>Guía enviada. Ticket:</b> {ticket}\n⏳ <i>Consultando estado en SUNAT...</i>")
-
-                time.sleep(2)
-
-                status_res = sunat_service.consultar_estado_ticket(ticket)
-                cod_estado = status_res.get("codRespuesta")
-                mensaje = status_res.get("desRespuesta", "Procesado")
-
-                if cod_estado == "99":
-                    err_msg = status_res.get("error", {}).get("desError", "Error desconocido")
-                    raise RuntimeError(f"SUNAT rechazó la guía: {err_msg}")
-                elif cod_estado == "0" or "aceptada" in mensaje.lower() or "procesado" in mensaje.lower():
-                    telegram_service.edit_message(
-                        chat_id,
-                        message_id,
-                        f"✅ <b>Guía de Remisión Emitida y Aceptada por SUNAT</b>\n\n"
-                        f"<b>Nro de Guía:</b> T001-{numero_correlativo:08d}\n"
-                        f"<b>Ticket:</b> {ticket}\n"
-                        f"<b>Estado:</b> {mensaje}\n\n"
-                        f"📍 <b>Ruta:</b> {dir_partida} ➡️ {dir_llegada}\n"
-                        f"📦 <b>Peso Total:</b> {peso_bruto_total} kg"
-                    )
-                else:
-                    telegram_service.edit_message(
-                        chat_id,
-                        message_id,
-                        f"⏳ <b>Guía Enviada (Procesamiento Asíncrono)</b>\n\n"
-                        f"<b>Nro de Guía:</b> T001-{numero_correlativo:08d}\n"
-                        f"<b>Ticket:</b> {ticket}\n"
-                        f"<b>Estado:</b> {mensaje}\n\n"
-                        f"La guía fue recibida por SUNAT y está en proceso de validación final."
-                    )
-            else:
-                raise RuntimeError("SUNAT no devolvió ningún número de ticket.")
-
-        except Exception as e:
-            logger.error(f"Error al emitir guía en SUNAT: {e}", exc_info=True)
-            telegram_service.edit_message(
-                chat_id,
-                message_id,
-                f"❌ <b>Error SUNAT:</b> {str(e)}\n\n"
-                f"No se pudo emitir la guía de remisión electrónica de forma definitiva."
+        StateMachine.clear_context(user)
+        numero = guia_service.numero_completo(guia)
+        traslado_txt = "\n📦 Traslado de inventario registrado." if movimiento_ids else ""
+        if guia.estado == guia_service.ESTADO_ENVIADA:
+            responder(
+                f"📡 <b>Guía {numero} enviada a SUNAT</b> (ticket {guia.ticket}).{traslado_txt}\n"
+                "Te aviso aquí con el PDF y el QR cuando SUNAT la acepte (unos minutos). "
+                f"También puedes escribir <code>/guia {numero}</code>."
+            )
+        elif guia.estado == guia_service.ESTADO_INCIERTA:
+            responder(
+                f"⚠️ <b>Guía {numero} quedó incierta</b> (no hubo respuesta clara de SUNAT).{traslado_txt}\n"
+                "No se sabe si SUNAT la recibió. Revísala en SUNAT SOL antes de emitir otra; "
+                "no la vuelvas a emitir con otro número."
+            )
+        else:
+            responder(
+                f"❌ <b>No se pudo enviar la guía {numero} a SUNAT.</b>{traslado_txt}\n"
+                f"{guia.cdr_mensaje or ''}"
             )

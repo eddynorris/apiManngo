@@ -135,6 +135,10 @@ class GreRemitenteData:
     llegada_direccion: str
     transporte: TransportePrivadoGre
     bienes: tuple[BienGre, ...]
+    # Código de establecimiento anexo (4 dígitos) del RUC del emisor; requerido por
+    # SUNAT en traslados entre establecimientos de la misma empresa (motivo 04).
+    partida_codigo_establecimiento: str | None = None
+    llegada_codigo_establecimiento: str | None = None
 
 
 @dataclass(frozen=True)
@@ -408,6 +412,17 @@ def _party(parent, etiqueta: str, tipo_documento: str, numero_documento: str, ra
     return party_wrapper
 
 
+def _codigo_establecimiento(parent, codigo, ruc: str, field_name: str) -> None:
+    """Añade ``cbc:AddressTypeCode`` (código de anexo SUNAT) si se informó."""
+    if codigo is None:
+        return
+    valor = _text(codigo, field_name, max_len=4)
+    if not re.fullmatch(r"\d{4}", valor):
+        raise GreValidationError(f"{field_name} debe tener 4 dígitos")
+    _sub(parent, CBC_NS, "AddressTypeCode", valor, listID=_ruc(ruc, "emisor.ruc"),
+         listAgencyName="PE:SUNAT", listName="Establecimientos anexos")
+
+
 def build_despatch_xml(data: GreRemitenteData) -> bytes:
     """Construye un ``DespatchAdvice`` UBL 2.1 (remitente 09, privado 02).
 
@@ -503,12 +518,16 @@ def build_despatch_xml(data: GreRemitenteData) -> bytes:
     entrega = _sub(envio, CAC_NS, "Delivery")
     direccion_entrega = _sub(entrega, CAC_NS, "DeliveryAddress")
     _sub(direccion_entrega, CBC_NS, "ID", _ubigeo(data.llegada_ubigeo, "llegada_ubigeo"))
+    _codigo_establecimiento(direccion_entrega, data.llegada_codigo_establecimiento,
+                            data.emisor.ruc, "llegada_codigo_establecimiento")
     _sub(direccion_entrega, CBC_NS, "StreetName", _business_text(
         data.llegada_direccion, "llegada_direccion", _PLACEHOLDER_ADDRESSES
     ))
 
     origen = _sub(envio, CAC_NS, "OriginAddress")
     _sub(origen, CBC_NS, "ID", _ubigeo(data.partida_ubigeo, "partida_ubigeo"))
+    _codigo_establecimiento(origen, data.partida_codigo_establecimiento,
+                            data.emisor.ruc, "partida_codigo_establecimiento")
     _sub(origen, CBC_NS, "StreetName", _business_text(
         data.partida_direccion, "partida_direccion", _PLACEHOLDER_ADDRESSES
     ))
@@ -1162,3 +1181,26 @@ def interpret_ticket_status(codigo, cdr=None, *, expected_ruc, expected_tipo: st
                             cdr=resultado, message="CDR válido con ResponseCode 0")
     return TicketResult(estado=resultado.estado, accepted=False, ticket_code=code,
                         cdr=resultado, message="CDR no aceptado")
+
+
+def extract_qr_url(cdr_xml) -> str | None:
+    """URL de consulta/QR que SUNAT incluye en el CDR aceptado de una GRE.
+
+    SUNAT la envía en ``cac:DocumentReference/cbc:DocumentDescription``. Se
+    devuelve el primer ``DocumentDescription`` que sea una URL https/http; si no
+    existe o el XML es inválido, ``None`` (no se inventa ninguna URL).
+    """
+    if not cdr_xml:
+        return None
+    if isinstance(cdr_xml, str):
+        cdr_xml = cdr_xml.encode("utf-8")
+    try:
+        root = _parse_secure_xml(cdr_xml)
+    except SunatXmlError:
+        return None
+    for element in root.iter():
+        if _local_name(element) == "DocumentDescription":
+            texto = (element.text or "").strip()
+            if texto.lower().startswith(("https://", "http://")):
+                return texto
+    return None

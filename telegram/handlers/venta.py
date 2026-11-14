@@ -407,7 +407,13 @@ class VentaHandler:
         if estado == 'pedido':
             telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Pedido registrado con éxito!</b>\n\n<b>Pedido ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Productos:</b>\n{items_detail}\n\n<b>Total Estimado:</b> S/ {total_venta:.2f}\n<b>Pagado/Abono:</b> S/ {monto_pago:.2f}")
         else:
-            telegram_service.edit_message(chat_id, message_id, f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Productos:</b>\n{items_detail}\n\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {monto_pago:.2f}")
+            telegram_service.edit_message(
+                chat_id, message_id,
+                f"✅ <b>¡Venta registrada con éxito!</b>\n\n<b>Venta ID:</b> #{nueva_venta.id}\n<b>Cliente:</b> {context['cliente_nombre']}\n<b>Almacén:</b> {almacen_nombre}\n<b>Productos:</b>\n{items_detail}\n\n<b>Total:</b> S/ {total_venta:.2f}\n<b>Pagado:</b> S/ {monto_pago:.2f}",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "📄 Emitir guía de remisión", "callback_data": f"guia:venta:{nueva_venta.id}"}
+                ]]},
+            )
 
     @staticmethod
     def prepare_cliente(chat_id, user, args):
