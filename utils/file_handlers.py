@@ -14,15 +14,85 @@ logger = logging.getLogger(__name__)
 # Buckets válidos en Supabase
 VALID_BUCKETS = {'presentaciones', 'comprobantes', 'pagos'}
 
+DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_PDF_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_IMAGE_PIXELS = 25_000_000
+IMAGE_FORMATS = {'JPEG', 'PNG'}
+IMAGE_EXTENSIONS = {'jpg': 'JPEG', 'jpeg': 'JPEG', 'png': 'PNG'}
+PDF_EXTENSIONS = {'pdf'}
+_EXTENSION_FORMATS = {**IMAGE_EXTENSIONS, **{ext: 'PDF' for ext in PDF_EXTENSIONS}}
+
 def allowed_file(filename):
     """Verifica si la extensión del archivo es permitida"""
-    allowed_extensions = current_app.config.get('ALLOWED_EXTENSIONS', {'png', 'jpg', 'jpeg', 'gif', 'pdf'})
+    allowed_extensions = current_app.config.get('ALLOWED_EXTENSIONS', {'png', 'jpg', 'jpeg', 'pdf'})
     if not filename:
         return False
     parts = filename.rsplit('.', 1)
     if len(parts) == 2:
         return parts[1].lower() in allowed_extensions
     return False
+
+
+def _extension_kind(filename):
+    if not filename or '.' not in filename:
+        return None
+    return _EXTENSION_FORMATS.get(filename.rsplit('.', 1)[1].lower())
+
+
+def _detect_content_kind(data):
+    if data.startswith(b'\xff\xd8\xff'):
+        return 'JPEG'
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'PNG'
+    if data.startswith(b'%PDF-'):
+        return 'PDF'
+    return None
+
+
+def _read_limited(stream, max_bytes):
+    if not hasattr(stream, 'read'):
+        return None
+    try:
+        if hasattr(stream, 'seek'):
+            stream.seek(0)
+        data = stream.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            return None
+        return data
+    except Exception as e:
+        logger.error(f"No se pudo leer el archivo recibido: {e}")
+        return None
+
+
+def _validate_image(data, max_pixels):
+    try:
+        with Image.open(io.BytesIO(data), formats=tuple(IMAGE_FORMATS)) as probe:
+            if probe.format not in IMAGE_FORMATS:
+                return None
+            width, height = probe.size
+            if width <= 0 or height <= 0 or width * height > max_pixels:
+                logger.warning(f"Imagen rechazada por dimensiones: {width}x{height}")
+                return None
+            probe.verify()
+
+        with Image.open(io.BytesIO(data), formats=tuple(IMAGE_FORMATS)) as img:
+            img.load()
+            return img
+    except (Image.DecompressionBombError, Image.UnidentifiedImageError, OSError, ValueError) as e:
+        logger.warning(f"Imagen rechazada por formato o contenido inválido: {e}")
+        return None
+
+
+def _is_complete_pdf(data):
+    return data.startswith(b'%PDF-') and b'%%EOF' in data[-2048:]
+
+
+def _resize_image(img, max_width):
+    if img.width > max_width:
+        ratio = max_width / float(img.width)
+        new_height = max(1, int(float(img.height) * ratio))
+        return img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+    return img
 
 def safe_filename(filename, force_extension=None):
     """
@@ -107,42 +177,66 @@ def save_file(file, subfolder, quality=80, max_width=1920):
     else:
         bucket_name = 'comprobantes'
 
-    # Procesar archivo
-    content_type = file.content_type
-    file_to_upload = file.stream if hasattr(file, 'stream') else file
+    # Leer una sola vez con un límite absoluto y validar el contenido real,
+    # sin confiar en la extensión ni en el Content-Type declarado por el cliente.
+    max_image_bytes = current_app.config.get('MAX_IMAGE_UPLOAD_BYTES', DEFAULT_MAX_IMAGE_BYTES)
+    max_pdf_bytes = current_app.config.get('MAX_PDF_UPLOAD_BYTES', DEFAULT_MAX_PDF_BYTES)
+    max_image_pixels = current_app.config.get('MAX_IMAGE_PIXELS', DEFAULT_MAX_IMAGE_PIXELS)
+    raw_data = _read_limited(file.stream, max(max_image_bytes, max_pdf_bytes))
+    if raw_data is None:
+        logger.warning(f"Archivo rechazado por tamaño o lectura inválida: {file.filename}")
+        return None
+
+    detected_kind = _detect_content_kind(raw_data)
+    extension_kind = _extension_kind(file.filename)
+    if detected_kind is None or extension_kind is None or detected_kind != extension_kind:
+        logger.warning(
+            f"Archivo rechazado: formato real {detected_kind!r} no coincide con la extensión "
+            f"declarada {file.filename!r}"
+        )
+        return None
+
+    file_to_upload = io.BytesIO(raw_data)
     target_extension = None
-    upload_content_type = content_type
+    upload_content_type = None
 
-    if content_type and content_type.startswith('image/') and not content_type.endswith('webp'):
-        logger.info(f"Procesando imagen: {file.filename} ({content_type})")
-        try:
-            img = Image.open(file_to_upload)
-            img_width, img_height = img.size
-            if img_width > max_width:
-                ratio = max_width / float(img_width)
-                new_height = int(float(img_height) * float(ratio))
-                img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
-                logger.info(f"Imagen redimensionada a {max_width}x{new_height}")
-
-            webp_buffer = io.BytesIO()
-            if img.mode == 'RGBA':
-                 img.save(webp_buffer, format='WEBP', quality=quality, lossless=False)
-            else:
-                 img.convert('RGB').save(webp_buffer, format='WEBP', quality=quality)
-
-            webp_buffer.seek(0)
-            file_to_upload = webp_buffer
-            target_extension = "webp"
-            upload_content_type = "image/webp"
-            logger.info(f"Imagen convertida a WebP con calidad {quality}")
-
-        except Exception as e:
-            logger.error(f"Error procesando imagen con Pillow: {e}")
+    if detected_kind in IMAGE_FORMATS:
+        if len(raw_data) > max_image_bytes:
+            logger.warning(f"Imagen rechazada por exceder {max_image_bytes} bytes")
             return None
-    elif content_type == 'application/pdf':
-        logger.info(f"Subiendo PDF directamente: {file.filename}")
+
+        img = _validate_image(raw_data, max_image_pixels)
+        if img is None:
+            return None
+
+        img = _resize_image(img, max_width)
+        webp_buffer = io.BytesIO()
+        try:
+            if img.mode == 'RGBA':
+                img.save(webp_buffer, format='WEBP', quality=quality, lossless=False)
+            else:
+                img.convert('RGB').save(webp_buffer, format='WEBP', quality=quality)
+        except (OSError, ValueError) as e:
+            logger.warning(f"Imagen rechazada durante la conversión: {e}")
+            return None
+
+        webp_buffer.seek(0)
+        file_to_upload = webp_buffer
+        target_extension = 'webp'
+        upload_content_type = 'image/webp'
+        logger.info(f"Imagen {detected_kind} convertida a WebP con calidad {quality}")
+    elif detected_kind == 'PDF':
+        if len(raw_data) > max_pdf_bytes:
+            logger.warning(f"PDF rechazado por exceder {max_pdf_bytes} bytes")
+            return None
+        if not _is_complete_pdf(raw_data):
+            logger.warning(f"PDF rechazado por estructura incompleta: {file.filename}")
+            return None
+        upload_content_type = 'application/pdf'
+        logger.info(f"Subiendo PDF validado directamente: {file.filename}")
     else:
-        logger.warning(f"Tipo de archivo no procesado ({content_type}): {file.filename}. Subiendo original.")
+        logger.warning(f"Formato no permitido: {detected_kind!r} ({file.filename})")
+        return None
 
     # Generar nombre único
     unique_filename = safe_filename(file.filename, force_extension=target_extension)

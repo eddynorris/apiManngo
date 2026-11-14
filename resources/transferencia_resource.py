@@ -8,15 +8,33 @@ from flask import request
 from flask_jwt_extended import get_jwt, jwt_required
 from flask_restful import Resource
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import HTTPException
 
 from common import handle_db_errors
 from extensions import db
 from models import Almacen, Inventario, Movimiento, PresentacionProducto
 # Imports agregados para el método GET
 from schemas import almacenes_schema
+from services.authorization import autorizar_almacen, normalizar_ids
 from utils.file_handlers import get_presigned_url
 
 logger = logging.getLogger(__name__)
+
+
+def _id_almacen_estricto(valor):
+    return normalizar_ids({'almacen_id': valor})['almacen_id']
+
+
+def _cantidad_positiva_finita(valor):
+    if valor is None or isinstance(valor, bool):
+        raise ValueError('la cantidad debe ser un número positivo')
+    try:
+        cantidad = Decimal(str(valor))
+    except (ValueError, TypeError, InvalidOperation):
+        raise ValueError('la cantidad debe ser un número positivo')
+    if not cantidad.is_finite() or cantidad <= 0:
+        raise ValueError('la cantidad debe ser un número positivo')
+    return cantidad
 
 
 # --- CAPA DE SERVICIO PARA LA LÓGICA DE NEGOCIO ---
@@ -62,30 +80,46 @@ class TransferenciaService:
         }
 
     def _validar_y_preparar_datos(self):
-        """Valida el formato de la solicitud y prepara los datos iniciales."""
+        """Valida el formato, autoriza ambos extremos y prepara los datos iniciales."""
+        if not isinstance(self.data, dict):
+            raise ValueError("Se requiere un cuerpo JSON para la transferencia.")
         if 'transferencias' not in self.data or not isinstance(self.data['transferencias'], list):
             raise ValueError("El campo 'transferencias' debe ser una lista.")
-        
-        self.almacen_origen_id = self.data.get('almacen_origen_id')
-        self.almacen_destino_id = self.data.get('almacen_destino_id')
 
-        if not all([self.almacen_origen_id, self.almacen_destino_id]):
+        origen_raw = self.data.get('almacen_origen_id')
+        destino_raw = self.data.get('almacen_destino_id')
+        if origen_raw in (None, '') or destino_raw in (None, ''):
             raise ValueError("Los campos 'almacen_origen_id' y 'almacen_destino_id' son requeridos.")
-        
+
+        self.almacen_origen_id = _id_almacen_estricto(origen_raw)
+        self.almacen_destino_id = _id_almacen_estricto(destino_raw)
+
         if self.almacen_origen_id == self.almacen_destino_id:
             raise ValueError("El almacén de origen y destino no pueden ser el mismo.")
+
+        # Autorizar ambos extremos antes de consultar stock, bloquear o mutar.
+        # Un no-admin no puede cruzar almacenes; el admin vigente en BD sí.
+        actor = autorizar_almacen(self.usuario_id, self.almacen_origen_id)
+        autorizar_almacen(self.usuario_id, self.almacen_destino_id)
+        self.usuario_id = actor.id
 
         self.almacen_origen = Almacen.query.get_or_404(self.almacen_origen_id)
         self.almacen_destino = Almacen.query.get_or_404(self.almacen_destino_id)
 
-        for i, transfer in enumerate(self.data['transferencias']):
+        transferencias = normalizar_ids(self.data['transferencias'])
+        for i, transfer in enumerate(transferencias):
+            if not isinstance(transfer, dict):
+                raise ValueError(f"Transferencia {i+1}: formato de datos inválido.")
             try:
-                cantidad = Decimal(transfer['cantidad'])
-                if cantidad <= 0:
-                    raise ValueError(f"Transferencia {i+1}: la cantidad debe ser positiva.")
-                
+                presentacion_raw = transfer.get('presentacion_id')
+                if presentacion_raw in (None, ''):
+                    raise ValueError("presentacion_id requerido")
+                presentacion_id = normalizar_ids({
+                    'presentacion_id': presentacion_raw
+                })['presentacion_id']
+                cantidad = _cantidad_positiva_finita(transfer.get('cantidad'))
                 self.transferencias_validadas.append({
-                    'presentacion_id': int(transfer['presentacion_id']),
+                    'presentacion_id': presentacion_id,
                     'cantidad': cantidad
                 })
             except (ValueError, TypeError, InvalidOperation) as e:
@@ -122,19 +156,30 @@ class TransferenciaService:
         return agrupados
 
     def _validar_stock(self, inventarios_origen):
-        """Valida que haya stock suficiente para todas las transferencias sumarizando los lotes disponibles."""
-        for transfer in self.transferencias_validadas:
-            invs_origen = inventarios_origen.get(transfer['presentacion_id'], [])
-            
-            stock_disponible = sum(inv.cantidad for inv in invs_origen)
+        """Valida el total agregado por presentación antes de mutar cualquier lote.
 
-            if stock_disponible < transfer['cantidad']:
-                nombre_presentacion = f"ID {transfer['presentacion_id']}"
+        Agregar evita que varias líneas duplicadas pasen individualmente y en
+        conjunto dejen el inventario negativo.
+        """
+        requerido_por_presentacion = {}
+        for transfer in self.transferencias_validadas:
+            presentacion_id = transfer['presentacion_id']
+            requerido_por_presentacion[presentacion_id] = (
+                requerido_por_presentacion.get(presentacion_id, Decimal('0'))
+                + transfer['cantidad']
+            )
+
+        for presentacion_id, cantidad_requerida in requerido_por_presentacion.items():
+            invs_origen = inventarios_origen.get(presentacion_id, [])
+            stock_disponible = sum((inv.cantidad for inv in invs_origen), Decimal('0'))
+
+            if stock_disponible < cantidad_requerida:
+                nombre_presentacion = f"ID {presentacion_id}"
                 if invs_origen and invs_origen[0].presentacion:
-                     nombre_presentacion = invs_origen[0].presentacion.nombre
+                    nombre_presentacion = invs_origen[0].presentacion.nombre
                 raise ValueError(
                     f"Stock insuficiente para '{nombre_presentacion}'. "
-                    f"Requerido: {transfer['cantidad']}, Disponible: {stock_disponible}"
+                    f"Requerido: {cantidad_requerida}, Disponible: {stock_disponible}"
                 )
 
     def _actualizar_inventarios_y_crear_movimientos(self, inventarios_origen, inventarios_destino):
@@ -161,6 +206,7 @@ class TransferenciaService:
                 
                 # Descontar del origen
                 inv_orig.cantidad -= cantidad_a_tomar
+                inv_orig.ultima_actualizacion = self.fecha_operacion
                 cantidad_restante -= cantidad_a_tomar
                 
                 # Buscar o crear inventario destino CON EL MISMO LOTE
@@ -280,6 +326,9 @@ class TransferenciaInventarioResource(Resource):
                 "presentaciones_disponibles": list(presentaciones_agrupadas.values())
             }, 200
 
+        except HTTPException:
+            db.session.rollback()
+            raise
         except Exception as e:
             logger.error(f"Error al obtener datos para formulario de transferencia: {str(e)}", exc_info=True)
             return {"error": "Error interno al obtener datos para transferencias."}, 500
@@ -304,6 +353,9 @@ class TransferenciaInventarioResource(Resource):
             resultado = servicio.ejecutar_transferencia()
             db.session.commit()
             return resultado, 200
+        except HTTPException:
+            db.session.rollback()
+            raise
         except ValueError as e:
             db.session.rollback()
             return {"error": str(e)}, 400

@@ -4,12 +4,19 @@ from flask import request
 from models import Pedido, PedidoDetalle, Cliente, PresentacionProducto, Almacen, Inventario, Movimiento, VentaDetalle, Venta, Users
 from schemas import pedido_schema, pedidos_schema, venta_schema, clientes_schema, almacenes_schema, presentacion_schema
 from extensions import db
-from common import handle_db_errors, MAX_ITEMS_PER_PAGE, mismo_almacen_o_admin, parse_iso_datetime
+from common import handle_db_errors, MAX_ITEMS_PER_PAGE, parse_iso_datetime, obtener_payload_normalizado
+from services.authorization import (
+    autorizar_almacen,
+    autorizar_pedido,
+    es_admin,
+    obtener_actor,
+)
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from utils.file_handlers import get_presigned_url
 import logging
 from sqlalchemy import asc, desc
+from werkzeug.exceptions import Forbidden
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +31,7 @@ class PedidoResource(Resource):
         """
         if pedido_id:
             pedido = Pedido.query.get_or_404(pedido_id)
+            autorizar_pedido(get_jwt().get('sub'), pedido)
             
             # Serializar el pedido
             result = pedido_schema.dump(pedido)
@@ -60,6 +68,13 @@ class PedidoResource(Resource):
         # --- Fin Lógica de Ordenación ---
 
         query = Pedido.query
+
+        actor = obtener_actor(get_jwt().get('sub'))
+        if not es_admin(actor):
+            query = query.filter(
+                Pedido.almacen_id == actor.almacen_id,
+                Pedido.vendedor_id == actor.id,
+            )
 
         # --- Aplicar Joins si es necesario para ordenar ---
         if sort_by == 'cliente_nombre':
@@ -116,19 +131,21 @@ class PedidoResource(Resource):
         }, 200
 
     @jwt_required()
-    @mismo_almacen_o_admin
     @handle_db_errors
     def post(self):
 
-        data = pedido_schema.load(request.get_json())
+        payload, _ = obtener_payload_normalizado()
+        actor_id = get_jwt().get('sub')
+
+        data = pedido_schema.load(payload)
         
         # Validaciones
         Cliente.query.get_or_404(data.cliente_id)
         Almacen.query.get_or_404(data.almacen_id)
+        autorizar_almacen(actor_id, data.almacen_id)
         
-        # Asignar vendedor automáticamente desde JWT
-        claims = get_jwt()
-        data.vendedor_id = claims.get('sub')
+        # Asignar vendedor automáticamente desde el actor vigente
+        data.vendedor_id = int(actor_id)
         
         # Validar detalles del pedido
         for detalle in data.detalles:
@@ -143,20 +160,29 @@ class PedidoResource(Resource):
         return pedido_schema.dump(data), 201
 
     @jwt_required()
-    @mismo_almacen_o_admin
     @handle_db_errors
     def put(self, pedido_id):
         """
         Actualiza un pedido existente
         """
         pedido = Pedido.query.get_or_404(pedido_id)
-        
+        actor_id = get_jwt().get('sub')
+        actor = autorizar_pedido(actor_id, pedido)
+
         # Validar estados - no permitir actualizar pedidos entregados
         if pedido.estado == 'entregado':
             return {"error": "No se puede modificar un pedido ya entregado"}, 400
-        
+
+        payload, _ = obtener_payload_normalizado()
+        target_almacen_id = payload.get('almacen_id', pedido.almacen_id)
+        if str(target_almacen_id) != str(pedido.almacen_id):
+            autorizar_almacen(actor_id, target_almacen_id)
+        if (not es_admin(actor) and payload.get('vendedor_id') is not None
+                and int(payload['vendedor_id']) != actor.id):
+            raise Forbidden("No puede reasignar el pedido a otro usuario")
+
         updated_pedido = pedido_schema.load(
-            request.get_json(),
+            payload,
             instance=pedido,
             partial=True
         )
@@ -165,13 +191,13 @@ class PedidoResource(Resource):
         return pedido_schema.dump(updated_pedido), 200
     
     @jwt_required()
-    @mismo_almacen_o_admin
     @handle_db_errors
     def delete(self, pedido_id):
         """
         Elimina un pedido (o lo marca como cancelado)
         """
         pedido = Pedido.query.get_or_404(pedido_id)
+        autorizar_pedido(get_jwt().get('sub'), pedido)
         
         # Si ya está entregado, no permite eliminar
         if pedido.estado == 'entregado':
@@ -188,7 +214,6 @@ class PedidoResource(Resource):
 
 class PedidoConversionResource(Resource):
     @jwt_required()
-    @mismo_almacen_o_admin
     @handle_db_errors
     def post(self, pedido_id):
         """
@@ -202,6 +227,9 @@ class PedidoConversionResource(Resource):
             db.joinedload(Pedido.cliente),
             db.joinedload(Pedido.detalles).joinedload(PedidoDetalle.presentacion)
         ).get_or_404(pedido_id)
+
+        # Autorizar el pedido real antes de tocar inventario o crear la venta.
+        autorizar_pedido(claims.get('sub'), pedido)
         
         # Validaciones previas
         if pedido.estado == 'entregado':

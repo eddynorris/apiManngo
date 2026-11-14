@@ -6,10 +6,23 @@ from common import handle_db_errors
 from models import Cliente, Inventario, PresentacionProducto, ComandoVozLog
 from extensions import db
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 import logging
 import time
 
 logger = logging.getLogger(__name__)
+
+
+def _persistir_log_comando_voz(**valores):
+    """Persiste la auditoría en su propia sesión y transacción.
+
+    No usa la sesión del request para no confirmar ni revertir operaciones
+    comerciales ajenas y para que el log quede guardado aunque la petición no
+    ejecute ninguna operación de base de datos.
+    """
+    with Session(db.engine) as audit_session:
+        audit_session.add(ComandoVozLog(**valores))
+        audit_session.commit()
 
 class VoiceCommandResource(Resource):   
     @jwt_required()
@@ -47,10 +60,11 @@ class VoiceCommandResource(Resource):
         # 1. Procesar con Gemini (ya incluye sanitización interna)
         result = gemini_service.process_command(command_text)
         
-        # Auditoría: Guardar log independientemente del resultado
+        # Auditoría: persistir con una sesión independiente, sin depender de que
+        # otra operación comercial confirme la sesión del request.
         try:
             duration_ms = int((time.time() - start_time) * 1000)
-            log_entry = ComandoVozLog(
+            _persistir_log_comando_voz(
                 usuario_id=current_user_id,
                 almacen_id=almacen_id,
                 texto_original=command_text[:500],  # Truncar por seguridad
@@ -59,14 +73,8 @@ class VoiceCommandResource(Resource):
                 exito=(result.get('action') not in ['error', 'security_block', 'none']),
                 latencia_ms=duration_ms
             )
-            db.session.add(log_entry)
-            # Usar flush() en lugar de commit() para minimizar latencia
-            # El commit se hará al final del request o con la venta
-            db.session.flush()
         except Exception as e:
             logger.error(f"Error al registrar log de auditoría (ComandoVozLog): {e}")
-            # No bloqueamos el flujo principal si falla el log, pero hacemos rollback de esa inserción fallida
-            db.session.rollback()
         
         if result['action'] != 'interpretar_operacion':
             return {
