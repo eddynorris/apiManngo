@@ -39,6 +39,7 @@ class _FakeUsers:
 
 
 class _FakeUser:
+    id = 7  # el router consulta StateMachine.get_context(user), que usa user.id
     username = 'a07_operador'
     telegram_context = None
     telegram_history = []

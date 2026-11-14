@@ -104,7 +104,7 @@ def setup_fechas_data(test_client):
         almacen_id=almacen.id,
         lote_id=None,
         cantidad=Decimal('20'),
-        stock_minimo=Decimal('5'),
+        stock_minimo=5,  # columna Integer
     )
     db.session.add_all([inventario, inventario_insumo])
     db.session.commit()
