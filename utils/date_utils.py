@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 
 import pytz
 
@@ -22,6 +22,15 @@ def to_peru_time(dt):
         dt = dt.replace(tzinfo=UTC)
 
     return dt.astimezone(PERU_TZ)
+
+def rango_utc_de_dias_peru(fecha_inicio, fecha_fin):
+    """
+    Convierte días de negocio de Perú [fecha_inicio, fecha_fin] (ambos inclusive)
+    en un rango UTC semiabierto [inicio, fin) para filtrar columnas DateTime en UTC.
+    """
+    inicio = PERU_TZ.localize(datetime.combine(fecha_inicio, time.min)).astimezone(UTC)
+    fin = PERU_TZ.localize(datetime.combine(fecha_fin + timedelta(days=1), time.min)).astimezone(UTC)
+    return inicio, fin
 
 def format_peru_date(dt, format_str='%Y-%m-%d %H:%M:%S'):
     """Formatea una fecha en hora Perú."""

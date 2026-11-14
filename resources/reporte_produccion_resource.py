@@ -10,6 +10,7 @@ from sqlalchemy import and_, func
 
 from common import handle_db_errors
 from models import Almacen, Lote, Movimiento, PresentacionProducto, Producto, Users, db
+from utils.date_utils import get_peru_now, rango_utc_de_dias_peru
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class ReporteProduccionBriquetasResource(Resource):
 
             # Si no se especifican fechas, usar el último mes
             if not fecha_inicio_str or not fecha_fin_str:
-                fecha_fin = datetime.now().date()
+                fecha_fin = get_peru_now().date()
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
@@ -44,6 +45,7 @@ class ReporteProduccionBriquetasResource(Resource):
                     fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
+            inicio_utc, fin_utc = rango_utc_de_dias_peru(fecha_inicio, fecha_fin)
 
             # Validar período
             if periodo not in ['dia', 'semana', 'mes']:
@@ -73,7 +75,8 @@ class ReporteProduccionBriquetasResource(Resource):
                     Movimiento.tipo == 'entrada',
                     Movimiento.tipo_operacion == 'ensamblaje',
                     PresentacionProducto.tipo == 'briqueta',
-                    func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                    Movimiento.fecha >= inicio_utc,
+                    Movimiento.fecha < fin_utc
                 )
             )
 
@@ -137,7 +140,8 @@ class ReporteProduccionBriquetasResource(Resource):
                         Movimiento.tipo == 'entrada',
                         Movimiento.tipo_operacion == 'ensamblaje',
                         PresentacionProducto.tipo == 'briqueta',
-                        func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                        Movimiento.fecha >= inicio_utc,
+                        Movimiento.fecha < fin_utc
                     )
                 ).group_by(func.date(Movimiento.fecha)).order_by(func.date(Movimiento.fecha))
 
@@ -194,7 +198,7 @@ class ReporteProduccionGeneralResource(Resource):
 
             # Si no se especifican fechas, usar el último mes
             if not fecha_inicio_str or not fecha_fin_str:
-                fecha_fin = datetime.now().date()
+                fecha_fin = get_peru_now().date()
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
@@ -203,6 +207,7 @@ class ReporteProduccionGeneralResource(Resource):
                     fecha_fin = parse_telegram_date_only(fecha_fin_str)
                 except ValueError:
                     return {'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, 400
+            inicio_utc, fin_utc = rango_utc_de_dias_peru(fecha_inicio, fecha_fin)
 
             # --- Consulta base para todos los movimientos de producción ---
             query = db.session.query(
@@ -220,7 +225,8 @@ class ReporteProduccionGeneralResource(Resource):
                 and_(
                     Movimiento.tipo == 'entrada',
                     Movimiento.tipo_operacion == 'ensamblaje',
-                    func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                    Movimiento.fecha >= inicio_utc,
+                    Movimiento.fecha < fin_utc
                 )
             )
 
@@ -323,7 +329,7 @@ class ReporteProduccionEntradasResource(Resource):
 
             # Validar y parsear fechas
             if not fecha_inicio_str or not fecha_fin_str:
-                fecha_fin = datetime.now().date()
+                fecha_fin = get_peru_now().date()
                 fecha_inicio = fecha_fin - timedelta(days=30)
             else:
                 try:
@@ -333,6 +339,7 @@ class ReporteProduccionEntradasResource(Resource):
                         return {'error': 'La fecha de inicio no puede ser mayor a la fecha de fin.'}, 400
                 except (ValueError, TypeError):
                     return {'error': 'Formato de fecha inválido. Use YYYY-MM-DD.'}, 400
+            inicio_utc, fin_utc = rango_utc_de_dias_peru(fecha_inicio, fecha_fin)
 
             # --- 2. Consulta Base de Movimientos de Entrada ---
             # Unimos Movimiento con PresentacionProducto, Producto, Lote, Users y Almacen
@@ -355,7 +362,8 @@ class ReporteProduccionEntradasResource(Resource):
                 Almacen, Users.almacen_id == Almacen.id
             ).filter(
                 Movimiento.tipo == 'entrada',
-                func.date(Movimiento.fecha).between(fecha_inicio, fecha_fin)
+                Movimiento.fecha >= inicio_utc,
+                Movimiento.fecha < fin_utc
             )
 
             # Filtro por tipo de operación
