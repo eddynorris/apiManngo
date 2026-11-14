@@ -10,6 +10,7 @@ class Users(db.Model):
     password = db.Column(db.String(256), nullable=False)
     rol = db.Column(db.String(20), nullable=False, default='usuario')
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id', ondelete='SET NULL'))
+    auth_version = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
     
@@ -305,7 +306,27 @@ class Pago(db.Model):
         CheckConstraint("(depositado = true AND monto_depositado IS NOT NULL AND fecha_deposito IS NOT NULL) OR (depositado = false)"),
         Index('idx_pago_fecha_deposito', 'fecha_deposito'),
         Index('idx_pago_depositado_fecha', 'depositado', 'fecha_deposito'),
+        Index('idx_pagos_venta', 'venta_id'),
     )
+
+class StorageCleanupTask(db.Model):
+    """Cola durable de borrados de Storage pendientes de reintento."""
+    __tablename__ = 'storage_cleanup_tasks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    storage_key = db.Column(db.String(512), nullable=False)
+    reason = db.Column(db.String(50), nullable=False, default='replaced')
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.String(255))
+    next_attempt_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now(), onupdate=db.func.now())
+
+    __table_args__ = (
+        UniqueConstraint('storage_key', name='uq_storage_cleanup_storage_key'),
+        Index('idx_storage_cleanup_next_attempt', 'next_attempt_at'),
+    )
+
 
 class TelegramUpdate(db.Model):
     __tablename__ = 'telegram_updates'

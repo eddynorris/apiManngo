@@ -1,4 +1,4 @@
-from marshmallow import Schema, fields, EXCLUDE
+from marshmallow import Schema, fields, EXCLUDE, ValidationError
 from marshmallow_sqlalchemy import SQLAlchemyAutoSchema
 from models import (
     Users, Producto, Almacen, Cliente, Gasto, Movimiento, 
@@ -8,7 +8,16 @@ from models import (
 )
 from extensions import db
 from decimal import Decimal, InvalidOperation
+from services.money import monto_decimal_positivo
 import logging
+
+
+def _validar_monto_positivo(value):
+    """Rechaza montos no finitos, no positivos o no numéricos."""
+    try:
+        monto_decimal_positivo(value)
+    except ValueError as error:
+        raise ValidationError(str(error)) from None
 
 # ------------------------- ESQUEMAS BASE -------------------------
 class AlmacenSchema(SQLAlchemyAutoSchema):
@@ -21,13 +30,22 @@ class AlmacenSchema(SQLAlchemyAutoSchema):
 
 class UserSchema(SQLAlchemyAutoSchema):
     almacen = fields.Nested(AlmacenSchema, only=("id", "nombre"))
+    password = fields.String(load_only=True)
 
     class Meta:
         model = Users
         load_instance = True
         unknown = EXCLUDE
-        sqla_session = db.session 
-        exclude = ("movimientos",)
+        sqla_session = db.session
+        exclude = (
+            "movimientos",
+            "auth_version",
+            "telegram_chat_id",
+            "telegram_context",
+            "telegram_history",
+            "telegram_linking_code",
+            "telegram_linking_expires",
+        )
         include_fk = True
 
 class ProveedorSchema(SQLAlchemyAutoSchema):
@@ -174,9 +192,15 @@ class VentaSchema(SQLAlchemyAutoSchema):
 class PagoSchema(SQLAlchemyAutoSchema):
     venta = fields.Nested(VentaSchema, only=("id", "total","cliente"), dump_only=True)
     usuario = fields.Nested(UserSchema, only=("id", "username"), dump_only=True)
-    monto = fields.Decimal(as_string=True)
-    monto_depositado = fields.Decimal(as_string=True)
+    id = fields.Integer(dump_only=True)
+    venta_id = fields.Integer()
+    monto = fields.Decimal(as_string=True, validate=_validar_monto_positivo)
+    # Campos de servidor: se serializan pero nunca se cargan desde el cliente.
+    usuario_id = fields.Integer(dump_only=True)
+    monto_depositado = fields.Decimal(as_string=True, dump_only=True)
     monto_en_gerencia = fields.Decimal(as_string=True, dump_only=True)  # Propiedad calculada
+    depositado = fields.Boolean(dump_only=True)
+    fecha_deposito = fields.DateTime(dump_only=True)
     url_comprobante = fields.String(dump_only=True)
 
     class Meta:
