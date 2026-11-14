@@ -1,17 +1,20 @@
 # common.py
 import logging
 import re
+import uuid
 import werkzeug.exceptions
 from decimal import Decimal
 from functools import wraps
 from datetime import datetime, date, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from flask import jsonify, request
-from flask_jwt_extended import verify_jwt_in_request, get_jwt
+from flask import Response, has_request_context, jsonify, request
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 from marshmallow import ValidationError
+from werkzeug.datastructures import Headers
 
 from extensions import db
+from models import Users
 from utils.date_utils import to_peru_time, get_peru_now
 import config
 
@@ -20,6 +23,35 @@ logger = logging.getLogger(__name__)
 
 # Re-exportar constante para compatibilidad
 MAX_ITEMS_PER_PAGE = config.MAX_ITEMS_PER_PAGE
+
+AUTH_VERSION_CLAIM = 'auth_version'
+
+
+def obtener_usuario_actual() -> Users:
+    """Resuelve el usuario vigente por el ID del subject del JWT.
+
+    No busca por username ni confía en claims de rol/almacén. Debe invocarse
+    después de ``verify_jwt_in_request``. Los IDs no numéricos, no positivos o
+    de un usuario inexistente se rechazan como identidad no autorizada.
+    """
+    identity = get_jwt_identity()
+    if isinstance(identity, bool) or identity is None:
+        raise werkzeug.exceptions.Unauthorized("Identidad inválida")
+
+    if isinstance(identity, int):
+        usuario_id = identity
+    elif isinstance(identity, str) and identity.isascii() and identity.isdigit():
+        usuario_id = int(identity)
+    else:
+        raise werkzeug.exceptions.Unauthorized("Identidad inválida")
+
+    if usuario_id <= 0:
+        raise werkzeug.exceptions.Unauthorized("Identidad inválida")
+
+    usuario = db.session.get(Users, usuario_id)
+    if usuario is None:
+        raise werkzeug.exceptions.Unauthorized("Usuario no autorizado")
+    return usuario
 
 def parse_iso_datetime(date_string: str, add_timezone: bool = True) -> datetime:
     """
@@ -66,6 +98,81 @@ def parse_iso_datetime(date_string: str, add_timezone: bool = True) -> datetime:
     except ValueError as e:
         raise ValueError(f"Formato de fecha inválido: {date_string}. Error: {str(e)}")
 
+def _status_5xx_de_respuesta(resultado: Any) -> Optional[int]:
+    """Devuelve el status si el handler produjo una respuesta 5xx, si no None."""
+    status = None
+    if isinstance(resultado, tuple) and len(resultado) >= 2:
+        status = resultado[1]
+    elif isinstance(resultado, Response):
+        status = resultado.status_code
+
+    if isinstance(status, str):
+        primer_token = status.strip().split(' ', 1)[0]
+        if primer_token.isdigit():
+            status = int(primer_token)
+    if isinstance(status, bool) or not isinstance(status, int):
+        return None
+    if 500 <= status <= 599:
+        return status
+    return None
+
+
+def _headers_sin_cuerpo(headers: Any) -> Any:
+    """Conserva headers necesarios y descarta los que describen el cuerpo viejo."""
+    omitidos = {'content-type', 'content-length'}
+    if isinstance(headers, (dict, Headers)):
+        filtrados = {
+            clave: valor for clave, valor in headers.items()
+            if str(clave).lower() not in omitidos
+        }
+        return filtrados or None
+    if isinstance(headers, (list, tuple)):
+        filtrados = [
+            (clave, valor) for clave, valor in headers
+            if str(clave).lower() not in omitidos
+        ]
+        return filtrados or None
+    return headers
+
+
+def _sanitizar_respuesta_5xx(resultado: Any, status: int, error_id: str) -> Any:
+    """Reemplaza cualquier cuerpo 5xx por un mensaje público correlacionable."""
+    cuerpo = {"message": "Error interno del servidor", "error_id": error_id}
+
+    if isinstance(resultado, tuple):
+        headers = _headers_sin_cuerpo(resultado[2]) if len(resultado) >= 3 else None
+        if headers:
+            return cuerpo, status, headers
+        return cuerpo, status
+
+    respuesta = jsonify(cuerpo)
+    respuesta.status_code = status
+    for clave, valor in resultado.headers.items():
+        if clave.lower() not in {'content-type', 'content-length'}:
+            respuesta.headers[clave] = valor
+    return respuesta
+
+
+def _log_respuesta_5xx(func: Callable, status: int, error_id: str) -> None:
+    """Registra solo metadatos de la respuesta; nunca el cuerpo ni la excepción."""
+    if has_request_context():
+        logger.error(
+            "Respuesta 5xx sanitizada en %s [%s]: %s %s status=%s",
+            getattr(func, '__name__', 'handler'),
+            error_id,
+            request.method,
+            request.path,
+            status,
+        )
+    else:
+        logger.error(
+            "Respuesta 5xx sanitizada en %s [%s]: status=%s",
+            getattr(func, '__name__', 'handler'),
+            error_id,
+            status,
+        )
+
+
 def handle_db_errors(func: Callable) -> Callable:
     """
     Decorator para manejo centralizado de errores de base de datos y validación.
@@ -87,7 +194,20 @@ def handle_db_errors(func: Callable) -> Callable:
                     except (ValueError, TypeError):
                         return {"message": f"ID inválido: {key}"}, 400
             
-            return func(*args, **kwargs)
+            resultado = func(*args, **kwargs)
+            status_5xx = _status_5xx_de_respuesta(resultado)
+            if status_5xx is not None:
+                error_id = uuid.uuid4().hex[:8]
+                try:
+                    db.session.rollback()
+                except Exception:
+                    logger.error(
+                        "No se pudo revertir la sesión al sanitizar [%s]",
+                        error_id,
+                    )
+                _log_respuesta_5xx(func, status_5xx, error_id)
+                return _sanitizar_respuesta_5xx(resultado, status_5xx, error_id)
+            return resultado
         except ValidationError as e:
             logger.warning(f"Error de validación: {e.messages}")
             return {"message": "Datos inválidos", "errors": e.messages}, 400
@@ -96,7 +216,6 @@ def handle_db_errors(func: Callable) -> Callable:
             raise e
         except Exception as e:
             db.session.rollback()
-            import uuid
             error_id = uuid.uuid4().hex[:8]
             logger.error(f"Error en {func.__name__} [{error_id}]: {str(e)}", exc_info=True)
             
@@ -126,30 +245,21 @@ def rol_requerido(*roles_permitidos: str) -> Callable:
     def decorator(fn: Callable) -> Callable:
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
-            try:
-                # Verificar token JWT
-                verify_jwt_in_request()
-                
-                # Obtener claims
-                claims = get_jwt()
-                rol_usuario = claims.get('rol')
-                
-                # Verificar si el rol está permitido
-                if rol_usuario not in roles_permitidos:
-                    logger.warning(f"Acceso denegado: Usuario con rol '{rol_usuario}' intentó acceder a ruta restringida")
-                    return {
-                        "error": "Acceso denegado",
-                        "mensaje": "No tiene permisos suficientes para esta acción",
-                        "required_roles": list(roles_permitidos),
-                        "current_role": rol_usuario
-                    }, 403
-                
-                # Si el rol es válido, continuar
-                return fn(*args, **kwargs)
-                
-            except Exception as e:
-                logger.error(f"Error en verificación de rol: {str(e)}", exc_info=True)
-                return {"error": "Error en verificación de acceso"}, 401
+            verify_jwt_in_request()
+
+            usuario = obtener_usuario_actual()
+            rol_usuario = usuario.rol
+
+            if rol_usuario not in roles_permitidos:
+                logger.warning(f"Acceso denegado: Usuario con rol '{rol_usuario}' intentó acceder a ruta restringida")
+                return {
+                    "error": "Acceso denegado",
+                    "mensaje": "No tiene permisos suficientes para esta acción",
+                    "required_roles": list(roles_permitidos),
+                    "current_role": rol_usuario
+                }, 403
+
+            return fn(*args, **kwargs)
         return wrapper
     return decorator
 
@@ -167,71 +277,84 @@ def mismo_almacen_o_admin(fn: Callable) -> Callable:
     """
     @wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Union[Tuple[Dict[str, Any], int], Any]:
-        try:
-            # Verificar token JWT
-            verify_jwt_in_request()
-            
-            # Obtener claims
-            claims = get_jwt()
-            
-            # Si es admin, permitir acceso
-            if claims.get('rol') == 'admin':
-                return fn(*args, **kwargs)
-            
-            # Verificar si está intentando acceder a datos de otro almacén
-            almacen_id_request = kwargs.get('almacen_id')
-            if almacen_id_request is not None:
-                # Validar que almacen_id sea un entero válido
+        verify_jwt_in_request()
+
+        usuario = obtener_usuario_actual()
+
+        if usuario.rol == 'admin':
+            return fn(*args, **kwargs)
+
+        # Verificar si está intentando acceder a datos de otro almacén
+        almacen_id_request = kwargs.get('almacen_id')
+        if almacen_id_request is not None:
+            try:
+                almacen_id_request = int(almacen_id_request)
+            except (ValueError, TypeError):
+                return ({
+                    'message': 'ID de almacén inválido',
+                    'error': 'parametro_invalido'
+                }), 400
+
+            usuario_almacen_id = usuario.almacen_id
+            if usuario_almacen_id is None:
+                return ({
+                    'message': 'Usuario sin almacén asignado',
+                    'error': 'almacen_no_asignado'
+                }), 403
+
+            if almacen_id_request != int(usuario_almacen_id):
+                logger.warning(f"Intento de acceso a almacén no autorizado: Usuario {usuario.username} intentó acceder a almacén {almacen_id_request}")
+                return ({
+                    'message': 'No tiene permiso para acceder a este almacén',
+                    'error': 'acceso_denegado'
+                }), 403
+
+        # Verificar almacén en datos JSON para métodos POST/PUT
+        if request.is_json and request.method in ['POST', 'PUT']:
+            data = request.get_json()
+            if data and 'almacen_id' in data:
                 try:
-                    almacen_id_request = int(almacen_id_request)
+                    almacen_id_json = int(data['almacen_id'])
+                    if usuario.almacen_id is None or almacen_id_json != int(usuario.almacen_id):
+                        logger.warning(f"Intento de modificación de almacén no autorizado: Usuario {usuario.username}")
+                        return ({
+                            'message': 'No tiene permiso para modificar este almacén',
+                            'error': 'acceso_denegado'
+                        }), 403
                 except (ValueError, TypeError):
                     return ({
-                        'message': 'ID de almacén inválido',
+                        'message': 'ID de almacén inválido en datos',
                         'error': 'parametro_invalido'
                     }), 400
-                    
-                # Verificar si el almacén coincide con el del usuario
-                usuario_almacen_id = claims.get('almacen_id')
-                if usuario_almacen_id is None:
-                    return ({
-                        'message': 'Usuario sin almacén asignado',
-                        'error': 'almacen_no_asignado'
-                    }), 403
-                    
-                if int(almacen_id_request) != int(usuario_almacen_id):
-                    logger.warning(f"Intento de acceso a almacén no autorizado: Usuario {claims.get('username')} intentó acceder a almacén {almacen_id_request}")
-                    return ({
-                        'message': 'No tiene permiso para acceder a este almacén',
-                        'error': 'acceso_denegado'
-                    }), 403
-                    
-            # Verificar almacén en datos JSON para métodos POST/PUT
-            if request.is_json and request.method in ['POST', 'PUT']:
-                data = request.get_json()
-                if data and 'almacen_id' in data:
-                    try:
-                        almacen_id_json = int(data['almacen_id'])
-                        if almacen_id_json != int(claims.get('almacen_id', 0)):
-                            logger.warning(f"Intento de modificación de almacén no autorizado: Usuario {claims.get('username')}")
-                            return ({
-                                'message': 'No tiene permiso para modificar este almacén',
-                                'error': 'acceso_denegado'
-                            }), 403
-                    except (ValueError, TypeError):
-                        return ({
-                            'message': 'ID de almacén inválido en datos',
-                            'error': 'parametro_invalido'
-                        }), 400
-            
-            return fn(*args, **kwargs)
-            
-        except werkzeug.exceptions.HTTPException as e:
-            # Permitir que las excepciones HTTP se propaguen sin modificar
-            raise e
-        except Exception as e:
-            logger.error(f"Error en verificación de almacén: {str(e)}", exc_info=True)
-            return {"error": "Error en verificación de acceso"}, 401
+
+        return fn(*args, **kwargs)
     return wrapper
+
+def obtener_payload_normalizado() -> Tuple[Dict[str, Any], Any]:
+    """Extrae JSON o multipart/form-data y normaliza IDs numéricos.
+
+    Devuelve ``(payload, archivo_comprobante)``. El comprobante solo existe en
+    solicitudes multipart. Los IDs se convierten a int para que la autorización
+    y los servicios trabajen con el mismo tipo sin importar el formato.
+    """
+    import json
+    from services.authorization import normalizar_ids
+
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        data = request.form.to_dict()
+        archivo = request.files.get('comprobante')
+        if isinstance(data.get('detalles'), str):
+            try:
+                data['detalles'] = json.loads(data['detalles'])
+            except json.JSONDecodeError:
+                raise werkzeug.exceptions.BadRequest("Formato de detalles inválido")
+        return normalizar_ids(data), archivo
+
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    return normalizar_ids(data), None
+
 
 def validate_pagination_params() -> Tuple[int, int]:
     """

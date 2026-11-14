@@ -1,10 +1,11 @@
 from typing import Dict, Tuple, Union, Any
 from flask_restful import Resource, reqparse
 from flask_jwt_extended import create_access_token
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
 from models import Users, Almacen
 from flask import request
-from common import validate_password
+from common import AUTH_VERSION_CLAIM, validate_password
 from datetime import timedelta
 import logging
 import config
@@ -50,7 +51,8 @@ class AuthResource(Resource):
                 additional_claims={
                     'username': usuario.username,
                     'rol': usuario.rol,
-                    'almacen_id': usuario.almacen_id
+                    'almacen_id': usuario.almacen_id,
+                    AUTH_VERSION_CLAIM: int(usuario.auth_version or 0)
                 },
                 expires_delta=expires
             )
@@ -78,6 +80,8 @@ class AuthResource(Resource):
                 }
             }, 200
             
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"[{self.__class__.__name__}] Error en login: {str(e)}", exc_info=True)
             return {'message': 'Error en el servidor'}, 500

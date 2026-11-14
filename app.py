@@ -9,14 +9,18 @@ from flask_talisman import Talisman
 from flask_compress import Compress
 from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 from dotenv import load_dotenv
+from scripts.offline_test_env import should_skip_dotenv, validate_testing_database_url
 
 # Cargar variables de entorno ANTES de importar extensiones
 # Esto es crítico para que extensiones.py pueda leer las variables
-env_file = '.env.production' if os.environ.get('FLASK_ENV') == 'production' else '.env'
-load_dotenv(env_file)
+if not should_skip_dotenv():
+    env_file = '.env.production' if os.environ.get('FLASK_ENV') == 'production' else '.env'
+    load_dotenv(env_file)
 
 # Importar extensiones y recursos
 from extensions import db, jwt, swagger, migrate
+from models import Users
+from common import AUTH_VERSION_CLAIM
 from scripts.sync_supabase import sync_supabase_command
 from resources import init_resources
 
@@ -33,10 +37,66 @@ IS_PRODUCTION = FLASK_ENV == 'production'
 logger.info(f"🔧 Entorno: {FLASK_ENV}")
 logger.info(f"🚀 Modo producción: {IS_PRODUCTION}")
 
+
+def _leer_limite_ventas(nombre, defecto, maximo=1_000_000):
+    """Lee un tope de ventas configurable, rechazando valores fuera de rango."""
+    crudo = os.environ.get(nombre)
+    if crudo is None or not str(crudo).strip():
+        return defecto
+    try:
+        valor = int(str(crudo).strip())
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            f"{nombre} debe ser un entero positivo (configuración de límites de ventas)"
+        ) from None
+    if not 1 <= valor <= maximo:
+        raise RuntimeError(
+            f"{nombre} debe estar entre 1 y {maximo} (configuración de límites de ventas)"
+        )
+    return valor
+
+
+def _resolver_storage_limiter(env=None):
+    """Devuelve el backend configurado para Flask-Limiter.
+
+    Se prioriza ``LIMITER_STORAGE_URI`` por compatibilidad con el despliegue
+    existente y se acepta ``RATELIMIT_STORAGE_URI`` como nombre nativo de
+    Flask-Limiter.
+    """
+    actual = os.environ if env is None else env
+    valor = (
+        actual.get('LIMITER_STORAGE_URI')
+        or actual.get('RATELIMIT_STORAGE_URI')
+        or 'memory://'
+    )
+    return str(valor).strip()
+
+
+def _validar_storage_limiter(storage_uri, *, is_production, flask_env):
+    """Exige Redis en producción y evita un fallback silencioso a memoria."""
+    uri = str(storage_uri or '').strip()
+    if not uri:
+        uri = 'memory://'
+    if is_production:
+        esquema = uri.split('://', 1)[0].lower() if '://' in uri else ''
+        if esquema not in {'redis', 'rediss'}:
+            raise RuntimeError(
+                "En producción LIMITER_STORAGE_URI/RATELIMIT_STORAGE_URI debe "
+                "apuntar a Redis (redis:// o rediss://). No se permite memoria "
+                "ni fallback silencioso con varios workers."
+            )
+    elif flask_env == 'testing' and uri.startswith('memory://'):
+        # Memoria permitida solo porque FLASK_ENV=testing fue configurado explícitamente.
+        pass
+    return uri
+
 # Validar configuraciones críticas al arranque (SEG-01, SEG-02, SEG-07)
 db_url = os.environ.get('DATABASE_URL')
 if not db_url:
     raise RuntimeError("DATABASE_URL es obligatoria (ver .env.example)")
+
+if should_skip_dotenv():
+    validate_testing_database_url(db_url)
 
 jwt_secret = os.environ.get('JWT_SECRET_KEY')
 if not jwt_secret or len(jwt_secret) < 32:
@@ -99,14 +159,26 @@ jwt_expires_str = os.environ.get('JWT_EXPIRES_SECONDS', '43200')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(jwt_expires_str.split('#')[0].strip())
 app.config['JWT_ALGORITHM'] = 'HS256'
 app.config['JWT_SECRET_KEY'] = jwt_secret
-app.config['JWT_BLACKLIST_ENABLED'] = False
+app.config['JWT_BLACKLIST_ENABLED'] = True
 app.config['PROPAGATE_EXCEPTIONS'] = True
 
 # Configuración Limiter
-app.config['RATELIMIT_STORAGE_URL'] = os.environ.get('LIMITER_STORAGE_URI', 'memory://')
+limiter_storage_uri = _resolver_storage_limiter()
+app.config['RATELIMIT_STORAGE_URI'] = _validar_storage_limiter(
+    limiter_storage_uri,
+    is_production=IS_PRODUCTION,
+    flask_env=FLASK_ENV,
+)
 app.config['RATELIMIT_STRATEGY'] = 'fixed-window'
-if os.environ.get('FLASK_ENV') == 'testing':
+app.config['RATELIMIT_SWALLOW_ERRORS'] = False
+app.config['RATELIMIT_IN_MEMORY_FALLBACK_ENABLED'] = False
+app.config['RATELIMIT_IN_MEMORY_FALLBACK'] = None
+if FLASK_ENV == 'testing':
     app.config['RATELIMIT_ENABLED'] = False
+
+# Topes de volumen para respuestas masivas de ventas
+app.config['MAX_VENTAS_ALL'] = _leer_limite_ventas('MAX_VENTAS_ALL', 1000)
+app.config['MAX_VENTAS_EXPORT'] = _leer_limite_ventas('MAX_VENTAS_EXPORT', 5000)
 
 # Configuración Swagger
 app.config['SWAGGER'] = {
@@ -118,6 +190,69 @@ app.config['SWAGGER'] = {
 db.init_app(app)
 migrate.init_app(app, db)
 jwt.init_app(app)
+
+
+def _entero_positivo_o_none(valor):
+    if valor is None:
+        return None
+    if isinstance(valor, bool):
+        raise ValueError("booleano no válido")
+    if isinstance(valor, int):
+        if valor > 0:
+            return valor
+        raise ValueError("entero no válido")
+    if isinstance(valor, str) and valor.isascii() and valor.isdigit():
+        numero = int(valor)
+        if numero > 0:
+            return numero
+    raise ValueError("ID no válido")
+
+
+@jwt.token_in_blocklist_loader
+def token_revocado_callback(jwt_header, jwt_payload):
+    """Revoca tokens de usuarios borrados o cuyo estado de autorización cambió."""
+    identity = jwt_payload.get('sub')
+    try:
+        usuario_id = _entero_positivo_o_none(identity)
+    except ValueError:
+        return True
+    if usuario_id is None:
+        return True
+
+    usuario = db.session.get(Users, usuario_id)
+    if usuario is None:
+        return True
+
+    version_actual = int(usuario.auth_version or 0)
+    version_token = jwt_payload.get(AUTH_VERSION_CLAIM)
+    if version_token is None:
+        if version_actual != 0:
+            return True
+    else:
+        if isinstance(version_token, bool):
+            return True
+        try:
+            if int(version_token) != version_actual:
+                return True
+        except (TypeError, ValueError):
+            return True
+
+    if 'username' in jwt_payload and jwt_payload.get('username') != usuario.username:
+        return True
+
+    if 'rol' in jwt_payload and jwt_payload.get('rol') != usuario.rol:
+        return True
+
+    if 'almacen_id' in jwt_payload:
+        try:
+            if _entero_positivo_o_none(jwt_payload.get('almacen_id')) != _entero_positivo_o_none(usuario.almacen_id):
+                return True
+        except ValueError:
+            return True
+
+    return False
+
+
 Compress(app)  # Compresión gzip automática para respuestas
 api = Api(app)
 
@@ -132,16 +267,27 @@ def get_key_func():
         pass
     return get_remote_address()
 
-limiter = Limiter(
-    key_func=get_key_func,
-    app=app,
-    default_limits=[os.environ.get('DEFAULT_RATE_LIMIT', '200 per day;50 per hour')],
-)
+def crear_limiter(target_app):
+    """Crea el Limiter leyendo el backend efectivo desde la configuración."""
+    return Limiter(
+        key_func=get_key_func,
+        app=target_app,
+        default_limits=[os.environ.get('DEFAULT_RATE_LIMIT', '200 per day;50 per hour')],
+    )
 
-# Verificar storage limiter
-storage_url = app.config.get('RATELIMIT_STORAGE_URL', '')
-if 'memory' in storage_url and IS_PRODUCTION:
-    logger.warning("Flask-Limiter usando memoria en producción. Considere Redis.")
+
+limiter = crear_limiter(app)
+
+# Verificar el backend efectivo del limiter (sin abrir conexiones)
+if IS_PRODUCTION:
+    from limits.storage import MemoryStorage
+
+    if limiter._storage is None or isinstance(limiter._storage, MemoryStorage):
+        raise RuntimeError(
+            "Flask-Limiter no tiene un backend Redis efectivo en producción. "
+            "Configura LIMITER_STORAGE_URI/RATELIMIT_STORAGE_URI con redis:// o rediss://."
+        )
+    logger.info("Limiter backend efectivo: %s", type(limiter._storage).__name__)
 
 # Configurar Talisman
 talisman = Talisman(
@@ -174,6 +320,10 @@ def expired_token_callback(jwt_header, jwt_payload):
 @jwt.invalid_token_loader
 def invalid_token_callback(error):
     return jsonify({'message': 'Verificación de firma fallida', 'error': 'invalid_token'}), 401
+
+@jwt.revoked_token_loader
+def revoked_token_callback(jwt_header, jwt_payload):
+    return jsonify({'message': 'El token ya no es válido', 'error': 'token_revoked'}), 401
 
 # Error Handlers
 @app.errorhandler(500)

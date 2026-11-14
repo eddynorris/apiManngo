@@ -31,12 +31,21 @@ class RequestFormatter(logging.Formatter):
             
         return super().format(record)
 
+def _get_environment(app):
+    """Usa configuración explícita si existe; Flask 3 ya no define app.env/ENV."""
+    configured = app.config.get('ENV') or app.config.get('FLASK_ENV')
+    if configured:
+        return str(configured).lower()
+    return os.environ.get('FLASK_ENV', 'development').lower()
+
+
 def setup_logging(app):
     """Configura el sistema de logging para la aplicación"""
     
     # Determinar nivel de log según entorno
     log_level_name = os.environ.get('LOG_LEVEL', 'INFO').upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
+    environment = _get_environment(app)
     
     # Remover handlers existentes
     root_logger = logging.getLogger()
@@ -48,7 +57,7 @@ def setup_logging(app):
     console_handler.setLevel(log_level)
     
     # Configurar formatos según entorno
-    if app.config['ENV'] == 'production':
+    if environment == 'production':
         # Formato JSON para producción (más fácil para herramientas de análisis)
         console_format = '{"time":"%(asctime)s", "level":"%(levelname)s", "module":"%(name)s", "message":"%(message)s"'
         console_format += ', "method":"%(method)s", "url":"%(url)s", "ip":"%(remote_addr)s", "user":"%(user_id)s"}'
@@ -61,7 +70,7 @@ def setup_logging(app):
     console_handler.setFormatter(console_formatter)
     
     # Configurar handler para archivo si estamos en producción
-    if app.config['ENV'] == 'production':
+    if environment == 'production':
         log_dir = os.environ.get('LOG_DIR', 'logs')
         os.makedirs(log_dir, exist_ok=True)
         

@@ -151,6 +151,8 @@ class UserResource(Resource):
                 if Users.query.filter(Users.username.ilike(username)).first():
                     return {"error": "El nombre de usuario ya existe"}, 400
             
+            cambios_sensibles = False
+
             # Si se cambia la contraseña, verificar complejidad
             if 'password' in data:
                 password = data['password'].strip()
@@ -160,6 +162,7 @@ class UserResource(Resource):
                     
                 # Hashear la contraseña
                 data['password'] = generate_password_hash(password, method='pbkdf2:sha256:150000')
+                cambios_sensibles = True
             
             # Validar rol si se proporciona
             if 'rol' in data:
@@ -167,20 +170,26 @@ class UserResource(Resource):
                 roles_validos = ['admin', 'gerente', 'usuario']
                 if rol not in roles_validos:
                     return {"error": f"Rol inválido. Debe ser uno de: {', '.join(roles_validos)}"}, 400
+                if rol != usuario.rol:
+                    cambios_sensibles = True
             
             # Validar almacén si se proporciona
             if 'almacen_id' in data:
                 try:
-                    if data['almacen_id'] is not None:
-                        almacen_id = int(data['almacen_id'])
+                    almacen_id = None if data['almacen_id'] is None else int(data['almacen_id'])
+                    if almacen_id is not None:
                         almacen = Almacen.query.get(almacen_id)
                         if not almacen:
                             return {"error": "El almacén especificado no existe"}, 400
+                    if almacen_id != usuario.almacen_id:
+                        cambios_sensibles = True
                 except (ValueError, TypeError):
                     return {"error": "ID de almacén inválido"}, 400
             
             # Actualizar usuario
             updated_usuario = user_schema.load(data, instance=usuario, partial=True)
+            if cambios_sensibles:
+                updated_usuario.auth_version = int(usuario.auth_version or 0) + 1
             db.session.commit()
             
             logger.info(f"Usuario actualizado: {usuario.id} - {usuario.username}")
