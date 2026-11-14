@@ -1,9 +1,12 @@
+import copy
 import logging
 import uuid
 
 from extensions import db
-from models import Cliente, Users
+from models import Almacen, Cliente, Users
+from services.authorization import autorizar_almacen
 from services.gemini_service import gemini_service
+from services.money import monto_decimal_positivo
 from services.telegram_service import telegram_service
 from telegram.context import clear_user_context, update_user_history
 from telegram.handlers.consulta import ConsultaHandler
@@ -11,11 +14,18 @@ from telegram.handlers.guia_sunat import GuiaSunatHandler
 from telegram.handlers.pago import PagoHandler
 from telegram.handlers.produccion import ProduccionHandler
 from telegram.handlers.transferencia import TransferenciaHandler
-from telegram.handlers.venta import VentaHandler
+from telegram.handlers.venta import (
+    VentaHandler,
+    enviar_tarjeta_venta,
+    nuevo_cliente_en_almacen,
+    recalcular_items,
+)
 from telegram.resolvers import (
+    almacenes_permitidos,
     buscar_cliente_db,
     buscar_presentacion,
     intentar_vinculacion,
+    parsear_gasto,
     resolver_almacen,
 )
 from telegram.state_machine import ConversationState, StateMachine
@@ -47,6 +57,30 @@ def _private_chat_sender_id(chat, sender):
     if chat_id != sender_id:
         return None
     return sender_id
+
+
+def _borrador_actual(user):
+    """Copia del borrador de la operación pendiente, esté o no a mitad de una edición."""
+    contexto = user.telegram_context
+    if not contexto:
+        return None
+    if contexto.get("state"):
+        datos = contexto.get("data") or {}
+        if "original_context" in datos:  # a mitad de una edición
+            datos = datos["original_context"]
+        contexto = datos
+    return copy.deepcopy(contexto) if contexto else None
+
+
+def _message_id_tarjeta(user):
+    """message_id de la tarjeta vigente (None si el contexto no lo registra)."""
+    contexto = user.telegram_context or {}
+    if not contexto.get("state"):
+        return None
+    datos = contexto.get("data") or {}
+    if "original_context" in datos:
+        return datos.get("message_id")
+    return contexto.get("message_id")
 
 
 def format_user_friendly_error(e: Exception) -> str:
@@ -233,14 +267,12 @@ class TelegramRouter:
                     f"ℹ️ El teléfono {phone} ya pertenece al cliente <b>{existente.nombre}</b>. Usando ese cliente."
                 )
             else:
-                cliente = Cliente(
+                cliente = nuevo_cliente_en_almacen(
+                    original_data.get("almacen_id"),
                     nombre=client_name,
                     telefono=phone,
                     direccion="Dirección no especificada",
-                    ciudad="Lima"
                 )
-                db.session.add(cliente)
-                db.session.flush()
                 telegram_service.send_message(
                     chat_id,
                     f"✅ Cliente <b>{client_name}</b> creado con teléfono {phone}. Continuando con la venta..."
@@ -268,7 +300,9 @@ class TelegramRouter:
             original_action = result.get("original_action")
             original_data = result.get("original_data", {})
 
-            cliente = buscar_cliente_db(nombre=correct_name)
+            cliente = buscar_cliente_db(
+                nombre=correct_name, almacen_id=original_data.get("almacen_id")
+            )
             if not cliente:
                 # Aún no existe: preguntar de nuevo con el nuevo nombre
                 StateMachine.ask_for_client_creation(user, correct_name, original_action, original_data)
@@ -327,135 +361,118 @@ class TelegramRouter:
 
     @staticmethod
     def _handle_edit_response(chat_id, user, result):
-        """Procesa la respuesta de edición de un campo y actualiza la tarjeta."""
+        """Aplica la edición de un campo al borrador y vuelve a mostrar la tarjeta completa."""
         edit_action = result.get("edit_action")
-        value = result.get("value")
+        value = result.get("value") or ""
         original_context = result.get("original_context", {})
         message_id = result.get("message_id")
 
+        def reintentar(mensaje):
+            telegram_service.send_message(chat_id, mensaje)
+            StateMachine.transition_to(
+                user,
+                ConversationState.AWAITING_EXTRA_DATA,
+                action=edit_action,
+                data={"original_context": original_context, "message_id": message_id},
+            )
+
         try:
             if edit_action == "edit_cliente":
-                # Buscar el cliente real en la BD para actualizar también el ID
-                nuevo_cliente = buscar_cliente_db(nombre=value)
-                if nuevo_cliente:
-                    original_context["cliente_id"] = nuevo_cliente.id
-                    original_context["cliente_nombre"] = nuevo_cliente.nombre
-                else:
-                    original_context["cliente_nombre"] = value
-                telegram_service.send_message(chat_id, f"✅ Cliente actualizado a: <b>{original_context['cliente_nombre']}</b>")
+                nuevo_cliente = buscar_cliente_db(
+                    nombre=value, almacen_id=original_context.get("almacen_id")
+                )
+                if not nuevo_cliente:
+                    reintentar(
+                        f"❌ No encontré un cliente llamado '<b>{value}</b>'. "
+                        "Escribe otro nombre (o /cancel)."
+                    )
+                    return
+                original_context["cliente_id"] = nuevo_cliente.id
+                original_context["cliente_nombre"] = nuevo_cliente.nombre
+                aviso = f"✅ Cliente actualizado a: <b>{nuevo_cliente.nombre}</b>"
 
             elif edit_action == "edit_precio":
                 try:
-                    new_price = float(value)
-                    old_total = float(original_context.get("total", 0))
-                    original_context["total"] = new_price
-                    # Recalcular precios unitarios proporcionalmente
-                    items = original_context.get("items", [])
-                    if items and old_total > 0:
-                        factor = new_price / old_total
-                        for item in items:
-                            item["precio_unitario"] = round(item.get("precio_unitario", 0) * factor, 2)
-                            item["subtotal"] = round(item.get("cantidad", 1) * item["precio_unitario"], 2)
-                    telegram_service.send_message(chat_id, f"✅ Precio total actualizado a: <b>S/ {new_price:.2f}</b>")
-                except ValueError:
-                    telegram_service.send_message(chat_id, "❌ Precio inválido. Ingresa un número válido.")
+                    new_price = monto_decimal_positivo(value.replace(",", "."), "precio")
+                except Exception:
+                    reintentar("❌ Precio inválido. Ingresa un número mayor que 0 (o /cancel).")
                     return
+                new_price = float(new_price)
+                old_total = float(original_context.get("total", 0))
+                original_context["total"] = new_price
+                # Recalcular precios unitarios proporcionalmente
+                items = original_context.get("items", [])
+                if items and old_total > 0:
+                    factor = new_price / old_total
+                    for item in items:
+                        item["precio_unitario"] = round(item.get("precio_unitario", 0) * factor, 2)
+                        item["subtotal"] = round(item.get("cantidad", 1) * item["precio_unitario"], 2)
+                aviso = f"✅ Precio total actualizado a: <b>S/ {new_price:.2f}</b>"
 
             elif edit_action == "edit_gasto":
-                try:
-                    gasto_monto = float(value)
-                    original_context["gasto_asociado"] = {
-                        "monto": gasto_monto,
-                        "descripcion": "Gasto agregado desde Telegram"
-                    }
-                    telegram_service.send_message(chat_id, f"✅ Gasto agregado: <b>S/ {gasto_monto:.2f}</b>")
-                except ValueError:
-                    telegram_service.send_message(chat_id, "❌ Monto inválido. Ingresa un número válido.")
-                    return
-
-            elif edit_action == "edit_almacen":
-                from models import Almacen
-                nuevo_almacen = Almacen.query.filter(Almacen.nombre.ilike(f"%{value}%")).first()
-                if nuevo_almacen:
-                    original_context["almacen_id"] = nuevo_almacen.id
-                    original_context["almacen_nombre"] = nuevo_almacen.nombre
-                    telegram_service.send_message(chat_id, f"✅ Almacén actualizado a: <b>{nuevo_almacen.nombre}</b>")
-                else:
-                    telegram_service.send_message(chat_id, f"❌ No encontré un almacén con nombre '{value}'. Intenta de nuevo.")
-                    # Re-activar el flujo para reintentar
-                    StateMachine.transition_to(
-                        user,
-                        ConversationState.AWAITING_EXTRA_DATA,
-                        action="edit_almacen",
-                        data={"original_context": original_context, "message_id": message_id}
+                gasto = parsear_gasto(value)
+                if not gasto:
+                    reintentar(
+                        "❌ Monto inválido. Escribe el monto y, si quieres, la descripción "
+                        "(ej.: <code>20 flete</code>), o /cancel."
                     )
                     return
+                monto, descripcion = gasto
+                original_context["gasto_asociado"] = {"monto": float(monto), "descripcion": descripcion}
+                aviso = f"✅ Gasto agregado: <b>S/ {monto:.2f}</b> ({descripcion})"
 
-            # Guardar el contexto actualizado y volver a estado de confirmación
-            StateMachine.set_awaiting_confirmation(
-                user,
-                original_context.get("action", "venta"),
-                original_context,
-                message_id
-            )
+            elif edit_action == "edit_almacen":
+                coincidencias = [
+                    a for a in almacenes_permitidos(user) if value.lower() in a.nombre.lower()
+                ]
+                if not value or not coincidencias:
+                    reintentar(
+                        f"❌ No encontré entre tus almacenes uno llamado '{value}'. "
+                        "Usa los botones o escribe otro nombre (o /cancel)."
+                    )
+                    return
+                TelegramRouter._aplicar_almacen(
+                    chat_id, user, original_context, message_id, coincidencias[0].id
+                )
+                return
 
-            # Actualizar la tarjeta de confirmación con los nuevos datos
-            if original_context.get("action") == "venta" and message_id:
-                TelegramRouter._refresh_venta_card(chat_id, user, original_context, message_id)
+            else:
+                telegram_service.send_message(chat_id, "❌ Campo de edición no reconocido.")
+                return
+
+            telegram_service.send_message(chat_id, aviso)
+            if original_context.get("action", "venta") == "venta":
+                enviar_tarjeta_venta(chat_id, user, original_context, message_id)
+            else:
+                StateMachine.set_awaiting_confirmation(
+                    user, original_context.get("action"), original_context, message_id
+                )
 
         except Exception as e:
+            db.session.rollback()
             logger.error(f"Error en _handle_edit_response: {e}", exc_info=True)
             telegram_service.send_message(chat_id, "❌ Error al procesar la edición. Intenta de nuevo.")
 
     @staticmethod
-    def _refresh_venta_card(chat_id, user, context, message_id):
-        """Reconstruye y edita la tarjeta de confirmación de venta con datos actualizados."""
-
-        items = context.get("items", [])
-        items_txt = "\n".join([
-            f"• {item['cantidad']}x {item['producto_nombre']} (a S/ {item['precio_unitario']:.2f} c/u) = S/ {item.get('subtotal', item['cantidad'] * item['precio_unitario']):.2f}"
-            for item in items
-        ])
-        pagos = context.get("pagos", [])
-        pagos_txt = "\n".join([f"• S/ {p['monto']:.2f} ({p['metodo_pago']})" for p in pagos]) if pagos else "• Al crédito"
-
-        gasto_asociado = context.get("gasto_asociado")
-        gasto_txt = f"\n💸 <b>Gasto Asociado:</b> S/ {gasto_asociado.get('monto')} ({gasto_asociado.get('descripcion')})" if gasto_asociado else ""
-        fecha = context.get("fecha")
-        fecha_txt = f"\n📅 <b>Fecha:</b> {fecha}" if fecha else ""
-        estado = context.get("estado", "completado")
-        card_title = "Pedido (Sin descuento de Stock)" if estado == 'pedido' else "Venta"
-        confirm_text = "pedido" if estado == 'pedido' else "venta"
-
-        card = (
-            f"📋 <b>Confirmar {card_title}</b> (actualizada)\n\n"
-            f"👤 <b>Cliente:</b> {context.get('cliente_nombre')}\n"
-            f"🏪 <b>Almacén:</b> {context.get('almacen_nombre')}\n"
-            f"📦 <b>Productos:</b>\n{items_txt}\n"
-            f"💰 <b>Total:</b> S/ {context.get('total', 0):.2f}\n"
-            f"💳 <b>Pagos:</b>\n{pagos_txt}"
-            f"{gasto_txt}"
-            f"{fecha_txt}\n"
-            f"\n¿Confirmas el registro de este {confirm_text}?"
-        )
-
-        reply_markup = {
-            "inline_keyboard": [
-                [
-                    {"text": "👤 Cambiar Cliente", "callback_data": "edit:cliente"},
-                    {"text": "💲 Modificar Precio", "callback_data": "edit:precio"}
-                ],
-                [
-                    {"text": "💸 Agregar Gasto", "callback_data": "edit:gasto"},
-                    {"text": "🏪 Cambiar Almacén", "callback_data": "edit:almacen"}
-                ],
-                [
-                    {"text": f"✅ Confirmar {confirm_text.capitalize()}", "callback_data": "confirm:venta"},
-                    {"text": "❌ Cancelar", "callback_data": "cancel"}
-                ]
-            ]
-        }
-        telegram_service.edit_message(chat_id, message_id, card, reply_markup)
+    def _aplicar_almacen(chat_id, user, borrador, message_id, almacen_id):
+        """Cambia el almacén del borrador si el usuario tiene permiso y reenvía la tarjeta."""
+        try:
+            autorizar_almacen(user.id, almacen_id)
+        except Exception:
+            telegram_service.send_message(
+                chat_id, "⛔ No tienes permiso para vender desde ese almacén."
+            )
+            return False
+        almacen = db.session.get(Almacen, int(almacen_id))
+        if almacen is None:
+            telegram_service.send_message(chat_id, "❌ Ese almacén ya no existe.")
+            return False
+        borrador["almacen_id"] = almacen.id
+        borrador["almacen_nombre"] = almacen.nombre
+        recalcular_items(borrador)
+        telegram_service.send_message(chat_id, f"✅ Almacén actualizado a: <b>{almacen.nombre}</b>")
+        enviar_tarjeta_venta(chat_id, user, borrador, message_id)
+        return True
 
     @staticmethod
     def handle_callback_query(callback_query):
@@ -492,84 +509,78 @@ class TelegramRouter:
             return
 
         # Manejar callbacks de edición
-        if data.startswith("edit:"):
-            import copy
-            field = data.split(":")[1]
-            context = user.telegram_context
-            if not context:
+        if data.startswith("edit:") or data.startswith("almacen:"):
+            operation_context = _borrador_actual(user)
+            if not operation_context:
                 telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta operación expiró o ya fue procesada.</i>")
                 return
 
-            # Extraer el contexto real de la operación (si viene de la máquina de estados, tomar data)
-            if "data" in context and context.get("state"):
-                operation_context = context.get("data", context)
-            else:
-                operation_context = context
-            # Deepcopy para evitar referencias circulares al serializar a JSON
-            operation_context = copy.deepcopy(operation_context)
+            if data.startswith("almacen:"):
+                tarjeta_id = _message_id_tarjeta(user) or message_id
+                aplicado = TelegramRouter._aplicar_almacen(
+                    chat_id, user, operation_context, tarjeta_id, data.split(":", 1)[1]
+                )
+                if aplicado and message_id != tarjeta_id:
+                    # Mensaje con la lista de almacenes: quitarle los botones.
+                    telegram_service.edit_message(
+                        chat_id, message_id, "🏪 <i>Almacén elegido.</i>", reply_markup=None
+                    )
+                return
 
-            # Iniciar flujo de edición según el campo
-            if field == "cliente":
-                StateMachine.transition_to(
-                    user,
-                    ConversationState.AWAITING_EXTRA_DATA,
-                    action="edit_cliente",
-                    data={"original_context": operation_context, "message_id": message_id}
+            field = data.split(":", 1)[1]
+            preguntas = {
+                "cliente": ("edit_cliente", "👤 <b>Cambiar Cliente</b>\n\nIngresa el nombre del nuevo cliente:", None),
+                "precio": ("edit_precio", "💲 <b>Modificar Precio</b>\n\nIngresa el nuevo precio total:", None),
+                "gasto": (
+                    "edit_gasto",
+                    "💸 <b>Agregar Gasto</b>\n\nEscribe el monto y, si quieres, la descripción "
+                    "(ej.: <code>20 flete</code>):",
+                    None,
+                ),
+            }
+            if field == "almacen":
+                botones = [
+                    [{"text": f"🏪 {a.nombre}", "callback_data": f"almacen:{a.id}"}]
+                    for a in almacenes_permitidos(user)
+                ]
+                if not botones:
+                    telegram_service.send_message(chat_id, "⛔ No tienes almacenes asignados.")
+                    return
+                preguntas["almacen"] = (
+                    "edit_almacen",
+                    "🏪 <b>Cambiar Almacén</b>\n\nElige el almacén desde el que sale la venta:",
+                    {"inline_keyboard": botones},
                 )
-                telegram_service.send_message(
-                    chat_id,
-                    "👤 <b>Cambiar Cliente</b>\n\n"
-                    "Ingresa el nombre del nuevo cliente:"
-                )
-            elif field == "precio":
-                StateMachine.transition_to(
-                    user,
-                    ConversationState.AWAITING_EXTRA_DATA,
-                    action="edit_precio",
-                    data={"original_context": operation_context, "message_id": message_id}
-                )
-                telegram_service.send_message(
-                    chat_id,
-                    "💲 <b>Modificar Precio</b>\n\n"
-                    "Ingresa el nuevo precio total:"
-                )
-            elif field == "gasto":
-                StateMachine.transition_to(
-                    user,
-                    ConversationState.AWAITING_EXTRA_DATA,
-                    action="edit_gasto",
-                    data={"original_context": operation_context, "message_id": message_id}
-                )
-                telegram_service.send_message(
-                    chat_id,
-                    "💸 <b>Agregar Gasto</b>\n\n"
-                    "Ingresa el monto del gasto:"
-                )
-            elif field == "almacen":
-                StateMachine.transition_to(
-                    user,
-                    ConversationState.AWAITING_EXTRA_DATA,
-                    action="edit_almacen",
-                    data={"original_context": operation_context, "message_id": message_id}
-                )
-                telegram_service.send_message(
-                    chat_id,
-                    "🏪 <b>Cambiar Almacén</b>\n\n"
-                    "Ingresa el nombre del nuevo almacén:"
-                )
-            else:
+            if field not in preguntas:
                 telegram_service.send_message(chat_id, "❌ Campo de edición no reconocido.")
+                return
+
+            accion, pregunta, teclado = preguntas[field]
+            StateMachine.transition_to(
+                user,
+                ConversationState.AWAITING_EXTRA_DATA,
+                action=accion,
+                data={"original_context": operation_context, "message_id": message_id},
+            )
+            if teclado:
+                telegram_service.send_message(chat_id, pregunta, teclado)
+            else:
+                telegram_service.send_message(chat_id, pregunta)
             return
 
         if data.startswith("confirm:"):
-            context = user.telegram_context
+            context = _borrador_actual(user)
             if not context:
                 telegram_service.edit_message(chat_id, message_id, "⚠️ <i>Esta operación expiró o ya fue procesada.</i>")
                 return
 
-            # Si el contexto viene de la máquina de estados (tiene "state" y "data"), desenvolverlo
-            if "state" in context and "data" in context:
-                context = context.get("data", context)
+            tarjeta_id = _message_id_tarjeta(user)
+            if tarjeta_id and message_id and tarjeta_id != message_id:
+                # Botón de una tarjeta vieja: solo vale la última versión del borrador.
+                telegram_service.edit_message(
+                    chat_id, message_id, "⚠️ <i>Tarjeta desactualizada: usa la más reciente.</i>"
+                )
+                return
 
             if context.get("status") == "processing":
                 return # Ignorar doble click
