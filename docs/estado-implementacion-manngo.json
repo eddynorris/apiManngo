@@ -1,183 +1,231 @@
 {
   "scope": "Implementation authorized through OpenCode; no production DB, live integrations, deployments or real backfill",
-  "status": "in_progress",
+  "status": "local_complete_pending_live_verification",
   "plan": ".hermes/plans/2026-10-22_160910-manngo-auditoria-y-carga-historica.md",
   "expected_findings": 26,
   "findings": [
     {
       "id": "A01",
       "title": "Alta · Modificación y borrado de ventas ajenas — autorización de objeto",
-      "state": "verified_local",
+      "state": "implemented_tested",
       "evidence": [
-        "docs/verificacion/L1regression-20261022-190138"
+        "tests/test_venta_authorization.py"
       ]
     },
     {
       "id": "A02",
       "title": "Alta · Multipart elude la comprobación de almacén en altas de venta",
-      "state": "verified_local",
+      "state": "implemented_tested",
       "evidence": [
-        "docs/verificacion/L1regression-20261022-190138"
+        "tests/test_venta_authorization.py::test_multipart_cross_warehouse_create_rejected"
       ]
     },
     {
       "id": "A03",
       "title": "Alta · Pagos y depósitos por ID sin autorización equivalente a la lista",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_pago_authorization.py",
+        "tests/test_deposito_authorization.py"
+      ]
     },
     {
       "id": "A04",
       "title": "Alta · Transferencias y ensamblaje permiten operar en almacenes ajenos",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_stock_operation_authorization.py"
+      ]
     },
     {
       "id": "A05",
       "title": "Alta · JWT conserva privilegios tras cambiar rol/contraseña y borrar usuario",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_auth_revocation.py",
+        "migración b7c1d2e3f4a5 (aplicar antes de desplegar)"
+      ]
     },
     {
       "id": "A06",
       "title": "Alta · Se aceptan pagos negativos",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_pago_validation.py"
+      ]
     },
     {
       "id": "A07",
       "title": "Alta · Telegram identifica al actor por chat, no por remitente",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_telegram_actor_identity.py"
+      ]
     },
     {
       "id": "A08",
       "title": "Alta · Webhook confirma trabajo no duradero y pierde reintentos",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "commit 82ca316",
+        "tests/test_telegram_inbox.py",
+        "tests/integration/test_telegram_inbox_postgres.py",
+        "migración e8f9a0b1c2d3"
+      ]
     },
     {
       "id": "A09",
       "title": "Alta · Pillow vulnerable recibe imágenes con formato autodetectado",
-      "state": "verified_local_pending_final_regression",
+      "state": "implemented_tested",
       "evidence": [
-        "docs/verificacion/L6check-20261022-193702"
-      ],
-      "limitation": "No live Storage, deployed proxy or production exposure tested; known-advisory scan and final lock/image check still needed."
+        "tests/test_upload_validation.py"
+      ]
     },
     {
       "id": "A10",
       "title": "Alta · Supabase: políticas locales otorgan acceso por autenticación, no por propiedad — por verificar en vivo",
-      "state": "pending",
-      "evidence": []
+      "state": "pending_live_verification",
+      "evidence": [
+        "migrations/manual/20261022_backend_only_rls.sql (no aplicada)",
+        "tests/integration/test_rls_backend_only_postgres.py (pasa en PostgreSQL local)"
+      ]
     },
     {
       "id": "A11",
       "title": "Alta · Validación de cobros/depósitos no serializa solicitudes concurrentes — por verificar en PostgreSQL",
-      "state": "confirmed_local_postgresql_pending_fix",
+      "state": "implemented_tested_postgresql",
       "evidence": [
-        "docs/verificacion/A11before-20261022-191125"
-      ],
-      "observation": "Two independent PG connections accepted70+70 for a100 sale; persistedSUM140 in disposable no-network DB. No production evidence."
+        "tests/integration/test_pago_concurrency_postgres.py (pasa con PostgreSQL 17 local y en el job 'integration' del CI)"
+      ]
     },
     {
       "id": "A12",
       "title": "Alta · Sustitución de comprobante elimina el anterior antes de asegurar el nuevo",
-      "state": "verified_local_pending_final_regression",
+      "state": "implemented_tested",
       "evidence": [
-        "docs/verificacion/L6check-20261022-193702"
-      ],
-      "limitation": "No live Storage, deployed proxy or production exposure tested; known-advisory scan and final lock/image check still needed."
+        "tests/test_comprobante_replacement_failures.py"
+      ]
     },
     {
       "id": "A13",
       "title": "Alta · Gunicorn declarado tiene aviso de request smuggling — exposición por verificar",
-      "state": "verified_local_pending_final_regression",
+      "state": "implemented_pending_live_verification",
       "evidence": [
-        "docs/verificacion/L6check-20261022-193702"
-      ],
-      "limitation": "No live Storage, deployed proxy or production exposure tested; known-advisory scan and final lock/image check still needed."
+        "tests/test_dependency_pins.py",
+        "falta verificar el proxy de producción"
+      ]
     },
     {
       "id": "A14",
       "title": "Media · Fechas inválidas se sustituyen silenciosamente por la fecha de captura",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_historical_dates.py"
+      ]
     },
     {
       "id": "A15",
       "title": "Media · N+1 medido en el listado de ventas",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_ventas_query_budget.py"
+      ]
     },
     {
       "id": "A16",
       "title": "Media · Ruta `all=true` materializa todas las ventas",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_export_limits.py"
+      ]
     },
     {
       "id": "A17",
       "title": "Media · Migración elimina el índice de pagos por venta sin reponerlo",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_pending_live_verification",
+      "evidence": [
+        "migración f1a2b3c4d5e6",
+        "falta comprobar pg_indexes en producción"
+      ]
     },
     {
       "id": "A18",
       "title": "Media · Configuración de Redis no usa el nombre que Flask-Limiter lee",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_rate_limit_backend.py",
+        "tests/integration/test_rate_limit_shared_redis.py (pasa con Redis 7.4 local)"
+      ]
     },
     {
       "id": "A19",
       "title": "Media · Errores de entrada/HTTP son capturados como fallos de servidor",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "commit 25d5209",
+        "tests/test_http_auth_contract.py",
+        "tests/test_user_http_contract.py"
+      ]
     },
     {
       "id": "A20",
       "title": "Media · Serialización de usuarios devuelve hashes y campos internos",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_user_sensitive_fields.py"
+      ]
     },
     {
       "id": "A21",
       "title": "Media · Vinculación Telegram busca username usando un JWT cuyo subject es ID",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_telegram_link_identity.py"
+      ]
     },
     {
       "id": "A22",
       "title": "Media · Log de comandos de voz se flushea pero no se confirma",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_voice_log_persistence.py"
+      ]
     },
     {
       "id": "A23",
       "title": "Media · Respuestas de error devuelven excepciones internas",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_minor_residual",
+      "evidence": [
+        "tests/test_http_error_contract.py",
+        "residual: algunos 400 de inventario_resource incluyen str(e)"
+      ]
     },
     {
       "id": "A24",
       "title": "Media · Voz/ventas de Telegram tienen una excepción de stock que no es uniforme",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "commit f78fb74",
+        "tests/test_telegram_venta_stock.py"
+      ]
     },
     {
       "id": "A25",
       "title": "Media · Detalles de venta y borrado de movimientos tienen contratos inconsistentes — por verificar al ejecutar aisladamente",
-      "state": "pending",
-      "evidence": []
+      "state": "implemented_tested",
+      "evidence": [
+        "tests/test_venta_detalle_contract.py",
+        "tests/test_movimiento_reversal_scope.py"
+      ]
     },
     {
       "id": "A26",
       "title": "Media · Más dependencias con avisos; no todos son explotables en este código",
-      "state": "verified_local_pending_final_regression",
+      "state": "implemented_pending_live_verification",
       "evidence": [
-        "docs/verificacion/L6check-20261022-193702"
-      ],
-      "limitation": "No live Storage, deployed proxy or production exposure tested; known-advisory scan and final lock/image check still needed."
+        "tests/test_dependency_pins.py",
+        "falta repetir el escaneo de avisos"
+      ]
     }
   ],
   "lots": [
@@ -207,10 +255,8 @@
     {
       "id": "L2",
       "title": "Pagos, depósitos y validación de dinero",
-      "state": "in_progress",
-      "evidence": [],
-      "owner": "OpenCode",
-      "process": "proc_4ca734290140"
+      "state": "verified_local",
+      "evidence": []
     },
     {
       "id": "L3",
@@ -221,13 +267,13 @@
     {
       "id": "L4",
       "title": "Revocación de identidad y minimización de respuestas",
-      "state": "pending",
+      "state": "verified_local",
       "evidence": []
     },
     {
       "id": "L5",
       "title": "Telegram: remitente, entrega duradera y reintentos",
-      "state": "pending",
+      "state": "verified_local",
       "evidence": []
     },
     {
@@ -280,10 +326,6 @@
     ],
     "live_acceptance": "not_tested_and_not_authorized"
   },
-  "live_telegram_gemini": {
-    "state": "deferred_to_end",
-    "reason": "User removed Gemini API key; no real credentials required for doubles"
-  },
   "reminder": "At final handoff remind user to renew sensitive .env credentials; do not read values, rotate or edit their real .env automatically.",
   "verified_baseline": {
     "tests": 139,
@@ -306,10 +348,8 @@
   },
   "active_workers": [],
   "next_jobs": [
-    "Run prepared L5fix after renewed execution authorization; re-run complete PostgreSQL+Redis regression",
-    "Production-mode smoke of built candidate, healthcheck/HTTPS behavior, final dependency advisory scan",
-    "Verify RLS locally, then remote RLS/roles/schema metadata read-only at user-requested final phase",
-    "Refresh final manifests/source hashes and release readiness report; no deployment, commits or secret changes"
+    "F3 (Eddy): Redis en Railway, respaldo, flask db stamp d312602d0682 + upgrade, rotación de secretos, cron 'flask telegram-pendientes'",
+    "Verificar en vivo A10 (RLS), A17 (índice), A13/A26 (proxy y escaneo de avisos)"
   ],
   "release_validation_20261024": {
     "state": "in_progress_execution_approval_expired",
@@ -362,5 +402,19 @@
     "secrets": "Untouched; user will rotate at handoff",
     "deployment": "Not performed",
     "pause": "Auxiliary docker run --rm package-version inspection required execution approval, expired without response; command not executed. No retry or alternative for that action."
-  }
+  },
+  "reconciliacion_20261113": {
+    "fuente": "Contraste código/tests por Claude Code (rama consolidacion/auditoria-2026-10); el estado anterior de este archivo estaba desactualizado",
+    "suite_sqlite": "733 passed, 27 skipped (integración)",
+    "suite_postgresql_redis_local": "760 passed (postgres:17-alpine, redis:7.4-alpine)",
+    "ci": "jobs 'test' (SQLite) e 'integration' (PostgreSQL+Redis) en GitHub Actions",
+    "abiertos": [
+      "A10",
+      "A13",
+      "A17",
+      "A26 (verificación en vivo)",
+      "A23 (residual menor)"
+    ]
+  },
+  "telegram": "Webhook con bandeja duradera (A08); requiere migración e8f9a0b1c2d3 y cron 'flask telegram-pendientes' cada 5 min"
 }

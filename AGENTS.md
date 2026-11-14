@@ -40,9 +40,9 @@ services/             Lógica reutilizable: venta, pago, stock, produccion, auth
                       money (montos positivos), storage_cleanup (outbox de borrado en Storage), gemini, telegram, sunat, sunat_xml
 telegram/             Bot: router.py, state_machine.py, context.py, resolvers.py, ui.py, handlers/ (venta, pago, produccion, transferencia, consulta, guia_sunat)
 utils/                date_parser.py, date_utils.py (hora de Perú), file_handlers.py (Supabase Storage), logger_config.py
-migrations/           Alembic: 7 revisiones lineales desde la baseline vacía d312602d0682; manual/ contiene el SQL de RLS (no se aplica solo)
+migrations/           Alembic: 8 revisiones lineales desde la baseline vacía d312602d0682 (head e8f9a0b1c2d3); manual/ contiene el SQL de RLS (no se aplica solo)
 scripts/              run_tests_offline.py, offline_test_env.py, deployment_preflight.py, prepare_historical_load.py (solo dry-run), sync_supabase.py
-tests/                pytest (unos 57 archivos; integration/ requiere PostgreSQL/Redis locales y permiso explícito)
+tests/                pytest (unos 60 archivos; integration/ requiere PostgreSQL/Redis locales y permiso explícito)
 docs/                 Guías, notas de implementación oc-notas-*.md, PREPARACION_DESPLIEGUE.md, SUNAT_FUENTES_VERIFICADAS.md, reglas-agente-manngo.md
 database/             (ignorado por git) db.sql con vistas y triggers de la BD real, entre ellas vista_clientes_proyeccion
 ```
@@ -57,10 +57,20 @@ pip install --require-hashes -r requirements.lock && pip install pytest
 # Tests: SIEMPRE con el runner offline (bloquea red, limpia credenciales, fuerza SQLite y testing)
 python scripts/run_tests_offline.py -q
 python scripts/run_tests_offline.py --runner-help
-# Integración con PostgreSQL/Redis locales desechables: --allow-local-postgres [--allow-local-redis]
+# Integración con PostgreSQL/Redis locales desechables (BD manngo_test_*, solo 127.0.0.1):
+docker run -d --rm --name manngo-test-pg -e POSTGRES_PASSWORD=test-only -e POSTGRES_DB=manngo_test_local -p 127.0.0.1:55432:5432 postgres:17-alpine
+docker run -d --rm --name manngo-test-redis -p 127.0.0.1:56379:6379 redis:7.4-alpine
+MANNGO_RUN_PG_TESTS=1 MANNGO_ALLOW_LOCAL_POSTGRES_TESTS=1 MANNGO_ALLOW_LOCAL_REDIS_TESTS=1 \
+MANNGO_LOCAL_POSTGRES_URL=postgresql://postgres:test-only@127.0.0.1:55432/manngo_test_local \
+DATABASE_URL=postgresql://postgres:test-only@127.0.0.1:55432/manngo_test_local \
+MANNGO_LOCAL_REDIS_URL=redis://127.0.0.1:56379/0 \
+python scripts/run_tests_offline.py --allow-local-postgres --allow-local-redis -q
 
-# Lint (lo que corre el CI; hoy falla por deuda previa)
+# Lint (el CI lo exige en verde)
 ruff check .
+
+# Telegram: procesa updates pendientes y marca los colgados (en producción, cron cada 5 min)
+flask --app app telegram-pendientes
 
 # Servidor local: requiere DATABASE_URL y JWT_SECRET_KEY (>= 32 caracteres); ver .env.example
 python app.py
@@ -93,8 +103,13 @@ alinearla con la baseline (`flask db stamp d312602d0682`) tras un respaldo.
 - Ruff: E, F, W, I, B, UP; line-length 100 (`pyproject.toml`).
 
 ## 6. Estado conocido que afecta al trabajo
-- **El webhook de Telegram responde siempre 503** (`resources/telegram_webhook_resource.py`) hasta que se complete
-  la entrega duradera (lote L5). En producción corre todavía el `main` anterior.
+- `main` es lo que está en producción (Railway). Trabajar en ramas; nunca fusionar ni hacer push a `main` sin orden de Eddy.
+- Telegram usa una bandeja de entrada duradera (`services/telegram_inbox.py`, tabla `telegram_updates`). El webhook
+  guarda el update y responde 200, y el procesamiento es «como máximo una vez», con orden por chat. Los updates
+  colgados los recupera `flask telegram-pendientes`. Requiere la migración `e8f9a0b1c2d3` antes de desplegar.
+- El CI tiene dos jobs: `test` (SQLite) e `integration` (PostgreSQL 17 y Redis 7.4 desechables). Ambos deben quedar en verde.
+- Los reportes filtran y agrupan por **día de negocio de Lima** (`utils.date_utils.filtro_dias_peru` y `dia_peru_sql`),
+  nunca con `func.date(columna_utc)`.
 - En producción `app.py` **exige** `LIMITER_STORAGE_URI` (o `RATELIMIT_STORAGE_URI`) con `redis://`/`rediss://`.
 - El envío SUNAT está deshabilitado salvo `SUNAT_ENVIO_HABILITADO=true`; la XML se valida en local solo con XSD.
 
