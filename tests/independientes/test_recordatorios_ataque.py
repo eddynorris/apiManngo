@@ -1,4 +1,4 @@
-"""Auditoría adversarial: datos propios en SQLite y Telegram sin red.
+"""Auditoría adversarial: datos propios en SQLite/PostgreSQL y Telegram sin red.
 
 Los xfail estrictos expresan el comportamiento esperado, no el bug observado.
 Los casos verdes cubren rechazos y recuperación no ejercitados por el contrato.
@@ -29,7 +29,6 @@ HOY = date(2026, 11, 18)
 @pytest.fixture
 def ataque(test_client, monkeypatch):
     """Crea y elimina solo sus filas; restaura los chats previos tras cada caso."""
-    assert db.engine.dialect.name == 'sqlite'
     monkeypatch.setenv('RECORDATORIOS_ACTIVOS', 'true')
     monkeypatch.delenv('RECORDATORIOS_DIAS_ANTES', raising=False)
     monkeypatch.delenv('RECORDATORIOS_MAX_CLIENTES', raising=False)
@@ -94,12 +93,14 @@ def ataque(test_client, monkeypatch):
                               cliente=cliente, deuda=deuda, send=send, edit=edit, answer=answer)
     finally:
         db.session.rollback()
+        db.session.remove()
         Pago.query.filter(Pago.id.in_(pago_ids)).delete(synchronize_session=False)
         Venta.query.filter(Venta.id.in_(venta_ids)).delete(synchronize_session=False)
         Cliente.query.filter(Cliente.id.in_(cliente_ids)).delete(synchronize_session=False)
         Users.query.filter(Users.id.in_(usuario_ids)).delete(synchronize_session=False)
         for usuario_id, chat in anteriores.items():
             db.session.get(Users, usuario_id).telegram_chat_id = chat
+        db.session.flush()
         Almacen.query.filter(Almacen.id.in_(almacen_ids)).delete(synchronize_session=False)
         db.session.commit()
 
@@ -216,6 +217,7 @@ def test_seleccionar_no_multiplica_consultas_por_cliente_y_por_pago(ataque):
         grande = recordatorios.seleccionar(HOY, almacen_id=e.b)
     assert len(pequeno.hoy) == 1 and len(grande.hoy) == 8
     assert all(f.saldo_pendiente == Decimal('70') for f in grande.hoy)
+    # Comparar contra el mismo motor, sin fijar un total de SELECT propio de SQLite.
     # Permitir varios SELECT de precarga, pero no uno por venta y otro por pagos.
     assert len(muchas) <= len(pocas) + 3, (
         f'N+1 demostrado: 1 cliente={len(pocas)} SELECT; 8 clientes={len(muchas)} SELECT'
@@ -226,6 +228,7 @@ def test_callback_ids_manipulados_no_modifican_y_sesion_sigue_utilizable(ataque,
     e = ataque
     cliente = e.cliente(nombre='NombrePrivadoCallbackXYZ')
     caplog.set_level(logging.DEBUG)
+    # El ID enorme es una entrada hostil del callback, nunca un valor persistido.
     datos = ['contactado:' + '9' * 50, 'contactado:-1', 'contactado:0',
              f'contactado:contactado:{cliente.id}', f'contactado:+{cliente.id}',
              f'contactado:{cliente.id}:extra', 'contactado:１２３']

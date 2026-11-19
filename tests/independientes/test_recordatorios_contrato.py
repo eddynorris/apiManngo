@@ -1,4 +1,4 @@
-"""Contrato independiente de recordatorios: SQLite, reloj de Lima y Telegram doble.
+"""Contrato independiente de recordatorios: SQLite/PostgreSQL, Lima y Telegram doble.
 
 Las importaciones de la implementación se hacen dentro de los tests para que
 su ausencia no impida recoger los casos ni verificar el fixture por separado.
@@ -32,7 +32,6 @@ BLOQUES = ('hoy', 'manana', 'retrasados')
 @pytest.fixture
 def escenario(test_client, monkeypatch):
     """Cada caso crea sus filas y restaura los usuarios, incluso tras un commit del bot."""
-    assert db.engine.dialect.name == 'sqlite', 'Este contrato solo se ejecuta con SQLite'
     monkeypatch.setenv('RECORDATORIOS_ACTIVOS', 'true')
     monkeypatch.delenv('RECORDATORIOS_DIAS_ANTES', raising=False)
     monkeypatch.delenv('RECORDATORIOS_MAX_CLIENTES', raising=False)
@@ -98,10 +97,13 @@ def escenario(test_client, monkeypatch):
         )
     finally:
         db.session.rollback()
+        db.session.remove()
         for user_id, valores in originales.items():
             fila = db.session.get(Users, user_id)
             for campo, valor in valores.items():
                 setattr(fila, campo, valor)
+        # Restaurar las referencias de los usuarios antes de retirar sus almacenes.
+        db.session.flush()
         Pedido.query.filter(Pedido.id.in_(pedidos_ids)).delete(synchronize_session=False)
         Cliente.query.filter(Cliente.id.in_(clientes_ids)).delete(synchronize_session=False)
         Users.query.filter(Users.id.in_(usuarios_ids)).delete(synchronize_session=False)
@@ -664,9 +666,19 @@ def test_callback_otro_almacen_no_modifica_y_avisa(escenario, rol, contacto_prev
     assert e.send.called or e.edit.called or e.answer.called
 
 
-@pytest.mark.parametrize('dato', ['contactado:999999', 'contactado:abc'])
-def test_callback_inexistente_o_malformado_avisa_sin_excepcion(escenario, dato):
+@pytest.mark.parametrize('caso', ['inexistente', 'malformado'])
+def test_callback_inexistente_o_malformado_avisa_sin_excepcion(escenario, caso):
     e = escenario
-    e.cliente()
+    cliente = e.cliente()
+    dato = 'contactado:abc'
+    if caso == 'inexistente':
+        # Usar un ID generado y borrado: no asumir valores ni reiniciar secuencias.
+        inexistente = e.cliente().id
+        Cliente.query.filter_by(id=inexistente).delete(synchronize_session=False)
+        db.session.commit()
+        assert db.session.get(Cliente, inexistente) is None
+        dato = f'contactado:{inexistente}'
     callback(e, e.admin, dato)
     assert e.send.called or e.edit.called or e.answer.called
+    db.session.expire_all()
+    assert db.session.get(Cliente, cliente.id).ultimo_contacto is None
