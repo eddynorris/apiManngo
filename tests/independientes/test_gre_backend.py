@@ -2,7 +2,7 @@
 
 import base64
 from copy import deepcopy
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -191,18 +191,35 @@ def test_borrador_venta_y_opciones(test_client):
     db.session.add(m.VentaDetalle(venta_id=venta.id, presentacion_id=e.p5.id,
                                   cantidad=Decimal('2.5'), precio_unitario=5))
     db.session.commit()
-    b = gs.borrador_venta(e.actor, venta.id, fecha_inicio=date(2026, 11, 15),
+    fecha_inicio = gs.get_peru_now().date() + timedelta(days=1)
+    b = gs.borrador_venta(e.actor, venta.id, fecha_inicio=fecha_inicio,
                           vehiculo_id=e.vehiculo.id, conductor_id=e.conductor.id)
     assert (b['motivo'], b['origen_tipo'], b['venta_id']) == ('01', 'venta', venta.id)
     assert b['destinatario_cliente_id'] == e.cliente.id
     assert b['almacen_origen_id'] == e.origen.id
-    assert b['fecha_inicio_traslado'] == '2026-11-15'
+    assert b['fecha_inicio_traslado'] == fecha_inicio.isoformat()
     assert len(b['bienes']) == 1
     assert b['bienes'][0]['presentacion_id'] == e.p5.id
     assert b['bienes'][0]['cantidad'] == 2.5
     assert b['bienes'][0]['peso_kg'] == b['peso_total_kg'] == 12.5
     assert b['bienes'][0]['descripcion'] == '2.5 ' + e.p5.nombre.upper()
     assert gs.faltantes(b) == []
+
+
+def test_faltantes_fecha_inicio_hoy_y_ayer(test_client, monkeypatch):
+    import models as m
+    from services import guia_service as gs
+    from utils.date_utils import PERU_TZ
+
+    ahora = PERU_TZ.localize(datetime(2099, 6, 15, 12))
+    monkeypatch.setattr(gs, 'get_peru_now', lambda: ahora)
+    e = escenario(m)
+    hoy = ahora.date()
+    b_hoy = borrador(gs, e, fecha_inicio=hoy)
+    b_ayer = borrador(gs, e, fecha_inicio=hoy - timedelta(days=1))
+    assert gs.faltantes(b_hoy) == []
+    assert gs.faltantes(b_ayer) == [
+        'La fecha de inicio del traslado no puede ser anterior a hoy.']
 
 
 @pytest.mark.parametrize('variable', list(EMISOR))
@@ -316,7 +333,8 @@ def test_emitir_numera_firma_commit_idempotencia_y_movimientos(test_client, monk
     assert mov.guia_remision_id == g.id
     assert gs.emitir(deepcopy(b), e.actor, 'gre-uno').id == g.id
     cambiado = deepcopy(b)
-    cambiado['fecha_inicio_traslado'] = '2026-11-16'
+    cambiado['fecha_inicio_traslado'] = (
+        date.fromisoformat(b['fecha_inicio_traslado']) + timedelta(days=1)).isoformat()
     with pytest.raises(gs.GuiaConflicto):
         gs.emitir(cambiado, e.actor, 'gre-uno')
     assert doble.emitir_guia_remision.call_count == 1
@@ -612,10 +630,11 @@ def test_traslado_destinatario_explicito(test_client):
                      ruc='00000992', ubigeo='150103', direccion='CALLE SINTETICA 789')
     db.session.add(otro)
     db.session.commit()
-    b = borrador(gs, e, destinatario_cliente_id=otro.id, fecha_inicio=date(2026, 11, 15),
+    fecha_inicio = gs.get_peru_now().date() + timedelta(days=1)
+    b = borrador(gs, e, destinatario_cliente_id=otro.id, fecha_inicio=fecha_inicio,
                  vehiculo_id=e.vehiculo.id, conductor_id=e.conductor.id)
     assert b['destinatario_cliente_id'] == otro.id
-    assert b['fecha_inicio_traslado'] == '2026-11-15'
+    assert b['fecha_inicio_traslado'] == fecha_inicio.isoformat()
     assert b['vehiculo_id'] == e.vehiculo.id and b['conductor_id'] == e.conductor.id
     assert gs.faltantes(b) == []
 

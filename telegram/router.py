@@ -10,6 +10,7 @@ from services import guia_service
 from services.authorization import autorizar_almacen
 from services.gemini_service import gemini_service
 from services.money import monto_decimal_positivo
+from services.recordatorio_service import marcar_contactado
 from services.telegram_service import telegram_service
 from telegram.context import clear_user_context, update_user_history
 from telegram.handlers.consulta import ConsultaHandler
@@ -497,6 +498,21 @@ class TelegramRouter:
     # Guía de remisión
     # ------------------------------------------------------------------
     @staticmethod
+    def _callback_contactado(chat_id, user, message_id, data):
+        """Botón «Contactado» de la lista diaria de clientes (services/recordatorio_service.py)."""
+        try:
+            ok, texto, markup = marcar_contactado(user, data)
+        except Exception as exc:
+            db.session.rollback()
+            logger.error("No se pudo marcar el contacto: %s", type(exc).__name__)
+            telegram_service.send_message(chat_id, "❌ No pude registrar el contacto. Inténtalo otra vez.")
+            return
+        if ok:
+            telegram_service.edit_message(chat_id, message_id, texto, reply_markup=markup)
+        else:
+            telegram_service.send_message(chat_id, texto)
+
+    @staticmethod
     def _callback_guia(chat_id, user, message_id, data):
         partes = data.split(":")
         accion = partes[1] if len(partes) > 1 else ""
@@ -668,6 +684,10 @@ class TelegramRouter:
 
         if data.startswith("guia:"):
             TelegramRouter._callback_guia(chat_id, user, message_id, data)
+            return
+
+        if data.startswith("contactado:"):
+            TelegramRouter._callback_contactado(chat_id, user, message_id, data)
             return
 
         # Manejar callbacks de edición
